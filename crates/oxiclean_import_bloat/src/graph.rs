@@ -1,12 +1,17 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use log::{debug, trace};
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashMap,
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
-use crate::{config::Config, parser::imports_for, resolver::resolve, types::Specifier};
+use oxiclean_core::{Specifier, imports_for, resolve};
 
 pub(crate) fn reachable_modules(
-    cfg: &Config,
+    root: &Path,
+    tsconfig_paths: &HashMap<String, Vec<String>>,
     start: &PathBuf,
     import_cache: &DashMap<PathBuf, Vec<Specifier>>,
     resolve_cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
@@ -31,7 +36,7 @@ pub(crate) fn reachable_modules(
         trace!("Module has {} imports", specs.len());
 
         for s in specs {
-            if let Some(next) = resolve(cfg, &cur, &s.request, resolve_cache)?
+            if let Some(next) = resolve(root, tsconfig_paths, &cur, &s.request, resolve_cache)?
                 && !visited.contains(&next)
             {
                 trace!("Adding to stack: {}", next.display());

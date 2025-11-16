@@ -12,11 +12,12 @@ use std::{
 
 use crate::types::{SpecKind, Specifier};
 
-pub(crate) fn imports_for(
-    file: &PathBuf,
+pub fn imports_for(
+    file: &Path,
     cache: &DashMap<PathBuf, Vec<Specifier>>,
 ) -> Result<Vec<Specifier>> {
-    if let Some(v) = cache.get(file) {
+    let file_buf = file.to_path_buf();
+    if let Some(v) = cache.get(&file_buf) {
         trace!("Cache hit for imports: {}", file.display());
         return Ok(v.clone());
     }
@@ -75,7 +76,7 @@ pub(crate) fn imports_for(
     }
 
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
-    cache.insert(file.clone(), specs.clone());
+    cache.insert(file_buf, specs.clone());
     Ok(specs)
 }
 

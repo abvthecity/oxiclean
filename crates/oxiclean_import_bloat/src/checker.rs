@@ -4,39 +4,32 @@ use log::{debug, info, trace, warn};
 use rayon::prelude::*;
 use std::{collections::HashSet, path::PathBuf, sync::Arc, thread};
 
+use oxiclean_core::{CollectorConfig, Specifier, collect_entries, imports_for, resolve};
+
 use crate::{
-    collector::collect_entries,
-    config::{Config, find_git_root, read_tsconfig_paths},
+    config::Config,
     graph::reachable_modules,
-    parser::imports_for,
-    resolver::resolve,
-    types::{CheckResult, Specifier, Warning},
+    types::{CheckResult, Warning},
 };
 
 pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
     info!("Starting import bloat check");
 
-    // Resolve root directory
-    let root = if let Some(r) = cfg.root.take() {
-        debug!("Using provided root directory: {:?}", r);
-        r.canonicalize().unwrap_or(r)
-    } else {
-        debug!("No root provided, searching for git root");
-        find_git_root()?
-    };
-    info!("Using root directory: {}", root.display());
-    cfg.root = Some(root.clone());
-
-    // Read tsconfig paths
-    debug!("Reading tsconfig paths");
-    cfg.tsconfig_paths = read_tsconfig_paths(&root);
-    debug!("Found {} tsconfig path aliases", cfg.tsconfig_paths.len());
+    // Initialize config (resolve root, load tsconfig paths)
+    cfg.initialize()?;
+    let root = cfg.root().ok_or_else(|| anyhow!("Config not initialized"))?.clone();
 
     debug!("Collecting entry files with glob: {:?}", cfg.entry_glob);
-    let entries = collect_entries(&cfg)?;
+    let collector_cfg = CollectorConfig {
+        root: root.clone(),
+        entry_glob: cfg.entry_glob.clone(),
+        tsconfig_paths: cfg.tsconfig_paths.clone(),
+    };
+
+    let entries = collect_entries(&collector_cfg)?;
     if entries.is_empty() {
-        warn!("No entry files found under {}", cfg.root.as_ref().unwrap().display());
-        return Err(anyhow!("No entry files found under {}", cfg.root.as_ref().unwrap().display()));
+        warn!("No entry files found under {}", root.display());
+        return Err(anyhow!("No entry files found under {}", root.display()));
     }
     info!("Found {} entry files", entries.len());
 
@@ -63,9 +56,18 @@ pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
             let resolve_cache = Arc::clone(&resolve_cache);
             let reachable_cache = Arc::clone(&reachable_cache);
 
+            let root = match cfg.root() {
+                Some(r) => r.clone(),
+                None => {
+                    warn!("Config root not initialized");
+                    return vec![];
+                }
+            };
+
             // Compute reachable modules for this entry
             let reachable = match reachable_modules(
-                &cfg,
+                &root,
+                &cfg.tsconfig_paths,
                 entry,
                 &import_cache,
                 &resolve_cache,
@@ -81,11 +83,8 @@ pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
             debug!("Entry {} has {} reachable modules", entry.display(), reachable.len());
 
             // Get relative path for better display
-            let rel_entry = entry
-                .strip_prefix(cfg.root.as_ref().unwrap())
-                .unwrap_or(entry)
-                .to_string_lossy()
-                .to_string();
+            let rel_entry =
+                entry.strip_prefix(&root).unwrap_or(entry).to_string_lossy().to_string();
 
             let mut entry_warnings = Vec::new();
 
@@ -104,20 +103,23 @@ pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
             for spec in direct_imports {
                 trace!("Checking import: '{}'", spec.request);
 
-                let resolved = match resolve(&cfg, entry, &spec.request, &resolve_cache) {
-                    Ok(Some(r)) => r,
-                    Ok(None) => {
-                        trace!("Could not resolve import: '{}'", spec.request);
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("Error resolving '{}': {}", spec.request, e);
-                        continue;
-                    }
-                };
+                let resolved =
+                    match resolve(&root, &cfg.tsconfig_paths, entry, &spec.request, &resolve_cache)
+                    {
+                        Ok(Some(r)) => r,
+                        Ok(None) => {
+                            trace!("Could not resolve import: '{}'", spec.request);
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!("Error resolving '{}': {}", spec.request, e);
+                            continue;
+                        }
+                    };
 
                 let rset = match reachable_modules(
-                    &cfg,
+                    &root,
+                    &cfg.tsconfig_paths,
                     &resolved,
                     &import_cache,
                     &resolve_cache,
@@ -137,7 +139,7 @@ pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
                 if rset.len() >= cfg.threshold {
                     // Get the resolved path relative to root for display
                     let resolved_rel = resolved
-                        .strip_prefix(cfg.root.as_ref().unwrap())
+                        .strip_prefix(&root)
                         .unwrap_or(&resolved)
                         .to_string_lossy()
                         .to_string();

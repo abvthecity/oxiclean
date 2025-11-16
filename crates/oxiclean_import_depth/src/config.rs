@@ -1,18 +1,18 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use log::{debug, info};
 use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "import-bloat")]
-#[command(about = "Check for import bloat in JavaScript/TypeScript projects")]
+#[command(name = "import-depth")]
+#[command(about = "Check for excessive import depth in JavaScript/TypeScript projects")]
 pub struct Config {
     /// Root directory of the project (defaults to git root)
     #[arg(long)]
     pub root: Option<PathBuf>,
 
-    /// Threshold for number of modules
-    #[arg(long, default_value = "200")]
+    /// Threshold for maximum import depth
+    #[arg(long, default_value = "10")]
     pub threshold: usize,
 
     /// Glob pattern to filter entry files
@@ -45,8 +45,10 @@ impl Config {
         Ok(())
     }
 
-    /// Get the root directory, returning None if not initialized
-    pub fn root(&self) -> Option<&PathBuf> {
-        self.root.as_ref()
+    /// Get the root directory, returning an error if not initialized
+    pub fn root(&self) -> Result<&PathBuf> {
+        self.root
+            .as_ref()
+            .ok_or_else(|| anyhow!("Config not initialized - call initialize() first"))
     }
 }

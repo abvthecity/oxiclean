@@ -3,15 +3,16 @@ use dashmap::DashMap;
 use log::{debug, trace};
 use path_clean::clean;
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
 
-use crate::config::Config;
 use crate::constants::{INDEX_FILES, RESOLVE_EXTENSIONS};
 
-pub(crate) fn resolve(
-    cfg: &Config,
+pub fn resolve(
+    root: &Path,
+    tsconfig_paths: &HashMap<String, Vec<String>>,
     from_file: &Path,
     request: &str,
     cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
@@ -27,7 +28,7 @@ pub(crate) fn resolve(
         if request.starts_with("./") || request.starts_with("../") || request.starts_with("/") {
             // Relative imports
             trace!("Resolving as relative import: '{}'", request);
-            let base = from_file.parent().unwrap_or(cfg.root.as_ref().unwrap().as_path());
+            let base = from_file.parent().unwrap_or(root);
             let p = clean(base.join(request).to_string_lossy().to_string());
             let result = resolve_file(Path::new(&p));
             if result.is_some() {
@@ -40,7 +41,7 @@ pub(crate) fn resolve(
             // Check tsconfig path aliases first
             trace!("Checking tsconfig path aliases for '{}'", request);
             let mut alias_resolved = None;
-            for (alias, targets) in &cfg.tsconfig_paths {
+            for (alias, targets) in tsconfig_paths {
                 if request.starts_with(alias) {
                     trace!("Matched alias '{}' for request '{}'", alias, request);
                     // Replace alias with target path
@@ -68,9 +69,8 @@ pub(crate) fn resolve(
             } else {
                 // Fallback to node_modules resolution - start from the file's directory
                 trace!("Resolving as node_modules package: '{}'", request);
-                let start_dir = from_file.parent().unwrap_or(cfg.root.as_ref().unwrap().as_path());
-                let result =
-                    resolve_node_module_from_dir(start_dir, request, cfg.root.as_ref().unwrap());
+                let start_dir = from_file.parent().unwrap_or(root);
+                let result = resolve_node_module_from_dir(start_dir, request, root);
                 if result.is_some() {
                     trace!("Resolved node_modules package '{}' to {:?}", request, result);
                 } else {

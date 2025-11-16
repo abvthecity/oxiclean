@@ -1,5 +1,5 @@
 [package]
-name = "oxiclean_import_bloat"
+name = "oxiclean_import_depth"
 version.workspace = true
 edition.workspace = true
 
@@ -14,5 +14,5 @@ path-clean.workspace = true
 rayon.workspace = true
 
 [lib]
-name = "oxiclean_import_bloat"
+name = "oxiclean_import_depth"
 path = "src/lib.rs"

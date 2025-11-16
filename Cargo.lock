@@ -644,7 +644,26 @@ dependencies = [
  "env_logger",
  "log",
  "oxiclean_import_bloat",
+ "oxiclean_import_depth",
  "rayon",
+]
+
+[[package]]
+name = "oxiclean_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "ignore",
+ "log",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
+ "oxc_syntax",
+ "path-clean",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -655,17 +674,24 @@ dependencies = [
  "clap",
  "colored",
  "dashmap",
- "ignore",
  "log",
- "oxc_allocator",
- "oxc_ast",
- "oxc_parser",
- "oxc_span",
- "oxc_syntax",
+ "oxiclean_core",
  "path-clean",
  "rayon",
- "serde",
- "serde_json",
+]
+
+[[package]]
+name = "oxiclean_import_depth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "colored",
+ "dashmap",
+ "log",
+ "oxiclean_core",
+ "path-clean",
+ "rayon",
 ]
 
 [[package]]

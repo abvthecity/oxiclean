@@ -1,16 +1,21 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use log::{debug, trace};
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-use crate::config::Config;
 use crate::constants::JS_TS_EXTENSIONS;
 
-pub(crate) fn collect_entries(cfg: &Config) -> Result<Vec<PathBuf>> {
+pub struct CollectorConfig {
+    pub root: PathBuf,
+    pub entry_glob: Option<String>,
+    pub tsconfig_paths: HashMap<String, Vec<String>>,
+}
+
+pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     debug!("Collecting entry files");
     // If entries glob provided, walk and filter by suffix; else treat all top-level src files as entries
     let mut files: Vec<PathBuf> = Vec::new();
-    let root = cfg.root.as_ref().unwrap();
+    let root = &cfg.root;
     debug!("Walking directory tree from root: {}", root.display());
     let walker = WalkBuilder::new(root).hidden(false).ignore(true).git_ignore(true).build();
 

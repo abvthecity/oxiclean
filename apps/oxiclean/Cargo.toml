@@ -10,6 +10,7 @@ colored.workspace = true
 env_logger.workspace = true
 log.workspace = true
 oxiclean_import_bloat = { path = "../../crates/oxiclean_import_bloat" }
+oxiclean_import_depth = { path = "../../crates/oxiclean_import_depth" }
 rayon.workspace = true
 
 [[bin]]
