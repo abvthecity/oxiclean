@@ -52,10 +52,6 @@ lint-fix:
 run-oxiclean *ARGS:
     cargo run -p oxiclean -- {{ARGS}}
 
-# Run the import bloat checker
-run-import-bloat *ARGS:
-    cargo run -p oxiclean -- import-bloat {{ARGS}}
-
 # Build release binaries
 release:
     cargo build --release --workspace

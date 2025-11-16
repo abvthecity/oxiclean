@@ -9,7 +9,7 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 cargo install --path apps/oxiclean
 
 # Or run from monorepo
-just run-import-bloat --help
+just run-oxiclean import-bloat --help
 ```
 
 ## Usage
