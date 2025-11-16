@@ -1,0 +1,25 @@
+[package]
+name = "oxiclean_import_bloat"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+colored.workspace = true
+dashmap.workspace = true
+ignore.workspace = true
+log.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+oxc_syntax.workspace = true
+path-clean.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lib]
+name = "oxiclean_import_bloat"
+path = "src/lib.rs"

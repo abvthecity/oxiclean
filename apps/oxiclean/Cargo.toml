@@ -1,0 +1,17 @@
+[package]
+name = "oxiclean"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+colored.workspace = true
+env_logger.workspace = true
+log.workspace = true
+oxiclean_import_bloat = { path = "../../crates/oxiclean_import_bloat" }
+rayon.workspace = true
+
+[[bin]]
+name = "oxiclean"
+path = "src/main.rs"
