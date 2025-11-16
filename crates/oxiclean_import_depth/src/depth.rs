@@ -200,3 +200,247 @@ pub fn compute_import_depths(
     debug!("Computed {} import depths from {}", results.len(), from_file.display());
     Ok(results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_file(dir: &Path, path: &str, content: &str) -> PathBuf {
+        let file_path = dir.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("Failed to create parent directory");
+        }
+        fs::write(&file_path, content).expect("Failed to write test file");
+        file_path
+    }
+
+    #[test]
+    fn test_compute_depth_no_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "// no imports");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depth = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn test_compute_depth_simple() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "import './a';");
+        let _a = create_test_file(root, "src/a.js", "// a");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depth = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depth, 1); // file -> a
+    }
+
+    #[test]
+    fn test_compute_depth_nested() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "import './a';");
+        let _a = create_test_file(root, "src/a.js", "import './b';");
+        let _b = create_test_file(root, "src/b.js", "import './c';");
+        let _c = create_test_file(root, "src/c.js", "// c");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depth = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depth, 3); // file -> a -> b -> c
+    }
+
+    #[test]
+    fn test_compute_depth_circular() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "import './a';");
+        let _a = create_test_file(root, "src/a.js", "import './b';");
+        let _b = create_test_file(root, "src/b.js", "import './a';"); // circular
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depth = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        // Should handle circular dependencies - depth should be finite
+        assert!(depth < 10); // Should not be infinite
+    }
+
+    #[test]
+    fn test_compute_depth_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "import './a';");
+        let _a = create_test_file(root, "src/a.js", "// a");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        // First call
+        let depth1 = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        // Second call should use cache
+        let depth2 = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depth1, depth2);
+        assert_eq!(depth_cache.len(), 2); // file and a
+    }
+
+    #[test]
+    fn test_compute_depth_multiple_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // file imports a and b, a has depth 1, b has depth 2
+        let file = create_test_file(root, "src/file.js", "import './a'; import './b';");
+        let _a = create_test_file(root, "src/a.js", "// a");
+        let _b = create_test_file(root, "src/b.js", "import './c';");
+        let _c = create_test_file(root, "src/c.js", "// c");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depth = compute_depth(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        // Should return max depth (through b -> c = 2)
+        assert_eq!(depth, 2);
+    }
+
+    #[test]
+    fn test_compute_import_depths() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "import './a'; import './b';");
+        let _a = create_test_file(root, "src/a.js", "// a");
+        let _b = create_test_file(root, "src/b.js", "import './c';");
+        let _c = create_test_file(root, "src/c.js", "// c");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depths = compute_import_depths(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depths.len(), 2);
+
+        // Find depths for each import
+        let a_depth = depths.iter().find(|(req, _, _)| req == "./a").map(|(_, _, d)| *d);
+        let b_depth = depths.iter().find(|(req, _, _)| req == "./b").map(|(_, _, d)| *d);
+
+        assert_eq!(a_depth, Some(1)); // a has no imports
+        assert_eq!(b_depth, Some(2)); // b -> c
+    }
+
+    #[test]
+    fn test_compute_import_depths_no_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file = create_test_file(root, "src/file.js", "// no imports");
+
+        let import_cache = DashMap::new();
+        let resolve_cache = DashMap::new();
+        let depth_cache = DashMap::new();
+
+        let depths = compute_import_depths(
+            root,
+            &HashMap::new(),
+            &file,
+            &import_cache,
+            &resolve_cache,
+            &depth_cache,
+        )
+        .unwrap();
+
+        assert_eq!(depths.len(), 0);
+    }
+}

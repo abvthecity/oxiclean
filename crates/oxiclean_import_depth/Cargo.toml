@@ -16,3 +16,6 @@ rayon.workspace = true
 [lib]
 name = "oxiclean_import_depth"
 path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.10"

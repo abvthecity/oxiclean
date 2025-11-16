@@ -42,10 +42,22 @@ pub fn resolve(
             trace!("Checking tsconfig path aliases for '{}'", request);
             let mut alias_resolved = None;
             for (alias, targets) in tsconfig_paths {
-                if request.starts_with(alias) {
+                // Handle wildcard aliases (e.g., "@components/*")
+                let alias_pattern = alias.trim_end_matches("/*");
+                let matches = if alias.ends_with("/*") {
+                    request.starts_with(alias_pattern) && request.len() > alias_pattern.len()
+                } else {
+                    request.starts_with(alias)
+                };
+
+                if matches {
                     trace!("Matched alias '{}' for request '{}'", alias, request);
                     // Replace alias with target path
-                    let remainder = request.trim_start_matches(alias).trim_start_matches('/');
+                    let remainder = if alias.ends_with("/*") {
+                        request.get(alias_pattern.len()..).unwrap_or("").trim_start_matches('/')
+                    } else {
+                        request.trim_start_matches(alias).trim_start_matches('/')
+                    };
                     for target in targets {
                         let candidate = if remainder.is_empty() {
                             PathBuf::from(target)
@@ -88,9 +100,19 @@ pub fn resolve(
 }
 
 fn resolve_file(p: &Path) -> Option<PathBuf> {
-    // Try exact path first
-    if p.exists() {
+    // Try exact path first (but only if it's a file, not a directory)
+    if p.exists() && p.is_file() {
         return Some(p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+    }
+
+    // If it's a directory, try index files first
+    if p.exists() && p.is_dir() {
+        for index_file in INDEX_FILES {
+            let candidate = p.join(index_file);
+            if candidate.exists() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
+        }
     }
 
     // Try adding extensions
@@ -101,11 +123,13 @@ fn resolve_file(p: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Try index files
-    for index_file in INDEX_FILES {
-        let candidate = p.join(index_file);
-        if candidate.exists() {
-            return Some(candidate.canonicalize().unwrap_or(candidate));
+    // Try index files (if path doesn't exist yet)
+    if !p.exists() {
+        for index_file in INDEX_FILES {
+            let candidate = p.join(index_file);
+            if candidate.exists() {
+                return Some(candidate.canonicalize().unwrap_or(candidate));
+            }
         }
     }
 
@@ -214,4 +238,251 @@ fn resolve_node_module(root: &Path, pkg: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_file(dir: &Path, path: &str, content: &str) -> PathBuf {
+        let file_path = dir.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("Failed to create parent directory");
+        }
+        fs::write(&file_path, content).expect("Failed to write test file");
+        file_path
+    }
+
+    #[test]
+    fn test_resolve_relative_same_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let target_file = create_test_file(root, "src/utils.js", "// utils");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "./utils", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_relative_parent_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/components/Button.js", "// test");
+        let target_file = create_test_file(root, "src/utils.js", "// utils");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "../utils", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_with_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let target_file = create_test_file(root, "src/utils.ts", "// utils");
+
+        // Request without extension should resolve to .ts file
+        let resolved = resolve(root, &HashMap::new(), &from_file, "./utils", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_index_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let target_file = create_test_file(root, "src/utils/index.js", "// utils");
+
+        // Request directory should resolve to index.js
+        let resolved = resolve(root, &HashMap::new(), &from_file, "./utils", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_tsconfig_path_alias() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let target_file = create_test_file(root, "src/components/Button.js", "// button");
+
+        let mut tsconfig_paths = HashMap::new();
+        // Use absolute path for tsconfig path mapping
+        tsconfig_paths.insert(
+            "@components".to_string(),
+            vec![root.join("src/components").to_string_lossy().to_string()],
+        );
+
+        let resolved =
+            resolve(root, &tsconfig_paths, &from_file, "@components/Button", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_tsconfig_path_alias_with_trailing_slash() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let target_file = create_test_file(root, "src/components/Button.js", "// button");
+
+        let mut tsconfig_paths = HashMap::new();
+        // Use absolute path for tsconfig path mapping
+        tsconfig_paths.insert(
+            "@components/*".to_string(),
+            vec![root.join("src/components").to_string_lossy().to_string()],
+        );
+
+        let resolved =
+            resolve(root, &tsconfig_paths, &from_file, "@components/Button", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "./nonexistent", &cache).unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn test_resolve_cache_behavior() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+        let _target_file = create_test_file(root, "src/utils.js", "// utils");
+
+        // First call
+        let resolved1 = resolve(root, &HashMap::new(), &from_file, "./utils", &cache).unwrap();
+        assert!(resolved1.is_some());
+
+        // Second call should use cache
+        let resolved2 = resolve(root, &HashMap::new(), &from_file, "./utils", &cache).unwrap();
+        assert!(resolved2.is_some());
+        assert_eq!(resolved1.unwrap(), resolved2.unwrap());
+
+        // Cache should have entry
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_resolve_node_modules_with_main() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+
+        // Create node_modules structure
+        let pkg_dir = root.join("node_modules").join("test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let pkg_json = pkg_dir.join("package.json");
+        fs::write(&pkg_json, r#"{"main": "lib/index.js"}"#).unwrap();
+        let main_file = create_test_file(&pkg_dir, "lib/index.js", "// main");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "test-pkg", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), main_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_node_modules_with_exports() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+
+        // Create node_modules structure with exports field
+        let pkg_dir = root.join("node_modules").join("test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let pkg_json = pkg_dir.join("package.json");
+        fs::write(&pkg_json, r#"{"exports": "./dist/index.js"}"#).unwrap();
+        let main_file = create_test_file(&pkg_dir, "dist/index.js", "// main");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "test-pkg", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), main_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_node_modules_with_exports_object() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+
+        // Create node_modules structure with exports object
+        let pkg_dir = root.join("node_modules").join("test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let pkg_json = pkg_dir.join("package.json");
+        fs::write(&pkg_json, r#"{"exports": {".": "./dist/index.js"}}"#).unwrap();
+        let main_file = create_test_file(&pkg_dir, "dist/index.js", "// main");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "test-pkg", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), main_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_node_modules_fallback_to_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from_file = create_test_file(root, "src/file.js", "// test");
+
+        // Create node_modules structure without package.json main/exports
+        let pkg_dir = root.join("node_modules").join("test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let index_file = create_test_file(&pkg_dir, "index.js", "// index");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "test-pkg", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), index_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_node_modules_walks_up() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        // Create node_modules at root, not in subdirectory
+        let pkg_dir = root.join("node_modules").join("test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let index_file = create_test_file(&pkg_dir, "index.js", "// index");
+
+        // File in subdirectory should still find root node_modules
+        let from_file = create_test_file(root, "src/nested/deep/file.js", "// test");
+
+        let resolved = resolve(root, &HashMap::new(), &from_file, "test-pkg", &cache).unwrap();
+        assert!(resolved.is_some());
+        // Normalize paths for comparison
+        assert_eq!(resolved.unwrap().canonicalize().unwrap(), index_file.canonicalize().unwrap());
+    }
 }

@@ -100,3 +100,220 @@ pub fn read_tsconfig_paths(root: &Path) -> HashMap<String, Vec<String>> {
     debug!("Loaded {} tsconfig path aliases", paths.len());
     paths
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_file(dir: &Path, path: &str, content: &str) -> PathBuf {
+        let file_path = dir.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("Failed to create parent directory");
+        }
+        fs::write(&file_path, content).expect("Failed to write test file");
+        file_path
+    }
+
+    #[test]
+    fn test_find_git_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // Create .git directory
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        // Create a subdirectory
+        let subdir = root.join("src").join("components");
+        fs::create_dir_all(&subdir).unwrap();
+
+        // Change to subdirectory
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&subdir).unwrap();
+
+        let git_root = find_git_root().unwrap();
+        // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
+        assert_eq!(git_root.canonicalize().unwrap(), root.canonicalize().unwrap());
+
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_find_git_root_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let subdir = temp_dir.path().join("nested").join("deep");
+        fs::create_dir_all(&subdir).unwrap();
+
+        // Don't create .git directory
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&subdir).unwrap();
+
+        let result = find_git_root();
+        assert!(result.is_err());
+
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_simple() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let tsconfig_content = r#"
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@components/*": ["src/components/*"],
+      "@utils": ["src/utils"]
+    }
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", tsconfig_content);
+        create_test_file(root, "src/components/Button.tsx", "// button");
+        create_test_file(root, "src/utils/index.ts", "// utils");
+
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains_key("@components"));
+        assert!(paths.contains_key("@utils"));
+
+        let components_paths = paths.get("@components").unwrap();
+        assert_eq!(components_paths.len(), 1);
+        assert!(components_paths[0].contains("src/components"));
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_with_base_url() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let tsconfig_content = r#"
+{
+  "compilerOptions": {
+    "baseUrl": "src",
+    "paths": {
+      "@components/*": ["components/*"]
+    }
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", tsconfig_content);
+
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 1);
+        assert!(paths.contains_key("@components"));
+
+        let components_paths = paths.get("@components").unwrap();
+        assert!(components_paths[0].contains("src/components"));
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_multiple_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let root_tsconfig = r#"
+{
+  "compilerOptions": {
+    "paths": {
+      "@root/*": ["src/*"]
+    }
+  }
+}
+"#;
+        let app_tsconfig = r#"
+{
+  "compilerOptions": {
+    "paths": {
+      "@app/*": ["app/*"]
+    }
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", root_tsconfig);
+        create_test_file(root, "apps/web/tsconfig.json", app_tsconfig);
+
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains_key("@root"));
+        assert!(paths.contains_key("@app"));
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_with_comments() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let tsconfig_content = r#"
+{
+  // This is a comment
+  "compilerOptions": {
+    "baseUrl": ".", // Another comment
+    "paths": {
+      "@components/*": ["src/components/*"] // Path comment
+    }
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", tsconfig_content);
+
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 1);
+        assert!(paths.contains_key("@components"));
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_no_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let tsconfig_content = r#"
+{
+  "compilerOptions": {
+    "target": "ES2020"
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", tsconfig_content);
+
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 0);
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // No tsconfig.json file
+        let paths = read_tsconfig_paths(root);
+        assert_eq!(paths.len(), 0);
+    }
+
+    #[test]
+    fn test_read_tsconfig_paths_strips_trailing_slash() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let tsconfig_content = r#"
+{
+  "compilerOptions": {
+    "paths": {
+      "@components/*": ["src/components/*"]
+    }
+  }
+}
+"#;
+        create_test_file(root, "tsconfig.json", tsconfig_content);
+
+        let paths = read_tsconfig_paths(root);
+        // Should strip /* from alias
+        assert!(paths.contains_key("@components"));
+        assert!(!paths.contains_key("@components/*"));
+    }
+}
