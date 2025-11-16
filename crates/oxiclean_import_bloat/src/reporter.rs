@@ -38,52 +38,6 @@ fn relativize_to_cwd(root: &Path, relative_to_root: &str) -> String {
     }
 }
 
-/// Relativize import paths in import statements (e.g., "import './path/to/file'" -> "import '../path/to/file'")
-fn relativize_import_statement(root: &Path, from_file: &str, import_stmt: &str) -> String {
-    trace!("Relativizing import statement: '{}' from file: '{}'", import_stmt, from_file);
-
-    // Check if this is an import statement with a relative path
-    if let Some(start_idx) = import_stmt.find("import '") {
-        let path_start = start_idx + "import '".len();
-        if let Some(end_idx) = import_stmt[path_start..].find('\'') {
-            let import_path = &import_stmt[path_start..path_start + end_idx];
-
-            // Only relativize relative imports (starting with ./ or ../)
-            if import_path.starts_with("./") || import_path.starts_with("../") {
-                // Reconstruct the absolute path
-                let from_file_abs = root.join(from_file);
-                let from_dir = from_file_abs.parent().unwrap_or(root);
-                let import_abs = from_dir.join(import_path);
-
-                // Clean the path
-                let import_abs_clean = match import_abs.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        // If canonicalization fails, try with path-clean
-                        use path_clean::clean;
-                        clean(import_abs.to_string_lossy().to_string())
-                    }
-                };
-
-                // Get current directory
-                if let Ok(cwd) = env::current_dir() {
-                    // Make the import path relative to cwd
-                    if let Some(rel_path) = make_relative(&import_abs_clean, &cwd) {
-                        let rel_str = rel_path.to_string_lossy();
-                        let result = format!("import '{}'", rel_str);
-                        trace!("Relativized '{}' to '{}'", import_stmt, result);
-                        return result;
-                    }
-                }
-            }
-        }
-    }
-
-    // If we couldn't relativize it, return the original
-    trace!("Could not relativize import statement, returning original");
-    import_stmt.to_string()
-}
-
 /// Create a relative path from `base` to `target`
 fn make_relative(target: &Path, base: &Path) -> Option<PathBuf> {
     use std::path::Component;
@@ -211,7 +165,7 @@ pub fn print_warnings_tree<W: Write>(
             writeln!(
                 writer,
                 "{} ({} modules)",
-                display_path.white(),
+                display_path.blue(),
                 entry.reachable_unique_modules.to_string().red().bold()
             )?;
         } else {
@@ -228,29 +182,20 @@ pub fn print_warnings_tree<W: Write>(
             let is_last = idx == sorted_file_warnings.len() - 1;
             let prefix = if is_last { "└──" } else { "├──" };
 
-            // Use resolved path if available (includes file extension)
-            let display_import =
-                if let (Some(root), Some(resolved_path)) = (&cfg.root, &warning.resolved_path) {
-                    trace!("Using resolved path for import: {}", resolved_path);
-                    // Relativize the resolved path to cwd
-                    let rel_path = relativize_to_cwd(root, resolved_path);
-                    format!("import '{}'", rel_path)
-                } else if let Some(root) = &cfg.root {
-                    trace!(
-                        "No resolved path, relativizing import statement: {}",
-                        warning.import_statement
-                    );
-                    // Fallback to relativizing the import statement
-                    relativize_import_statement(root, file, &warning.import_statement)
-                } else {
-                    warning.import_statement.clone()
-                };
+            // Use the original import statement, handling newlines by replacing with spaces
+            let display_import = warning
+                .import_statement
+                .replace('\n', " ")
+                .replace('\r', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
 
             writeln!(
                 writer,
                 "{}  {} ({} modules)",
                 prefix.dimmed(),
-                display_import.yellow(),
+                display_import,
                 warning.reachable_unique_modules.to_string().red()
             )?;
         }
@@ -258,7 +203,63 @@ pub fn print_warnings_tree<W: Write>(
         writeln!(writer)?;
     }
 
+    // Print summary
+    print_summary(writer, warnings, cfg)?;
+
     writer.flush()?;
+    Ok(())
+}
+
+fn print_summary<W: Write>(writer: &mut W, warnings: &[Warning], cfg: &Config) -> io::Result<()> {
+    // Filter out "Entry file" warnings for violation count
+    let violations: Vec<_> =
+        warnings.iter().filter(|w| !w.import_statement.contains("Entry file")).collect();
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    let total_violations = violations.len();
+    let max_bloat = violations.iter().map(|w| w.reachable_unique_modules).max().unwrap_or(0);
+
+    // Get top 5 offenders (sorted by module count, descending)
+    let mut top_offenders: Vec<_> = violations.iter().collect();
+    top_offenders.sort_by(|a, b| b.reachable_unique_modules.cmp(&a.reachable_unique_modules));
+    top_offenders.truncate(5);
+
+    writeln!(writer, "{}", "─".repeat(60).dimmed())?;
+    writeln!(writer, "{}", "Summary".bold())?;
+    writeln!(writer, "  Total violations: {}", total_violations.to_string().yellow().bold())?;
+    writeln!(writer, "  Maximum bloat: {} modules", max_bloat.to_string().red().bold())?;
+
+    if !top_offenders.is_empty() {
+        writeln!(writer, "  Top {} offenders:", top_offenders.len().min(5))?;
+        for (idx, warning) in top_offenders.iter().enumerate() {
+            let display_import = warning
+                .import_statement
+                .replace('\n', " ")
+                .replace('\r', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let file_path = if let Some(root) = &cfg.root {
+                relativize_to_cwd(root, &warning.from_file)
+            } else {
+                warning.from_file.clone()
+            };
+
+            writeln!(
+                writer,
+                "    {}. {} ({} modules) - {}",
+                idx + 1,
+                display_import,
+                warning.reachable_unique_modules.to_string().red(),
+                file_path.blue()
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -312,45 +313,5 @@ mod tests {
         let base = Path::new("/project/apps/web/src");
         let result = make_relative(target, base);
         assert_eq!(result, Some(PathBuf::from("../../../file.ts")));
-    }
-
-    #[test]
-    fn test_relativize_import_statement_preserves_non_relative() {
-        let root = Path::new("/project");
-        let from_file = "apps/web/index.ts";
-
-        // Non-relative imports should be unchanged
-        let stmt = "import 'lodash'";
-        assert_eq!(relativize_import_statement(root, from_file, stmt), stmt);
-
-        let stmt = "import '@/utils'";
-        assert_eq!(relativize_import_statement(root, from_file, stmt), stmt);
-    }
-
-    #[test]
-    fn test_relativize_import_statement_handles_relative_imports() {
-        // This test documents the expected behavior but may not work
-        // in all environments due to path canonicalization
-        let root = Path::new("/tmp/test_project");
-        let from_file = "apps/web/index.ts";
-        let import_stmt = "import './utils/helper'";
-
-        // The function should attempt to relativize, but exact output
-        // depends on file system state, so we just verify it doesn't crash
-        let result = relativize_import_statement(root, from_file, import_stmt);
-        assert!(result.starts_with("import '"));
-    }
-
-    #[test]
-    fn test_relativize_import_statement_handles_malformed() {
-        let root = Path::new("/project");
-        let from_file = "apps/web/index.ts";
-
-        // Malformed import statements should be returned as-is
-        let stmt = "import without quotes";
-        assert_eq!(relativize_import_statement(root, from_file, stmt), stmt);
-
-        let stmt = "not an import statement";
-        assert_eq!(relativize_import_statement(root, from_file, stmt), stmt);
     }
 }

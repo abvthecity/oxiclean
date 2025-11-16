@@ -38,52 +38,6 @@ fn relativize_to_cwd(root: &Path, relative_to_root: &str) -> String {
     }
 }
 
-/// Relativize import paths in import statements (e.g., "import './path/to/file'" -> "import '../path/to/file'")
-fn relativize_import_statement(root: &Path, from_file: &str, import_stmt: &str) -> String {
-    trace!("Relativizing import statement: '{}' from file: '{}'", import_stmt, from_file);
-
-    // Check if this is an import statement with a relative path
-    if let Some(start_idx) = import_stmt.find("import '") {
-        let path_start = start_idx + "import '".len();
-        if let Some(end_idx) = import_stmt[path_start..].find('\'') {
-            let import_path = &import_stmt[path_start..path_start + end_idx];
-
-            // Only relativize relative imports (starting with ./ or ../)
-            if import_path.starts_with("./") || import_path.starts_with("../") {
-                // Reconstruct the absolute path
-                let from_file_abs = root.join(from_file);
-                let from_dir = from_file_abs.parent().unwrap_or(root);
-                let import_abs = from_dir.join(import_path);
-
-                // Clean the path
-                let import_abs_clean = match import_abs.canonicalize() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        // If canonicalization fails, try with path-clean
-                        use path_clean::PathClean;
-                        import_abs.clean()
-                    }
-                };
-
-                // Get current directory
-                if let Ok(cwd) = env::current_dir() {
-                    // Make the import path relative to cwd
-                    if let Some(rel_path) = make_relative(&import_abs_clean, &cwd) {
-                        let rel_str = rel_path.to_string_lossy();
-                        let result = format!("import '{}'", rel_str);
-                        trace!("Relativized '{}' to '{}'", import_stmt, result);
-                        return result;
-                    }
-                }
-            }
-        }
-    }
-
-    // If we couldn't relativize it, return the original
-    trace!("Could not relativize import statement, returning original");
-    import_stmt.to_string()
-}
-
 /// Create a relative path from `base` to `target`
 fn make_relative(target: &Path, base: &Path) -> Option<PathBuf> {
     use std::path::Component;
@@ -206,7 +160,7 @@ pub fn print_warnings_tree<W: Write>(
             file.to_string()
         };
 
-        writeln!(writer, "{}", display_path.bright_white().bold())?;
+        writeln!(writer, "{}", display_path.blue())?;
 
         // Sort warnings within this file by depth (descending)
         let mut sorted_file_warnings: Vec<_> = file_warnings.iter().collect();
@@ -216,29 +170,20 @@ pub fn print_warnings_tree<W: Write>(
             let is_last = idx == sorted_file_warnings.len() - 1;
             let prefix = if is_last { "└──" } else { "├──" };
 
-            // Use resolved path if available (includes file extension)
-            let display_import =
-                if let (Ok(root), Some(resolved_path)) = (cfg.root(), &warning.resolved_path) {
-                    trace!("Using resolved path for import: {}", resolved_path);
-                    // Relativize the resolved path to cwd
-                    let rel_path = relativize_to_cwd(root, resolved_path);
-                    format!("import '{}'", rel_path)
-                } else if let Ok(root) = cfg.root() {
-                    trace!(
-                        "No resolved path, relativizing import statement: {}",
-                        warning.import_statement
-                    );
-                    // Fallback to relativizing the import statement
-                    relativize_import_statement(root, file, &warning.import_statement)
-                } else {
-                    warning.import_statement.clone()
-                };
+            // Use the original import statement, handling newlines by replacing with spaces
+            let display_import = warning
+                .import_statement
+                .replace('\n', " ")
+                .replace('\r', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
 
             writeln!(
                 writer,
                 "{}  {} (depth: {})",
                 prefix.dimmed(),
-                display_import.yellow(),
+                display_import,
                 warning.depth.to_string().red().bold()
             )?;
         }
@@ -246,7 +191,59 @@ pub fn print_warnings_tree<W: Write>(
         writeln!(writer)?;
     }
 
+    // Print summary
+    print_summary(writer, warnings, cfg)?;
+
     writer.flush()?;
+    Ok(())
+}
+
+fn print_summary<W: Write>(writer: &mut W, warnings: &[Warning], cfg: &Config) -> io::Result<()> {
+    if warnings.is_empty() {
+        return Ok(());
+    }
+
+    let total_violations = warnings.len();
+    let max_depth = warnings.iter().map(|w| w.depth).max().unwrap_or(0);
+
+    // Get top 5 offenders (sorted by depth, descending)
+    let mut top_offenders: Vec<_> = warnings.iter().collect();
+    top_offenders.sort_by(|a, b| b.depth.cmp(&a.depth));
+    top_offenders.truncate(5);
+
+    writeln!(writer, "{}", "─".repeat(60).dimmed())?;
+    writeln!(writer, "{}", "Summary".bold())?;
+    writeln!(writer, "  Total violations: {}", total_violations.to_string().yellow().bold())?;
+    writeln!(writer, "  Maximum depth: {} levels", max_depth.to_string().red().bold())?;
+
+    if !top_offenders.is_empty() {
+        writeln!(writer, "  Top {} offenders:", top_offenders.len().min(5))?;
+        for (idx, warning) in top_offenders.iter().enumerate() {
+            let display_import = warning
+                .import_statement
+                .replace('\n', " ")
+                .replace('\r', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let file_path = if let Ok(root) = cfg.root() {
+                relativize_to_cwd(root, &warning.from_file)
+            } else {
+                warning.from_file.clone()
+            };
+
+            writeln!(
+                writer,
+                "    {}. {} (depth: {}) - {}",
+                idx + 1,
+                display_import,
+                warning.depth.to_string().red(),
+                file_path.blue()
+            )?;
+        }
+    }
+
     Ok(())
 }
 
