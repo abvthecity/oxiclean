@@ -151,6 +151,14 @@ pub struct PluginSettings {
     /// environments, reporters and coverage providers are used, and setup
     /// files are entries. On when a package.json lists `vitest`.
     pub vitest: Option<bool>,
+    /// Next.js pages, App Router files (`page`, `layout`, `route` and the
+    /// like), middleware and instrumentation are entries. On when a
+    /// package.json lists `next`.
+    pub next: Option<bool>,
+    /// Expo: config plugins in `app.json` and `app.config.*`, a `main` such
+    /// as `expo-router/entry`, and Expo Router's routes in `app`, which are
+    /// entries. On when a package.json lists `expo`.
+    pub expo: Option<bool>,
 }
 
 impl PluginSettings {
@@ -171,6 +179,8 @@ impl PluginSettings {
             "prettier" => self.prettier,
             "jest" => self.jest,
             "vitest" => self.vitest,
+            "next" => self.next,
+            "expo" => self.expo,
             _ => None,
         }
     }
@@ -193,6 +203,8 @@ impl PluginSettings {
             prettier: v,
             jest: v,
             vitest: v,
+            next: v,
+            expo: v,
         }
     }
 }

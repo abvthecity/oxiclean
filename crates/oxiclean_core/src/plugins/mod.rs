@@ -17,10 +17,12 @@ mod components;
 mod config;
 mod css;
 mod eslint;
+mod expo;
 mod html;
 mod jest;
 mod markup;
 mod mdx;
+mod next;
 mod postcss;
 mod prettier;
 mod typescript;
@@ -103,6 +105,8 @@ const ALL: &[&dyn Plugin] = &[
     &prettier::Prettier,
     &jest::Jest,
     &vitest::Vitest,
+    &next::Next,
+    &expo::Expo,
 ];
 
 /// The names of every plugin, for the config schema and error messages.
