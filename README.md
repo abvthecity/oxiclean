@@ -363,9 +363,15 @@ packages a tool's config files use.
 | `vue`, `svelte`, `astro` | components' `<script>` blocks, and Astro's frontmatter | always |
 | `css` | `@import`, `@use`, `@forward`, `@plugin`, `@config` and `@reference` in CSS, Sass, Less and PostCSS files | always |
 | `typescript` | packages tsconfig files name in `extends`, `types`, `jsxImportSource` and `plugins` | always |
+| `eslint` | packages `.eslintrc*` files and `eslintConfig` name in `extends`, `plugins`, `parser` and import resolvers | always |
+| `babel` | presets and plugins Babel's config files and `babel` name | always |
+| `postcss` | plugins and syntaxes PostCSS's config files and `postcss` name | always |
+| `prettier` | the shared config and plugins Prettier's config files and `prettier` name | always |
 
-Tool plugins are on when a package.json in the project lists their
-package. `"plugins": { "html": false }` in `.oxicleanrc.json` turns a plugin
+Tool plugins read JSON configs and the object a JS/TS config exports,
+including one a function returns, without running them; YAML configs
+aren't read yet. Plugins that read a config file are on whenever the file
+is there; those that need a tool's package to be listed say so. `"plugins": { "html": false }` in `.oxicleanrc.json` turns a plugin
 off, and `true` turns one on.
 
 ## Output formats

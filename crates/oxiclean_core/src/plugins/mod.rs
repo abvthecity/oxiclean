@@ -12,11 +12,16 @@
 //! [`Plugin::enablers`]; a plugin with none is always on. `plugins` in
 //! `.oxicleanrc.json` turns any plugin on or off.
 
+mod babel;
 mod components;
+mod config;
 mod css;
+mod eslint;
 mod html;
 mod markup;
 mod mdx;
+mod postcss;
+mod prettier;
 mod typescript;
 
 use std::{collections::HashSet, fmt, path::Path};
@@ -80,6 +85,10 @@ const ALL: &[&dyn Plugin] = &[
     &components::Astro,
     &css::Css,
     &typescript::TypeScript,
+    &eslint::Eslint,
+    &babel::Babel,
+    &postcss::Postcss,
+    &prettier::Prettier,
 ];
 
 /// The names of every plugin, for the config schema and error messages.

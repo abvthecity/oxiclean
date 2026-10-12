@@ -149,3 +149,10 @@ fn plugins_option() {
     write(".oxicleanrc.json", r#"{ "plugins": { "html": false } }"#);
     assert_eq!(lines(&run(t.path()), "dependencies"), ["package.json preact:1"]);
 }
+
+/// Tool plugins: packages that ESLint, Babel, PostCSS and Prettier configs
+/// name by string are used; `babel-plugin-unused`, which none names, is not.
+#[test]
+fn tool_configs() {
+    assert_eq!(dev_dependencies("tool-configs"), ["package.json babel-plugin-unused:10"]);
+}

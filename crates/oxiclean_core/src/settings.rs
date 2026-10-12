@@ -130,6 +130,19 @@ pub struct PluginSettings {
     /// The packages tsconfig files name in `extends`, `types`,
     /// `jsxImportSource` and `plugins`. Always on by default.
     pub typescript: Option<bool>,
+    /// The packages ESLint's `.eslintrc*` files and `eslintConfig` name in
+    /// `extends`, `plugins`, `parser` and import resolvers. Always on by
+    /// default.
+    pub eslint: Option<bool>,
+    /// The presets and plugins Babel's config files and `babel` name.
+    /// Always on by default.
+    pub babel: Option<bool>,
+    /// The plugins and syntaxes PostCSS's config files and `postcss` name.
+    /// Always on by default.
+    pub postcss: Option<bool>,
+    /// The shared config and plugins Prettier's config files and
+    /// `prettier` name. Always on by default.
+    pub prettier: Option<bool>,
 }
 
 impl PluginSettings {
@@ -144,6 +157,10 @@ impl PluginSettings {
             "astro" => self.astro,
             "css" => self.css,
             "typescript" => self.typescript,
+            "eslint" => self.eslint,
+            "babel" => self.babel,
+            "postcss" => self.postcss,
+            "prettier" => self.prettier,
             _ => None,
         }
     }
@@ -152,7 +169,19 @@ impl PluginSettings {
     #[must_use]
     pub fn all(on: bool) -> Self {
         let v = Some(on);
-        Self { html: v, mdx: v, vue: v, svelte: v, astro: v, css: v, typescript: v }
+        Self {
+            html: v,
+            mdx: v,
+            vue: v,
+            svelte: v,
+            astro: v,
+            css: v,
+            typescript: v,
+            eslint: v,
+            babel: v,
+            postcss: v,
+            prettier: v,
+        }
     }
 }
 
