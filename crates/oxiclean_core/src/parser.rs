@@ -89,14 +89,18 @@ pub(crate) fn parse_file(
     with_members: bool,
 ) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
-    let src =
+    let raw =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
+    let src = raw.clone();
 
     let is_component = file
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|ext| COMPONENT_EXTENSIONS.contains(&ext));
-    let (src, st) = if is_component {
+    let ext = file.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    let (src, st) = if ext == "mdx" {
+        (mdx_esm(&src), SourceType::tsx())
+    } else if is_component {
         (component_scripts(&src), SourceType::ts())
     } else {
         let st = source_type_for(file);
@@ -107,6 +111,10 @@ pub(crate) fn parse_file(
         OxcParser::new(&allocator, &src, st).parse();
 
     let mut collector = ImportCollector::new(&src);
+    if ext == "html" {
+        // Read before the scripts are blanked out of `src`.
+        collector.script_sources(file, &raw);
+    }
     collector.visit_program(&program);
     collector.reference_types(&program.comments, &src);
     let (exports, uses) = if with_exports {
@@ -168,6 +176,33 @@ impl ImportCollector {
 }
 
 impl ImportCollector {
+    /// The files an HTML page loads with `<script src="...">`. A `src`
+    /// starting with `/` is relative to the page's package directory, the
+    /// root a dev server such as Vite serves; URLs are left out.
+    fn script_sources(&mut self, file: &Path, src: &str) {
+        let dir = file.parent().unwrap_or(Path::new("."));
+        let root = dir.ancestors().find(|d| d.join("package.json").is_file()).unwrap_or(dir);
+        for (offset, tag) in script_tags(src) {
+            let Some(value) = attribute(tag, "src") else { continue };
+            if value.contains("://") || value.starts_with("//") || value.is_empty() {
+                continue;
+            }
+            let request = match value.strip_prefix('/') {
+                Some(rest) => {
+                    let depth = dir.strip_prefix(root).map_or(0, |d| d.components().count());
+                    match depth {
+                        0 => format!("./{rest}"),
+                        _ => format!("{}{rest}", "../".repeat(depth)),
+                    }
+                }
+                None if value.starts_with('.') => value.to_string(),
+                None => format!("./{value}"),
+            };
+            let span = Span::new(u32::try_from(offset).unwrap_or(u32::MAX), 0);
+            self.push(&request, SpecKind::Static, span);
+        }
+    }
+
     /// `/// <reference types="x" />` loads `x`'s types: a type-only import.
     fn reference_types(&mut self, comments: &[Comment], src: &str) {
         for comment in comments.iter().filter(|c| c.is_line()) {
@@ -294,7 +329,9 @@ fn component_scripts(src: &str) -> String {
         let open = at + open;
         let Some(body) = src[open..].find('>').map(|i| open + i + 1) else { break };
         let Some(close) = src[body..].find("</script>").map(|i| body + i) else { break };
-        mark(body, close);
+        if is_js_script(&src[open..body]) {
+            mark(body, close);
+        }
         at = close + "</script>".len();
     }
     let mut out = String::with_capacity(src.len());
@@ -304,6 +341,92 @@ fn component_scripts(src: &str) -> String {
         } else {
             // As many spaces as the character had bytes, to keep offsets.
             out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        }
+    }
+    out
+}
+
+/// Whether `path` is an HTML page that runs the project's code: a
+/// `<script>` with a local `src`, or an inline module script, as a Vite
+/// app's `index.html` has. Such pages are entries, as knip's Vite plugin
+/// takes them.
+pub(crate) fn is_script_page(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("html") {
+        return false;
+    }
+    let Ok(src) = fs::read_to_string(path) else { return false };
+    script_tags(&src).any(|(_, tag)| {
+        let local_src = attribute(tag, "src")
+            .is_some_and(|v| !v.is_empty() && !v.contains("://") && !v.starts_with("//"));
+        is_js_script(tag) && (local_src || attribute(tag, "type") == Some("module"))
+    })
+}
+
+/// Each `<script ...>` opening tag in `src` with its byte offset.
+fn script_tags(src: &str) -> impl Iterator<Item = (usize, &str)> {
+    src.match_indices("<script").filter_map(|(open, _)| {
+        let end = src[open..].find('>')?;
+        Some((open, &src[open..open + end + 1]))
+    })
+}
+
+/// Whether a `<script>` tag holds JS/TS: no `type`, or a JavaScript or
+/// module one, rather than JSON, a template or an import map.
+fn is_js_script(tag: &str) -> bool {
+    attribute(tag, "type").is_none_or(|t| {
+        matches!(
+            t.to_ascii_lowercase().as_str(),
+            "" | "module" | "text/javascript" | "application/javascript" | "text/typescript" | "ts"
+        )
+    })
+}
+
+/// The value of attribute `name` in an HTML opening tag, quoted or not.
+fn attribute<'t>(tag: &'t str, name: &str) -> Option<&'t str> {
+    let bytes = tag.as_bytes();
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(name) {
+        let at = from + i;
+        from = at + name.len();
+        let before_ok = at > 0 && bytes[at - 1].is_ascii_whitespace();
+        let rest = tag[from..].trim_start();
+        let (true, Some(value)) = (before_ok, rest.strip_prefix('=')) else { continue };
+        let value = value.trim_start();
+        return Some(match value.chars().next() {
+            Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or_default(),
+            _ => value.split(|c: char| c.is_whitespace() || c == '>' || c == '/').next()?,
+        });
+    }
+    None
+}
+
+/// The ESM of an MDX file: each block of lines that starts with `import`
+/// or `export` at the start of a line, up to a blank line, with everything
+/// else blanked to spaces so that offsets and lines stay those of the file.
+/// Code fences are skipped.
+fn mdx_esm(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let (mut in_esm, mut in_fence) = (false, false);
+    for line in src.split_inclusive('\n') {
+        let text = line.trim_end();
+        if text.trim_start().starts_with("```") || text.trim_start().starts_with("~~~") {
+            in_fence = !in_fence;
+            in_esm = false;
+        } else if !in_fence && (text.starts_with("import ") || text.starts_with("export ")) {
+            in_esm = true;
+        } else if text.trim().is_empty() {
+            in_esm = false;
+        }
+        if in_esm && !in_fence {
+            out.push_str(line);
+        } else {
+            for c in line.chars() {
+                if c == '\n' {
+                    out.push(c);
+                } else {
+                    out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+                }
+            }
         }
     }
     out
@@ -529,6 +652,62 @@ import type F = require('./f');";
                 t("./f", SpecKind::Type),
             ]
         );
+    }
+
+    #[test]
+    fn html_scripts() {
+        let temp_dir = TempDir::new().unwrap();
+        create_test_file(temp_dir.path(), "package.json", "{}");
+        fs::create_dir_all(temp_dir.path().join("pages")).unwrap();
+        let src = r#"<!doctype html>
+<script type="module" src="/src/main.ts"></script>
+<script src="./legacy.js"></script>
+<script src="https://cdn.example.com/x.js"></script>
+<script type="importmap">{ "imports": { "a": "./a.js" } }</script>
+<script type="module">
+  import { start } from './inline';
+</script>
+<div data-src="/not-a-script.js"></div>"#;
+        let file = create_test_file(&temp_dir.path().join("pages"), "index.html", src);
+        let got: Vec<(String, u32)> =
+            parse_imports(&file).unwrap().specs.into_iter().map(|s| (s.request, s.line)).collect();
+        let t = |r: &str, line| (r.to_string(), line);
+        assert_eq!(got, [t("../src/main.ts", 2), t("./legacy.js", 3), t("./inline", 7)]);
+        assert!(is_script_page(&file));
+        let plain = create_test_file(
+            temp_dir.path(),
+            "plain.html",
+            "<p>hi</p><script src=\"https://x/y.js\"></script>",
+        );
+        assert!(!is_script_page(&plain));
+    }
+
+    #[test]
+    fn mdx_imports_and_exports() {
+        let temp_dir = TempDir::new().unwrap();
+        let src = "import { Chart } from './chart';
+import Intro from
+  './intro.mdx';
+
+# Title
+
+Some text that says import nothing from 'prose'.
+
+```js
+import fake from 'in-a-fence';
+```
+
+export { meta } from './meta';
+
+<Chart />
+";
+        let file = create_test_file(temp_dir.path(), "page.mdx", src);
+        let parsed = parse_imports(&file).unwrap();
+        assert_eq!(parsed.error, None);
+        let got: Vec<(String, u32)> =
+            parsed.specs.into_iter().map(|s| (s.request, s.line)).collect();
+        let t = |r: &str, line| (r.to_string(), line);
+        assert_eq!(got, [t("./chart", 1), t("./intro.mdx", 2), t("./meta", 13)]);
     }
 
     #[test]

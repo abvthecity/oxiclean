@@ -71,6 +71,9 @@ finds with its plugins off, in the root package and each workspace package:
   or `.eslintrc.cjs`, which knip's plugins take as entries;
 - test files (`*.test.*`, `*.spec.*` and files in `__tests__`), which knip's
   test-runner plugins add;
+- HTML pages that load the project's scripts (a `<script>` with a local
+  `src`, or an inline module script), as a Vite app's `index.html` does,
+  which knip's Vite plugin adds;
 - declaration files in a directory with a `tsconfig.json`, which knip takes
   from the TypeScript program;
 - files passed to `require.resolve()` or `import.meta.resolve()`, which run
@@ -104,8 +107,9 @@ An export is used when:
   a parameter or return type;
 - it is used inside `declare module './x' { ... }` in another file;
 - it is the same export of a JavaScript file's `.d.ts`, or the reverse;
-- it is imported in a `<script>` block of a `.vue`, `.svelte` or `.astro`
-  file, or in Astro's frontmatter.
+- it is imported in a `<script>` block of a `.vue`, `.svelte`, `.astro` or
+  `.html` file, in Astro's frontmatter, or by an `import` line of an `.mdx`
+  file.
 
 These are never reported, as in knip:
 
@@ -119,7 +123,7 @@ Where oxiclean differs from knip:
 - knip keeps every member of a namespace import that is aliased
   (`const n = ns`), spread or nested further; oxiclean keeps every export of
   such a namespace too, so it reports less, never more;
-- knip reads `.mdx` files and counts `import.meta.glob` patterns, files that `fork()` or `spawn()`
+- knip counts `import.meta.glob` patterns, files that `fork()` or `spawn()`
   run, and the config files its plugins know in other formats; oxiclean doesn't read them
   yet, so files reached only that way are not checked;
 - knip maps build output to sources only through tsconfig `outDir`, so it

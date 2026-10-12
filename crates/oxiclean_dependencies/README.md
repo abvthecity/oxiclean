@@ -85,10 +85,11 @@ binary doesn't use `@types/x`. A package listed in both `dependencies` and
 
 Where oxiclean differs from knip:
 
-- knip's plugins read tool configs (ESLint's `extends`, Babel's presets,
-  the HTML pages of a Vite app) and add their entries; oxiclean takes JS/TS
-  config files as entries but reads no other formats, so packages only
-  those name are reported unless they are in `ignoreDependencies`;
+- knip's plugins read tool configs (ESLint's `extends`, Babel's presets)
+  and add their entries; oxiclean takes JS/TS config files and HTML pages
+  as entries and reads MDX imports, but reads no other formats, so
+  packages only those name are reported unless they are in
+  `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports
   the import as unlisted in the workspace package.
