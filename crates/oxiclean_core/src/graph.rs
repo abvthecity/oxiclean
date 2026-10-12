@@ -19,9 +19,10 @@ use rayon::prelude::*;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    constants::JS_TS_EXTENSIONS,
+    constants::{JS_TS_EXTENSIONS, declaration_for, is_declaration},
     exports::Export,
     sequencer::{Components, len_u32, sequence, strongly_connected},
+    types::SpecKind,
 };
 
 /// Dense index of a module in a [`ModuleGraph`].
@@ -48,8 +49,8 @@ impl ModuleId {
 pub struct RawImport {
     /// The specifier as written in source, e.g. `./utils` or `react`.
     pub request: String,
-    /// Whether this is a lazy `import()` rather than an eager import.
-    pub dynamic: bool,
+    /// Whether the import is eager, a lazy `import()`, or type-only.
+    pub kind: SpecKind,
     /// 1-based line of the import, or 0 when unknown.
     pub line: u32,
 }
@@ -66,6 +67,29 @@ pub struct ParsedFile {
     pub error: Option<String>,
 }
 
+/// What the builder learns about one module of the frontier.
+struct Expanded {
+    id: ModuleId,
+    resolved: Vec<Resolved>,
+    declaration: Option<PathBuf>,
+    exports: Vec<Export>,
+    error: Option<String>,
+}
+
+impl Expanded {
+    fn new(id: ModuleId) -> Self {
+        Self { id, resolved: Vec::new(), declaration: None, exports: Vec::new(), error: None }
+    }
+}
+
+/// An import resolved by the builder, before its target is interned.
+struct Resolved {
+    request: String,
+    line: u32,
+    target: PathBuf,
+    passive: bool,
+}
+
 /// A resolved import edge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
@@ -80,7 +104,18 @@ pub struct Edge {
 #[non_exhaustive]
 pub struct Module {
     pub path: PathBuf,
+    /// The imports the graph follows: eager ones, and lazy `import()` when
+    /// [`BuildOptions::follow_dynamic`] is set.
     pub edges: Vec<Edge>,
+    /// The imports that load nothing at runtime, when
+    /// [`BuildOptions::resolve_passive`] is set: type-only imports, imports
+    /// of declaration files (`.d.ts`), and `import()` when it isn't
+    /// followed. They don't count toward bloat, depth or cycles.
+    pub passive_edges: Vec<Edge>,
+    /// The declaration file that describes this JavaScript file, such as
+    /// `a.d.ts` next to `a.js`, when [`BuildOptions::resolve_passive`] is
+    /// set.
+    pub declaration: Option<ModuleId>,
     /// The names the module exports. Empty for files that aren't parsed:
     /// assets and, by default, files in `node_modules`.
     pub exports: Vec<Export>,
@@ -129,6 +164,12 @@ pub struct BuildOptions {
     /// default: an installed package is then one leaf module, which keeps
     /// runs fast and findings about the project's own code.
     pub follow_node_modules: bool,
+    /// Also resolve the imports that load nothing at runtime into
+    /// [`Module::passive_edges`], find each JavaScript file's
+    /// [`Module::declaration`], and add the files these lead to. Checks of
+    /// exports need them, since types are exported and imported there too.
+    /// The files they add count as analysed.
+    pub resolve_passive: bool,
 }
 
 impl BuildOptions {
@@ -141,6 +182,12 @@ impl BuildOptions {
     #[must_use]
     pub fn follow_node_modules(mut self, yes: bool) -> Self {
         self.follow_node_modules = yes;
+        self
+    }
+
+    #[must_use]
+    pub fn resolve_passive(mut self, yes: bool) -> Self {
+        self.resolve_passive = yes;
         self
     }
 }
@@ -199,50 +246,87 @@ impl ModuleGraph {
             trace!("Graph frontier: {} modules", frontier.len());
             // Parse and resolve the whole frontier in parallel. Only this step
             // touches the file system; interning below is sequential and cheap.
-            type Expanded = (ModuleId, Vec<(String, u32, PathBuf)>, Vec<Export>, Option<String>);
             let expanded: Vec<Expanded> = frontier
                 .par_iter()
                 .map(|&id| {
                     let path = &modules[id.idx()].path;
+                    let mut out = Expanded::new(id);
                     if !is_parseable(path) || (!opts.follow_node_modules && in_node_modules(path)) {
-                        return (id, Vec::new(), Vec::new(), None);
+                        return out;
+                    }
+                    if opts.resolve_passive {
+                        out.declaration = declaration_for(path);
                     }
                     let parsed = match parse(path) {
                         Ok(parsed) => parsed,
-                        Err(e) => return (id, Vec::new(), Vec::new(), Some(e.to_string())),
+                        Err(e) => {
+                            out.error = Some(e.to_string());
+                            return out;
+                        }
                     };
                     let resolved = parsed
                         .imports
                         .into_iter()
-                        .filter(|imp| opts.follow_dynamic || !imp.dynamic)
                         .filter_map(|imp| {
-                            let target = resolve(path, &imp.request);
-                            if target.is_none() {
-                                trace!("Unresolved '{}' from {}", imp.request, path.display());
+                            let followed = match imp.kind {
+                                SpecKind::Static => true,
+                                SpecKind::Dynamic => opts.follow_dynamic,
+                                SpecKind::Type => false,
+                            };
+                            if !followed && !opts.resolve_passive {
+                                return None;
                             }
-                            target.map(|t| (imp.request, imp.line, t))
+                            let Some(target) = resolve(path, &imp.request) else {
+                                trace!("Unresolved '{}' from {}", imp.request, path.display());
+                                return None;
+                            };
+                            // A declaration file describes types; nothing
+                            // loads it at runtime.
+                            let followed = followed && !is_declaration(&target);
+                            if !followed && !opts.resolve_passive {
+                                return None;
+                            }
+                            Some(Resolved {
+                                request: imp.request,
+                                line: imp.line,
+                                target,
+                                passive: !followed,
+                            })
                         })
                         .collect();
-                    (id, resolved, parsed.exports, parsed.error)
+                    out.resolved = resolved;
+                    out.exports = parsed.exports;
+                    out.error = parsed.error;
+                    out
                 })
                 .collect();
 
             let mut next = Vec::new();
-            for (id, resolved, exports, error) in expanded {
+            for Expanded { id, resolved, declaration, exports, error } in expanded {
+                let mut intern_next = |path: PathBuf| match index.get(&path) {
+                    Some(&t) => t,
+                    None => {
+                        let t = intern(&mut modules, &mut index, path);
+                        next.push(t);
+                        t
+                    }
+                };
                 let mut edges = Vec::with_capacity(resolved.len());
-                for (request, line, target_path) in resolved {
-                    let target = match index.get(&target_path) {
-                        Some(&t) => t,
-                        None => {
-                            let t = intern(&mut modules, &mut index, target_path);
-                            next.push(t);
-                            t
-                        }
-                    };
-                    edges.push(Edge { target, request, line });
+                let mut passive_edges = Vec::new();
+                for Resolved { request, line, target, passive } in resolved {
+                    let edge = Edge { target: intern_next(target), request, line };
+                    if passive {
+                        passive_edges.push(edge);
+                    } else {
+                        edges.push(edge);
+                    }
                 }
-                modules[id.idx()].edges = edges;
-                modules[id.idx()].exports = exports;
+                let declaration = declaration.map(&mut intern_next);
+                let module = &mut modules[id.idx()];
+                module.edges = edges;
+                module.passive_edges = passive_edges;
+                module.declaration = declaration;
+                module.exports = exports;
                 if let Some(message) = error {
                     let path = modules[id.idx()].path.clone();
                     warn!("Could not parse {} cleanly: {message}", path.display());
@@ -499,7 +583,13 @@ fn intern(
 ) -> ModuleId {
     let id = ModuleId(len_u32(modules.len()));
     index.insert(path.clone(), id);
-    modules.push(Module { path, edges: Vec::new(), exports: Vec::new() });
+    modules.push(Module {
+        path,
+        edges: Vec::new(),
+        passive_edges: Vec::new(),
+        declaration: None,
+        exports: Vec::new(),
+    });
     id
 }
 
@@ -525,7 +615,7 @@ mod tests {
                         to.iter()
                             .map(|t| RawImport {
                                 request: (*t).to_string(),
-                                dynamic: false,
+                                kind: SpecKind::Static,
                                 line: 0,
                             })
                             .collect()
@@ -659,7 +749,7 @@ mod tests {
                         to.iter()
                             .map(|t| RawImport {
                                 request: (*t).to_string(),
-                                dynamic: false,
+                                kind: SpecKind::Static,
                                 line: 1,
                             })
                             .collect()
@@ -742,7 +832,7 @@ mod tests {
     fn dynamic_edges_skipped_unless_requested() {
         let parse = |p: &Path| -> Result<ParsedFile, Infallible> {
             let imports = if p == Path::new("a.js") {
-                vec![RawImport { request: "b".into(), dynamic: true, line: 0 }]
+                vec![RawImport { request: "b".into(), kind: SpecKind::Dynamic, line: 0 }]
             } else {
                 vec![]
             };
@@ -769,7 +859,11 @@ mod tests {
             |p: &Path| match p.to_str() {
                 Some("a.js") => Err("unreadable"),
                 Some("b.js") => Ok(ParsedFile {
-                    imports: vec![RawImport { request: "c".into(), dynamic: false, line: 0 }],
+                    imports: vec![RawImport {
+                        request: "c".into(),
+                        kind: SpecKind::Static,
+                        line: 0,
+                    }],
                     error: Some("syntax error".into()),
                     ..ParsedFile::default()
                 }),
@@ -782,5 +876,66 @@ mod tests {
         assert_eq!(g.len(), 4);
         let failed: Vec<&Path> = g.failures().iter().map(|f| f.path.as_path()).collect();
         assert_eq!(failed, vec![Path::new("a.js"), Path::new("b.js")]);
+    }
+
+    #[test]
+    fn passive_imports_and_declaration_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for f in ["main.ts", "lib.js", "lib.d.ts", "types.ts", "decl.d.ts", "lazy.ts"] {
+            std::fs::write(root.join(f), "").unwrap();
+        }
+        let build = |opts: BuildOptions| {
+            ModuleGraph::build(
+                &[root.join("main.ts")],
+                |p: &Path| -> Result<ParsedFile, Infallible> {
+                    let import = |request: &str, kind| RawImport {
+                        request: request.to_string(),
+                        kind,
+                        line: 0,
+                    };
+                    let imports = if p.ends_with("main.ts") {
+                        vec![
+                            import("lib.js", SpecKind::Static),
+                            import("types.ts", SpecKind::Type),
+                            import("decl.d.ts", SpecKind::Static),
+                            import("lazy.ts", SpecKind::Dynamic),
+                        ]
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(ParsedFile { imports, ..ParsedFile::default() })
+                },
+                |_, req| Some(root.join(req)),
+                opts,
+            )
+        };
+        let names = |g: &ModuleGraph, edges: &[Edge]| -> Vec<String> {
+            edges
+                .iter()
+                .map(|e| {
+                    g.module(e.target).path.file_name().unwrap().to_string_lossy().into_owned()
+                })
+                .collect()
+        };
+
+        // By default only runtime imports are followed.
+        let g = build(BuildOptions::default());
+        assert_eq!(g.len(), 2);
+        let main = g.module(g.id(&root.join("main.ts")).unwrap());
+        assert_eq!(names(&g, &main.edges), ["lib.js"]);
+        assert!(main.passive_edges.is_empty());
+
+        let g = build(BuildOptions::default().resolve_passive(true));
+        assert_eq!(g.len(), 6);
+        let main_id = g.id(&root.join("main.ts")).unwrap();
+        let main = g.module(main_id);
+        assert_eq!(names(&g, &main.edges), ["lib.js"]);
+        assert_eq!(names(&g, &main.passive_edges), ["types.ts", "decl.d.ts", "lazy.ts"]);
+        let lib = g.module(g.id(&root.join("lib.js")).unwrap());
+        assert_eq!(lib.declaration, g.id(&root.join("lib.d.ts")));
+        // Bloat and depth still see only the runtime import.
+        assert_eq!(g.reachable_counts(&[main_id]), [2]);
+        assert_eq!(g.depths()[main_id.index()], 1);
     }
 }

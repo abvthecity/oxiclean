@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use tracing::{debug, info};
 
 use crate::{
-    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, SpecKind, collect_entries,
+    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, collect_entries,
     config::find_git_root,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
@@ -52,6 +52,16 @@ impl CommonArgs {
     /// Fails if the root can't be found or read, the config file is invalid,
     /// or no entry files are found.
     pub fn analyze(&self) -> Result<Analysis> {
+        self.analyze_with(BuildOptions::default())
+    }
+
+    /// Like [`Self::analyze`], with `extra` options for the graph on top of
+    /// the config file's. Unused export checks set
+    /// [`BuildOptions::resolve_passive`].
+    ///
+    /// # Errors
+    /// As for [`Self::analyze`].
+    pub fn analyze_with(&self, extra: BuildOptions) -> Result<Analysis> {
         let root = match &self.root {
             Some(r) => {
                 r.canonicalize().map_err(|source| Error::Root { path: r.clone(), source })?
@@ -93,11 +103,7 @@ impl CommonArgs {
                     imports: parsed
                         .specs
                         .into_iter()
-                        .map(|s| RawImport {
-                            dynamic: matches!(s.kind, SpecKind::Dynamic),
-                            request: s.request,
-                            line: s.line,
-                        })
+                        .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
                         .collect(),
                     exports: parsed.exports,
                     error: parsed.error,
@@ -106,9 +112,9 @@ impl CommonArgs {
             |from: &Path, request: &str| {
                 resolve(&project, from, request, &resolve_cache).ok().flatten()
             },
-            BuildOptions::default()
-                .follow_dynamic(config.include_dynamic)
-                .follow_node_modules(config.include_node_modules),
+            extra
+                .follow_dynamic(extra.follow_dynamic || config.include_dynamic)
+                .follow_node_modules(extra.follow_node_modules || config.include_node_modules),
         );
 
         let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();

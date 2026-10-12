@@ -18,4 +18,7 @@ impl Specifier {
 pub enum SpecKind {
     Static,
     Dynamic,
+    /// `import type`, or an import or re-export of types only. It loads
+    /// nothing at runtime.
+    Type,
 }
