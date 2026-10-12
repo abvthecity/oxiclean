@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+# A new push cancels the in-progress run for the same branch or PR.
+# On main each commit gets its own group, so no main run is cancelled
+# or left waiting behind another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && github.sha) || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
