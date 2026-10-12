@@ -1,0 +1,112 @@
+name: Bench
+
+# Runs scripts/bench.sh and scripts/bench-knip.sh against the monorepos pinned
+# in bench/targets.tsv. Not a required check: it runs on main, nightly, on
+# demand, and on pull requests that change the benchmark itself.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - .github/workflows/bench.yml
+      - scripts/bench*.sh
+      - bench/**
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      install:
+        description: Install each target's dependencies first (slower)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: 0
+  OXICLEAN_BENCH_DIR: ${{ github.workspace }}/target/bench-repos
+
+jobs:
+  bench:
+    name: Bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        if: inputs.install
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      # The pinned checkouts and knip only change when the targets or the
+      # knip version do. Installed node_modules are left out: they are several
+      # GB across the six targets.
+      - name: Restore bench repos
+        id: repos
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/bench-repos
+            !target/bench-repos/*/node_modules
+          key: bench-repos-${{ hashFiles('bench/targets.tsv', 'scripts/bench-knip.sh') }}
+
+      - name: Run bench
+        shell: bash
+        run: scripts/bench.sh ${{ inputs.install && '--install' || '' }} | tee bench.txt
+
+      - name: Run knip comparison
+        shell: bash
+        run: scripts/bench-knip.sh | tee bench-knip.txt
+
+      - name: Save bench repos
+        if: always() && steps.repos.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/bench-repos
+            !target/bench-repos/*/node_modules
+          key: ${{ steps.repos.outputs.cache-primary-key }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## oxiclean vs. baseline"
+            echo '```'
+            cat bench.txt 2>/dev/null || echo "bench did not finish"
+            echo '```'
+            echo "## oxiclean vs. knip"
+            echo '```'
+            cat bench-knip.txt 2>/dev/null || echo "knip comparison did not finish"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: |
+            bench.txt
+            bench-knip.txt
+            target/bench-repos/.knip/results
+          if-no-files-found: ignore
