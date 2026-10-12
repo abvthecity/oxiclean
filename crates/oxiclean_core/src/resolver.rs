@@ -148,7 +148,7 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
             }
         }
         if let Some(base_url) = &tsconfig.base_url
-            && let Some(resolved) = resolve_file(&base_url.join(request))
+            && let Some(resolved) = resolve_file(&normalize(&base_url.join(request)))
         {
             trace!("Resolved '{}' via baseUrl to {:?}", request, resolved);
             return Some(resolved);
@@ -160,7 +160,7 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
     let (name, subpath) = split_package_request(request);
     let mut dir = from_file.parent();
     while let Some(d) = dir {
-        let pkg_dir = d.join("node_modules").join(name);
+        let pkg_dir = normalize(&d.join("node_modules").join(name));
         if pkg_dir.is_dir()
             && let Some(resolved) = resolve_in_package(project, &pkg_dir, subpath)
         {
@@ -278,7 +278,7 @@ fn resolve_package_target(pkg_dir: &Path, target: &str) -> Option<PathBuf> {
         .iter()
         .find_map(|ext| rest.strip_suffix(ext))
         .unwrap_or(rest);
-    resolve_file(&pkg_dir.join("src").join(stem))
+    resolve_file(&normalize(&pkg_dir.join("src").join(stem)))
 }
 
 fn resolve_file(p: &Path) -> Option<PathBuf> {

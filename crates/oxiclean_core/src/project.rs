@@ -61,9 +61,11 @@ impl TsConfig {
             }
         }
         match best {
-            Some((alias, star)) => {
-                alias.targets.iter().map(|t| PathBuf::from(t.replacen('*', star, 1))).collect()
-            }
+            Some((alias, star)) => alias
+                .targets
+                .iter()
+                .map(|t| normalize(Path::new(&t.replacen('*', star, 1))))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -250,13 +252,13 @@ impl Project {
         };
 
         if ext.starts_with('.') || ext.starts_with('/') {
-            return with_json(dir.join(ext));
+            return with_json(normalize(&dir.join(ext)));
         }
 
         // Package reference: look in node_modules, then in workspace packages
         let mut cur = Some(dir);
         while let Some(d) = cur {
-            if let Some(p) = with_json(d.join("node_modules").join(ext)) {
+            if let Some(p) = with_json(normalize(&d.join("node_modules").join(ext))) {
                 return Some(p);
             }
             if d == self.root {
@@ -266,7 +268,7 @@ impl Project {
         }
         let (name, sub) = split_package_request(ext);
         let pkg = self.workspace_package(name)?;
-        with_json(if sub.is_empty() { pkg.to_path_buf() } else { pkg.join(sub) })
+        with_json(if sub.is_empty() { pkg.to_path_buf() } else { normalize(&pkg.join(sub)) })
     }
 }
 
@@ -285,8 +287,14 @@ pub fn split_package_request(request: &str) -> (&str, &str) {
 }
 
 /// Lexically normalize `.` and `..` components without touching the filesystem.
+///
+/// Import specifiers always use `/`, which Windows does not treat as a separator
+/// inside verbatim (`\\?\`) paths, so it is converted first.
 pub(crate) fn normalize(p: &Path) -> PathBuf {
-    path_clean::clean(p.to_string_lossy().as_ref())
+    let s = p.to_string_lossy();
+    #[cfg(windows)]
+    let s = s.replace('/', "\\");
+    path_clean::clean(&*s)
 }
 
 fn discover_workspace_packages(root: &Path, package_dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
