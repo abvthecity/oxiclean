@@ -28,9 +28,14 @@
 //! # }
 //! ```
 
+mod barrels;
 mod checker;
 mod config;
 
+pub use barrels::{check_barrels, run_barrels_check};
 pub use checker::{check, run_bloat_check};
-pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
+pub use config::{
+    BARRELS_DEFAULT_THRESHOLD, BARRELS_RULE, BARRELS_STYLE, Config, DEFAULT_THRESHOLD,
+    REPORT_STYLE, RULE,
+};
 pub use oxiclean_core::{CheckResult, Finding, FindingKind};

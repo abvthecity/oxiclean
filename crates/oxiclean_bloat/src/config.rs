@@ -26,3 +26,21 @@ pub const REPORT_STYLE: ReportStyle = ReportStyle {
     max_unit: "modules",
     ok_message: "No bloat detected.",
 };
+
+/// Name of the barrel files rule in `.oxicleanrc.json` and in JSON and
+/// SARIF output.
+pub const BARRELS_RULE: &str = "barrels";
+
+/// Barrels threshold used when the config file sets none.
+pub const BARRELS_DEFAULT_THRESHOLD: usize = 25;
+
+/// How barrel file findings are worded in the terminal report.
+pub const BARRELS_STYLE: ReportStyle = ReportStyle {
+    description: "Barrel files whose import pulls in too many modules",
+    heading: "Heavy barrel files detected",
+    threshold_unit: "modules",
+    value_label: |n| format!("pulls in {n} modules"),
+    max_label: "Heaviest barrel",
+    max_unit: "modules",
+    ok_message: "No heavy barrel files detected.",
+};

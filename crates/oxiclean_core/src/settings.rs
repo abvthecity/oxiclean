@@ -272,6 +272,9 @@ pub struct Rules {
     /// that no package.json refers to with `catalog:`, as knip's `catalog`.
     /// Default threshold: 1.
     pub catalog: Option<RuleSetting>,
+    /// Barrel files, modules that mostly re-export others, that pull in
+    /// too many modules when imported. Default threshold: 25 modules.
+    pub barrels: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -289,6 +292,7 @@ impl Rules {
             "unused-namespace-members" => self.unused_namespace_members.as_ref(),
             "dependencies" => self.dependencies.as_ref(),
             "catalog" => self.catalog.as_ref(),
+            "barrels" => self.barrels.as_ref(),
             _ => None,
         }
     }
@@ -305,6 +309,7 @@ impl Rules {
             &self.unused_namespace_members,
             &self.dependencies,
             &self.catalog,
+            &self.barrels,
         ]
         .into_iter()
         .flatten()

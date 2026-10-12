@@ -46,6 +46,26 @@ pub enum FindingKind {
     /// A pnpm catalog entry no package.json refers to with `catalog:`. The
     /// finding's file is pnpm-workspace.yaml.
     UnusedCatalogEntry(UnusedCatalogEntry),
+    /// A barrel file: a module that mostly re-exports others. The value is
+    /// how many modules importing it pulls in.
+    Barrel(Barrel),
+}
+
+/// What a barrel file forwards, for [`FindingKind::Barrel`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Barrel {
+    /// How many modules it re-exports from.
+    pub reexports: usize,
+    /// How many files import it.
+    pub importers: usize,
+}
+
+impl Barrel {
+    #[must_use]
+    pub fn new(reexports: usize, importers: usize) -> Self {
+        Self { reexports, importers }
+    }
 }
 
 /// A pnpm catalog entry nothing refers to, for
@@ -214,7 +234,7 @@ impl Finding {
             FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => unused.line,
             FindingKind::UnusedDependency(dep) => dep.line,
             FindingKind::UnusedCatalogEntry(entry) => entry.line,
-            FindingKind::WholeGraph => 0,
+            FindingKind::Barrel(_) | FindingKind::WholeGraph => 0,
         }
     }
 }
@@ -271,7 +291,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => &unused.name,
         FindingKind::UnusedDependency(dep) => &dep.name,
         FindingKind::UnusedCatalogEntry(entry) => &entry.name,
-        FindingKind::WholeGraph => "",
+        FindingKind::Barrel(_) | FindingKind::WholeGraph => "",
     }
 }
 
@@ -286,6 +306,10 @@ fn label(f: &Finding) -> String {
         FindingKind::UnusedCatalogEntry(entry) => {
             format!("catalog entry '{}' ({})", entry.name, entry.catalog)
         }
+        FindingKind::Barrel(barrel) => format!(
+            "barrel re-exporting {} modules, imported by {} files",
+            barrel.reexports, barrel.importers
+        ),
         _ => format!("import '{}'", request(f)),
     }
 }

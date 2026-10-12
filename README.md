@@ -14,6 +14,9 @@ oxiclean bloat --root ./my-project
 # Run import depth checker
 oxiclean depth --root ./my-project
 
+# Find barrel files that pull in too many modules
+oxiclean barrels --root ./my-project
+
 # Find circular imports
 oxiclean cycles --root ./my-project
 
@@ -80,7 +83,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -110,6 +113,30 @@ src/pages/Dashboard.tsx (512 modules)
 - Skips dynamic `import()` unless `includeDynamic` is set
 - Respects `.gitignore` patterns, even outside a git repository
 - Skips test files, `node_modules` and `.d.ts` declarations
+
+### Barrel Files Checker
+
+Finds barrel files, modules that mostly re-export others (`export * from`,
+`export { a } from`), whose import pulls in at least `threshold` modules
+(default 25), itself included. A module is a barrel when it forwards at
+least two modules and has fewer exports of its own than forwarding exports.
+Only runtime imports count, so `export type` re-exports pull in nothing.
+Each finding names how many modules the barrel re-exports from and how many
+files import it; importing the module that defines a name directly skips
+the rest.
+
+**Usage:**
+```bash
+oxiclean barrels --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Heavy barrel files detected (threshold: 25 modules)
+
+packages/ui/src/index.ts
+└──  barrel re-exporting 142 modules, imported by 75 files (pulls in 809 modules)
+```
 
 ### Import Depth Checker
 

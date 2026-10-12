@@ -29,6 +29,7 @@ const RULES: &[&str] = &[
     "unused-namespace-members",
     "dependencies",
     "catalog",
+    "barrels",
 ];
 
 fn fixtures() -> PathBuf {

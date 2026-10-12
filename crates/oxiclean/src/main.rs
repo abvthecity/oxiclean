@@ -58,6 +58,9 @@ enum Commands {
     /// Check for pnpm catalog entries no package.json refers to
     #[command(name = "catalog")]
     Catalog(oxiclean_dependencies::Config),
+    /// Check for barrel files whose import pulls in too many modules
+    #[command(name = "barrels")]
+    Barrels(oxiclean_bloat::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -116,6 +119,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_dependencies::run_catalog_check(cfg)?,
             oxiclean_dependencies::CATALOG_STYLE,
             oxiclean_dependencies::CATALOG_RULE,
+        ),
+        Commands::Barrels(cfg) => (
+            oxiclean_bloat::run_barrels_check(cfg)?,
+            oxiclean_bloat::BARRELS_STYLE,
+            oxiclean_bloat::BARRELS_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();
