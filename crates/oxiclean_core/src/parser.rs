@@ -175,19 +175,19 @@ impl<'a> Visit<'a> for ImportCollector {
     fn visit_ts_module_declaration(&mut self, _decl: &TSModuleDeclaration<'a>) {}
 }
 
+/// How to parse `path`. JavaScript files may contain JSX whatever their
+/// extension, as Next.js (SWC), Metro (Babel) and most bundlers allow, and a
+/// `.js` file may be either an ES module or a CommonJS script.
 fn source_type_for(path: &Path) -> SourceType {
-    let ext = path.extension().and_then(|e| e.to_str());
-
-    let mut st = SourceType::default()
-        .with_jsx(matches!(ext, Some("tsx") | Some("jsx")))
-        .with_typescript(matches!(ext, Some("ts") | Some("tsx") | Some("mts") | Some("cts")));
-
-    // ESM heuristic - .mjs, .mts are ES modules
-    if matches!(ext, Some("mjs") | Some("mts")) {
-        st = st.with_module(true);
+    let st = SourceType::from_path(path).unwrap_or_default();
+    if !st.is_javascript() {
+        return st;
     }
-
-    st
+    let st = st.with_jsx(true);
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("js" | "jsx") => st.with_unambiguous(true),
+        _ => st,
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +226,32 @@ mod tests {
         let lines: Vec<(String, u32)> =
             imports_for(&file, &cache).unwrap().into_iter().map(|s| (s.request, s.line)).collect();
         assert_eq!(lines, vec![("./a".into(), 2), ("./b".into(), 4), ("./c".into(), 5)]);
+    }
+
+    #[test]
+    fn test_jsx_and_commonjs_in_every_js_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let jsx = "import a from './a';\nexport const C = () => <div>{a}</div>;";
+        for name in ["c.js", "c.mjs", "c.jsx"] {
+            let file = create_test_file(temp_dir.path(), name, jsx);
+            let parsed = parse_imports(&file).unwrap();
+            assert_eq!(parsed.error, None, "{name}");
+            assert_eq!(parsed.specs.len(), 1, "{name}");
+            imports_for(&file, &cache).unwrap();
+        }
+        // Sloppy-mode CommonJS: `with` and octal literals are errors in modules.
+        let cjs = "const a = require('./a');\nwith (a) { module.exports = 010; }";
+        for name in ["s.js", "s.cjs"] {
+            let file = create_test_file(temp_dir.path(), name, cjs);
+            let parsed = parse_imports(&file).unwrap();
+            assert_eq!(parsed.error, None, "{name}");
+            assert_eq!(parsed.specs.len(), 1, "{name}");
+        }
+        // TypeScript keeps its own rules: `<T>x` is a cast in .ts, not JSX.
+        let file =
+            create_test_file(temp_dir.path(), "t.ts", "import a from './a';\nconst x = <number>a;");
+        assert_eq!(parse_imports(&file).unwrap().error, None);
     }
 
     #[test]
