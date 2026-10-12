@@ -539,12 +539,12 @@ fn unused_dependencies_in_every_format() {
     );
     write(t.path(), "src/index.ts", "import React from 'react';\nexport default React;");
 
-    let (code, out) = run(t.path(), &["unused-dependencies"]);
+    let (code, out) = run(t.path(), &["dependencies"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("package 'lodash' (never used)"), "{out}");
     assert!(!out.contains("react"), "{out}");
 
-    let (_, out) = run_stdout(t.path(), &["unused-dependencies", "--format", "json"]);
+    let (_, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["findings"].as_array().unwrap().len(), 2, "{out}");
     let finding = &v["findings"][1];
@@ -554,10 +554,10 @@ fn unused_dependencies_in_every_format() {
     assert_eq!(finding["field"], "devDependencies");
     assert_eq!(finding["line"], 11);
 
-    let (_, out) = run_stdout(t.path(), &["unused-dependencies", "--format", "sarif"]);
+    let (_, out) = run_stdout(t.path(), &["dependencies", "--format", "sarif"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let result = &v["runs"][0]["results"][0];
-    assert_eq!(result["ruleId"], "unused-dependencies");
+    assert_eq!(result["ruleId"], "dependencies");
     assert_eq!(
         result["message"]["text"],
         "'lodash' is listed in dependencies but never imported or run"

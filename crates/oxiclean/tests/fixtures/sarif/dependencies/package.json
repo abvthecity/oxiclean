@@ -1,5 +1,5 @@
 {
-  "name": "sarif-unused-dependencies",
+  "name": "sarif-dependencies",
   "dependencies": {
     "used": "*",
     "unused": "*"
