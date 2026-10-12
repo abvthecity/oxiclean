@@ -1,8 +1,8 @@
-use log::{debug, trace};
 use std::{
     env,
     path::{Path, PathBuf},
 };
+use tracing::{debug, trace};
 
 use crate::error::{Error, Result};
 

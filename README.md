@@ -128,7 +128,7 @@ Both metrics provide complementary insights into code complexity.
 
 ## Debugging & Logging
 
-Oxiclean uses the `log` crate with `env_logger` for debug output. Enable logging via the `RUST_LOG` environment variable:
+Oxiclean logs diagnostics with [`tracing`](https://docs.rs/tracing) to stderr, so stdout carries only the report. Enable logging via the `RUST_LOG` environment variable (errors only by default):
 
 ```bash
 # Show all debug logs

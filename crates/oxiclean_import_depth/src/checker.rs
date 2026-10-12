@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use log::info;
 use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, Result};
+use tracing::info;
 
 use crate::config::Config;
 

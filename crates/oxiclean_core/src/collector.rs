@@ -1,7 +1,7 @@
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use log::{debug, trace};
 use std::path::{Component, Path, PathBuf};
+use tracing::{debug, trace};
 
 use crate::{
     constants::JS_TS_EXTENSIONS,

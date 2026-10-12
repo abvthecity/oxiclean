@@ -15,8 +15,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use log::{debug, trace, warn};
 use rayon::prelude::*;
+use tracing::{debug, trace, warn};
 
 use crate::constants::JS_TS_EXTENSIONS;
 

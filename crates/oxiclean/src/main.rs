@@ -7,11 +7,12 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use log::debug;
 use oxiclean_core::{
     CheckResult,
     report::{self, ReportContext, ReportStyle},
 };
+use tracing::debug;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "oxiclean", version)]
@@ -30,7 +31,7 @@ enum Commands {
 }
 
 fn main() -> Result<ExitCode> {
-    env_logger::init();
+    init_tracing();
     let cli = Cli::parse();
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
@@ -60,6 +61,19 @@ fn main() -> Result<ExitCode> {
 
     // A non-zero exit fails CI when anything crossed the threshold.
     Ok(if result.findings.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+/// Sends diagnostics to stderr so stdout carries only the report. `RUST_LOG`
+/// takes the usual filter syntax and defaults to errors only.
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(tracing::Level::ERROR.into())
+                .from_env_lossy(),
+        )
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 fn print_report(

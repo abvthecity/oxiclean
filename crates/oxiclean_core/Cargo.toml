@@ -20,7 +20,6 @@ colored.workspace = true
 dashmap.workspace = true
 globset.workspace = true
 ignore.workspace = true
-log.workspace = true
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_ast_visit.workspace = true
@@ -30,6 +29,7 @@ path-clean.workspace = true
 rayon.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [lib]
 name = "oxiclean_core"

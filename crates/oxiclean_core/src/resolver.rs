@@ -1,10 +1,10 @@
 use anyhow::Result;
 use dashmap::DashMap;
-use log::{debug, trace};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tracing::{debug, trace};
 
 use crate::constants::{INDEX_FILES, RESOLVE_EXTENSIONS};
 use crate::project::{Project, normalize, split_package_request};
