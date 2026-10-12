@@ -9,10 +9,10 @@ A Rust monorepo for code quality and analysis tools for JavaScript/TypeScript pr
 cargo install --path crates/oxiclean
 
 # Run import bloat checker
-oxiclean import-bloat --root ./my-project --threshold 200
+oxiclean import-bloat --root ./my-project --threshold 300
 
 # Run import depth checker
-oxiclean import-depth --root ./my-project --threshold 10
+oxiclean import-depth --root ./my-project --threshold 20
 
 # Get help
 oxiclean --help
@@ -63,10 +63,12 @@ Both tools accept the same options for choosing what to analyse:
 | `--root <DIR>` | Project root. Defaults to the git root of the current directory. |
 | `--entry-glob <GLOB>` | Only treat files matching this glob (relative to the root) as entries, e.g. `"src/pages/**/*.tsx"`. `*` stays within one directory; `**` crosses directories. A pattern without glob characters matches any path containing it. Repeat to give several. Without it, every JS/TS file inside a `src` directory is an entry. |
 | `--include-dynamic` | Also follow dynamic `import()` calls. They are skipped by default because lazily loaded modules are split into separate chunks. |
-| `--threshold <N>` | Flag findings at or above N. Replaces every threshold in the config file. |
+| `--threshold <N>` | Flag findings at or above N (default: 300 modules for `import-bloat`, 20 levels for `import-depth`). Replaces every threshold in the config file. |
 | `--package <NAME>` | Only analyse entries in this workspace package. Globs such as `"@scope/*"` work. Repeat to give several. |
 | `--config <FILE>` | Read this config file instead of `oxiclean.toml` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
+
+The defaults flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)); use `oxiclean.toml` to tune them per package.
 
 Both exit with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -76,17 +78,17 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 
 **Usage:**
 ```bash
-oxiclean import-bloat --root ./my-project --threshold 200
+oxiclean import-bloat --root ./my-project --threshold 300
 oxiclean import-bloat --entry-glob "src/**/*.tsx" --threshold 100
 ```
 
 **Example Output:**
 ```
-⚠ Import bloat detected (threshold: 200 modules)
+⚠ Import bloat detected (threshold: 300 modules)
 
-src/pages/Dashboard.tsx (345 modules)
-├──  import './components/DataTable' (234 modules)
-└──  import '@/utils/api' (156 modules)
+src/pages/Dashboard.tsx (512 modules)
+├──  import './components/DataTable' (408 modules)
+└──  import '@/utils/api' (331 modules)
 ```
 
 **Features:**
@@ -102,17 +104,17 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 
 **Usage:**
 ```bash
-oxiclean import-depth --root ./my-project --threshold 10
+oxiclean import-depth --root ./my-project --threshold 20
 oxiclean import-depth --entry-glob "src/**/*.tsx" --threshold 15
 ```
 
 **Example Output:**
 ```
-⚠ Excessive import depth detected (threshold: 10 levels)
+⚠ Excessive import depth detected (threshold: 20 levels)
 
 src/pages/Dashboard.tsx
-├──  import './components/DataTable' (depth: 15)
-└──  import '@/utils/format' (depth: 12)
+├──  import './components/DataTable' (depth: 26)
+└──  import '@/utils/format' (depth: 21)
 ```
 
 **Features:**

@@ -10,7 +10,7 @@ pub struct Config {
     pub common: CommonArgs,
 
     /// Flag imports and entries that reach at least this many unique modules
-    /// [default: 200, or the config file's `threshold`]. Replaces every
+    /// [default: 300, or the config file's `threshold`]. Replaces every
     /// threshold in the config file, overrides included.
     #[arg(long)]
     pub threshold: Option<usize>,
@@ -20,7 +20,7 @@ pub struct Config {
 pub const RULE: &str = "import-bloat";
 
 /// Threshold used when neither the command line nor the config file sets one.
-pub const DEFAULT_THRESHOLD: usize = 200;
+pub const DEFAULT_THRESHOLD: usize = 300;
 
 /// How import bloat findings are worded in the terminal report.
 pub const REPORT_STYLE: ReportStyle = ReportStyle {

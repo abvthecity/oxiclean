@@ -10,7 +10,7 @@ pub struct Config {
     pub common: CommonArgs,
 
     /// Flag imports whose import chain is at least this deep
-    /// [default: 10, or the config file's `threshold`]. Replaces every
+    /// [default: 20, or the config file's `threshold`]. Replaces every
     /// threshold in the config file, overrides included.
     #[arg(long)]
     pub threshold: Option<usize>,
@@ -20,7 +20,7 @@ pub struct Config {
 pub const RULE: &str = "import-depth";
 
 /// Threshold used when neither the command line nor the config file sets one.
-pub const DEFAULT_THRESHOLD: usize = 10;
+pub const DEFAULT_THRESHOLD: usize = 20;
 
 /// How import depth findings are worded in the terminal report.
 pub const REPORT_STYLE: ReportStyle = ReportStyle {
