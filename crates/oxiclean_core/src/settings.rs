@@ -155,15 +155,15 @@ impl ConfigFile {
                     KNOWN_RULES.join(", ")
                 )));
             }
-            file_globs(&rule.ignore).map_err(&err)?;
+            file_globs(&rule.ignore).map_err(err)?;
         }
-        file_globs(&self.ignore).map_err(&err)?;
+        file_globs(&self.ignore).map_err(err)?;
         for o in &self.overrides {
             if o.packages.is_empty() && o.files.is_empty() {
                 return Err(err("an [[overrides]] entry needs `packages` or `files`".into()));
             }
-            file_globs(&o.files).map_err(&err)?;
-            name_globs(&o.packages).map_err(&err)?;
+            file_globs(&o.files).map_err(err)?;
+            name_globs(&o.packages).map_err(err)?;
         }
         Ok(())
     }
