@@ -68,6 +68,9 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
         FindingKind::UnusedMember(unused) => {
             format!("{} '{}' is never used", unused.kind.as_str(), unused.name)
         }
+        FindingKind::UnusedDependency(dep) => {
+            format!("'{}' is listed in {} but never imported or run", dep.name, dep.field)
+        }
     }
 }
 
@@ -134,6 +137,12 @@ pub fn write_json<W: Write>(
                     v["line"] = json!(unused.line);
                     v["name"] = json!(unused.name);
                     v["symbol"] = json!(unused.kind.as_str());
+                }
+                FindingKind::UnusedDependency(dep) => {
+                    v["kind"] = json!("unused-dependency");
+                    v["line"] = json!(dep.line);
+                    v["name"] = json!(dep.name);
+                    v["field"] = json!(dep.field);
                 }
             }
             v
@@ -214,7 +223,8 @@ pub fn write_sarif<W: Write>(
                 FindingKind::Import { .. }
                 | FindingKind::WholeGraph
                 | FindingKind::UnusedExport(_)
-                | FindingKind::UnusedMember(_) => Vec::new(),
+                | FindingKind::UnusedMember(_)
+                | FindingKind::UnusedDependency(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -302,6 +312,11 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
         }
         FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => {
             key.push_str(&unused.name);
+        }
+        FindingKind::UnusedDependency(dep) => {
+            key.push_str(&dep.field);
+            key.push('\0');
+            key.push_str(&dep.name);
         }
     }
     // FNV-1a: stable across Rust versions and platforms, unlike `DefaultHasher`.

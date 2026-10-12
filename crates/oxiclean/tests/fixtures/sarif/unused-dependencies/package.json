@@ -1,0 +1,7 @@
+{
+  "name": "sarif-unused-dependencies",
+  "dependencies": {
+    "used": "*",
+    "unused": "*"
+  }
+}

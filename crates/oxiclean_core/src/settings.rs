@@ -92,6 +92,9 @@ pub struct ConfigFile {
     /// Globs of files, relative to the root, that are never entries and never
     /// reported.
     pub ignore_patterns: Vec<String>,
+    /// Names of packages, globs such as "@types/*" allowed, that the unused
+    /// dependency checks never report, as knip's `ignoreDependencies`.
+    pub ignore_dependencies: Vec<String>,
     /// Settings per rule. A rule that isn't listed runs with its defaults.
     pub rules: Rules,
     /// Settings for some workspace packages or files. Later overrides win.
@@ -132,6 +135,12 @@ pub struct Rules {
     /// What used namespaces export that nothing uses, as knip's
     /// `namespaceMembers`. The same exceptions apply. Default threshold: 1.
     pub unused_namespace_members: Option<RuleSetting>,
+    /// Packages in a package.json's `dependencies` that no file imports and
+    /// no script runs, as knip's `dependencies`. Default threshold: 1.
+    pub unused_dependencies: Option<RuleSetting>,
+    /// The same for `devDependencies`, as knip's `devDependencies`. A
+    /// package also in `dependencies` is reported here. Default threshold: 1.
+    pub unused_dev_dependencies: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -147,6 +156,8 @@ impl Rules {
             "unused-types" => self.unused_types.as_ref(),
             "unused-enum-members" => self.unused_enum_members.as_ref(),
             "unused-namespace-members" => self.unused_namespace_members.as_ref(),
+            "unused-dependencies" => self.unused_dependencies.as_ref(),
+            "unused-dev-dependencies" => self.unused_dev_dependencies.as_ref(),
             _ => None,
         }
     }
@@ -161,6 +172,8 @@ impl Rules {
             &self.unused_types,
             &self.unused_enum_members,
             &self.unused_namespace_members,
+            &self.unused_dependencies,
+            &self.unused_dev_dependencies,
         ]
         .into_iter()
         .flatten()
@@ -293,6 +306,16 @@ impl ConfigFile {
         text
     }
 
+    /// The packages the unused dependency checks never report, from
+    /// `ignoreDependencies`.
+    ///
+    /// # Errors
+    /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.
+    pub fn ignored_dependencies(&self) -> Result<GlobSet> {
+        name_globs(&self.ignore_dependencies)
+            .map_err(|message| Error::Config { path: PathBuf::new(), message })
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         let err = |message: String| Error::Config { path: path.to_path_buf(), message };
         let all_rules = self.rules.all().chain(self.overrides.iter().flat_map(|o| o.rules.all()));
@@ -300,6 +323,7 @@ impl ConfigFile {
             file_globs(&rule.to_config().ignore).map_err(err)?;
         }
         file_globs(&self.ignore_patterns).map_err(err)?;
+        name_globs(&self.ignore_dependencies).map_err(err)?;
         for o in &self.overrides {
             if o.packages.is_empty() && o.files.is_empty() {
                 return Err(err("each entry in `overrides` needs `files` or `packages`".into()));

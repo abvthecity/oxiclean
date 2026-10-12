@@ -1,0 +1,27 @@
+[package]
+name = "oxiclean_dependencies"
+description = "Finds packages a package.json lists that no JavaScript/TypeScript file imports and no script runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+clap.workspace = true
+globset.workspace = true
+oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli"] }
+serde_json.workspace = true
+tracing.workspace = true
+
+[lib]
+name = "oxiclean_dependencies"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[lints]
+workspace = true

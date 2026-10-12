@@ -20,6 +20,14 @@
         "type": "string"
       }
     },
+    "ignoreDependencies": {
+      "description": "Names of packages, globs such as \"@types/*\" allowed, that the unused\ndependency checks never report, as knip's `ignoreDependencies`.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "ignorePatterns": {
       "description": "Globs of files, relative to the root, that are never entries and never\nreported.",
       "type": "array",
@@ -174,6 +182,28 @@
         },
         "duplicates": {
           "description": "Files that export the same thing under more than one name, as knip's\n`duplicates`. Exports tagged `@alias` don't count. Default threshold:\n2 names.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-dependencies": {
+          "description": "Packages in a package.json's `dependencies` that no file imports and\nno script runs, as knip's `dependencies`. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-dev-dependencies": {
+          "description": "The same for `devDependencies`, as knip's `devDependencies`. A\npackage also in `dependencies` is reported here. Default threshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

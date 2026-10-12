@@ -528,3 +528,39 @@ fn unused_members_in_every_format() {
     assert_eq!(result["message"]["text"], "enum member 'Color.Blue' is never used");
     assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 3);
 }
+
+#[test]
+fn unused_dependencies_in_every_format() {
+    let t = TempDir::new().unwrap();
+    write(
+        t.path(),
+        "package.json",
+        "{\n  \"name\": \"app\",\n  \"main\": \"src/index.ts\",\n  \"scripts\": { \"build\": \"tsc\" },\n  \"dependencies\": {\n    \"react\": \"*\",\n    \"lodash\": \"*\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"*\",\n    \"prettier\": \"*\"\n  }\n}\n",
+    );
+    write(t.path(), "src/index.ts", "import React from 'react';\nexport default React;");
+
+    let (code, out) = run(t.path(), &["unused-dependencies"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("package 'lodash' (never used)"), "{out}");
+    assert!(!out.contains("react"), "{out}");
+
+    let (_, out) = run_stdout(t.path(), &["unused-dev-dependencies", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
+    let finding = &v["findings"][0];
+    assert_eq!(finding["kind"], "unused-dependency");
+    assert_eq!(finding["file"], "package.json");
+    assert_eq!(finding["name"], "prettier");
+    assert_eq!(finding["field"], "devDependencies");
+    assert_eq!(finding["line"], 11);
+
+    let (_, out) = run_stdout(t.path(), &["unused-dependencies", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let result = &v["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "unused-dependencies");
+    assert_eq!(
+        result["message"]["text"],
+        "'lodash' is listed in dependencies but never imported or run"
+    );
+    assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 7);
+}

@@ -28,6 +28,8 @@ const ENTRY_NAMES: &[&str] = &["index", "main", "cli"];
 ///   with unbuilt build output mapped to `src/` as imports are;
 /// - the JS/TS files its `scripts` name, such as `node scripts/build.js`;
 /// - `index`, `main` and `cli` files in the package directory or its `src`;
+/// - config files in the package directory, as `vite.config.ts` or
+///   `.eslintrc.cjs`, which knip's plugins take as entries;
 /// - the files tsconfig `paths` aliases named after a workspace package
 ///   point to, as MUI's `"@mui/icons-material/*"` does.
 #[must_use]
@@ -89,6 +91,7 @@ fn entries_of(project: &Project, dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
+    files.extend(config_files(dir));
     trace!("{} entry points in {}", files.len(), dir.display());
     files
 }
@@ -110,6 +113,31 @@ fn script_files(dir: &Path, script: &str) -> Vec<PathBuf> {
         .filter(|p| p.is_file())
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect()
+}
+
+/// The JS/TS config files directly in `dir`: `<name>.config.<ext>`, as
+/// `vite.config.ts` or `jest.config.js`, and `.<name>rc.<ext>`, as
+/// `.eslintrc.cjs`.
+fn config_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path())
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(is_config_file))
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .collect();
+    files.sort();
+    files
+}
+
+fn is_config_file(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false };
+    if !matches!(ext, "js" | "mjs" | "cjs" | "ts" | "mts" | "cts") {
+        return false;
+    }
+    stem.ends_with(".config")
+        || stem.strip_prefix('.').is_some_and(|s| s.ends_with("rc") && !s.contains('.'))
 }
 
 /// Every string in an `exports` value, whatever its conditions.
@@ -173,6 +201,11 @@ mod tests {
         write(root, "packages/app/src/cli.ts", "");
         write(root, "packages/app/index.js", "");
         write(root, "packages/app/src/other.ts", "");
+        // Config files, but not other dotfiles or a config in a subdirectory.
+        write(root, "packages/app/vite.config.ts", "");
+        write(root, "packages/app/.eslintrc.cjs", "");
+        write(root, "packages/app/.env.js", "");
+        write(root, "packages/app/src/app.config.ts", "");
 
         // A tsconfig alias named after a workspace package, as in MUI.
         write(
@@ -192,8 +225,10 @@ mod tests {
             rel(root, package_entry_points(&project)),
             [
                 "bin/tool.js",
+                "packages/app/.eslintrc.cjs",
                 "packages/app/index.js",
                 "packages/app/src/cli.ts",
+                "packages/app/vite.config.ts",
                 "packages/icons/lib/Star.mjs",
                 "packages/ui/src/icons/nested/moon.ts",
                 "packages/ui/src/icons/star.tsx",
