@@ -58,6 +58,10 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
             files.extend(files.first().cloned());
             format!("import cycle {} ({value}, {limit})", files.join(" -> "))
         }
+        FindingKind::DuplicateExport(dup) => {
+            let names: Vec<String> = dup.names.iter().map(|n| format!("'{}'", n.name)).collect();
+            format!("{} export the same thing ({value}, {limit})", names.join(", "))
+        }
     }
 }
 
@@ -102,6 +106,15 @@ pub fn write_json<W: Write>(
                         .steps
                         .iter()
                         .map(|s| json!({ "file": rel(&s.file, root), "line": s.line, "request": s.request }))
+                        .collect();
+                }
+                FindingKind::DuplicateExport(dup) => {
+                    v["kind"] = json!("duplicate-export");
+                    v["line"] = json!(f.line());
+                    v["names"] = dup
+                        .names
+                        .iter()
+                        .map(|n| json!({ "name": n.name, "line": n.line }))
                         .collect();
                 }
             }
@@ -164,19 +177,33 @@ pub fn write_sarif<W: Write>(
                 "partialFingerprints": { FINGERPRINT_KEY: fingerprint(meta.rule, f, root) },
                 "properties": { "value": f.value, "threshold": f.threshold },
             });
-            if let FindingKind::Cycle(cycle) = &f.kind {
-                // The other imports of the cycle, so code-scanning UIs can
-                // link to each of them.
-                result["relatedLocations"] = cycle
+            // The other places the finding involves, so code-scanning UIs
+            // can link to each of them: the rest of a cycle's imports, or
+            // the names that repeat an export.
+            let related: Vec<(&Path, u32, String)> = match &f.kind {
+                FindingKind::Cycle(cycle) => cycle
                     .steps
                     .iter()
-                    .enumerate()
                     .skip(1)
-                    .map(|(id, s)| {
+                    .map(|s| (s.file.as_path(), s.line, format!("imports '{}'", s.request)))
+                    .collect(),
+                FindingKind::DuplicateExport(dup) => dup
+                    .names
+                    .iter()
+                    .skip(1)
+                    .map(|n| (f.file.as_path(), n.line, format!("exports it as '{}'", n.name)))
+                    .collect(),
+                FindingKind::Import { .. } | FindingKind::WholeGraph => Vec::new(),
+            };
+            if !related.is_empty() {
+                result["relatedLocations"] = related
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (file, line, text))| {
                         json!({
-                            "id": id,
-                            "physicalLocation": physical_location(&s.file, s.line.max(1), root),
-                            "message": { "text": format!("imports '{}'", s.request) },
+                            "id": i + 1,
+                            "physicalLocation": physical_location(file, line.max(1), root),
+                            "message": { "text": text },
                         })
                     })
                     .collect();
@@ -243,6 +270,12 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
         FindingKind::Cycle(cycle) => {
             for step in &cycle.steps {
                 key.push_str(&rel(&step.file, root));
+                key.push('\0');
+            }
+        }
+        FindingKind::DuplicateExport(dup) => {
+            for name in &dup.names {
+                key.push_str(&name.name);
                 key.push('\0');
             }
         }

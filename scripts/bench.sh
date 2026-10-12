@@ -15,7 +15,7 @@ REPO_ROOT=$(pwd)
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 BASELINE=$REPO_ROOT/bench/baseline.json
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
-CHECKS=(bloat depth cycles)
+CHECKS=(bloat depth cycles duplicate-exports)
 
 install=false
 update=false
@@ -87,7 +87,7 @@ while IFS=$'\t' read -r name url sha; do
 done < bench/targets.tsv
 
 # Report against the baseline
-printf '\n%-10s %-13s %10s %8s %11s %10s\n' target check time_ms files violations resolved
+printf '\n%-10s %-17s %10s %8s %11s %10s\n' target check time_ms files violations resolved
 jq -r --slurpfile base <(cat "$BASELINE" 2>/dev/null || echo '[]') '
   def pct(r; t): if t == 0 then "-" else ((r * 1000 / t | floor) / 10 | tostring) + "%" end;
   def delta(new; old): if old == null then "" else " (" + (if new >= old then "+" else "" end) + ((new - old) | tostring) + ")" end;
@@ -99,7 +99,7 @@ jq -r --slurpfile base <(cat "$BASELINE" 2>/dev/null || echo '[]') '
      ($r.violations | tostring) + delta($r.violations; $b.violations),
      pct($r.imports_resolved; $r.imports_total)]
   | @tsv' <<<"$results" | while IFS=$'\t' read -r t c ms f v p; do
-    printf '%-10s %-13s %10s %8s %11s %10s\n' "$t" "$c" "$ms" "$f" "$v" "$p"
+    printf '%-10s %-17s %10s %8s %11s %10s\n' "$t" "$c" "$ms" "$f" "$v" "$p"
   done
 
 if $update; then

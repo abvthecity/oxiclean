@@ -12,6 +12,7 @@ use std::{
 use tracing::{debug, trace, warn};
 
 use crate::constants::JS_TS_EXTENSIONS;
+use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
 
 pub fn imports_for(
@@ -40,15 +41,19 @@ pub fn imports_for(
     Ok(parsed.specs)
 }
 
-/// The imports of one file, plus the first syntax error if the file did not
-/// parse cleanly. After a syntax error `specs` is incomplete, usually empty.
+/// The imports and exports of one file, plus the first syntax error if the
+/// file did not parse cleanly. After a syntax error `specs` and `exports` are
+/// incomplete, usually empty.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ParsedImports {
     pub specs: Vec<Specifier>,
+    pub exports: Vec<Export>,
     pub error: Option<String>,
 }
 
-/// Reads and parses `file`, returning every runtime import it makes.
+/// Reads and parses `file`, returning every runtime import it makes and
+/// every name it exports.
 ///
 /// Unlike [`imports_for`] this does not cache, and it reports syntax errors
 /// instead of silently returning a partial list.
@@ -67,6 +72,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
 
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
+    let exports = exports::collect(&program, &|offset| collector.line(offset));
     let specs = collector.specs;
 
     let error = if panicked && errors.is_empty() {
@@ -75,7 +81,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
         errors.first().map(|e| e.message.to_string())
     };
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
-    Ok(ParsedImports { specs, error })
+    Ok(ParsedImports { specs, exports, error })
 }
 
 /// Walks the whole AST collecting module requests, including re-exports and
@@ -94,10 +100,15 @@ impl ImportCollector {
         Self { specs: Vec::new(), line_starts }
     }
 
+    /// 1-based line of the byte at `offset`.
+    fn line(&self, offset: u32) -> u32 {
+        let line = self.line_starts.partition_point(|&start| start <= offset);
+        u32::try_from(line).unwrap_or(u32::MAX)
+    }
+
     fn push(&mut self, request: &str, kind: SpecKind, span: Span) {
         trace!("Found {:?} import: '{}'", kind, request);
-        let line = self.line_starts.partition_point(|&start| start <= span.start);
-        let line = u32::try_from(line).unwrap_or(u32::MAX);
+        let line = self.line(span.start);
         self.specs.push(Specifier { request: request.to_string(), kind, line });
     }
 }

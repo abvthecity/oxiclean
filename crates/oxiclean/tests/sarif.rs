@@ -18,7 +18,7 @@ use serde_json::Value;
 
 /// The rules with SARIF output. Add new rules here with a fixture under
 /// `tests/fixtures/sarif/<rule>` that produces at least one finding.
-const RULES: &[&str] = &["bloat", "depth", "cycles"];
+const RULES: &[&str] = &["bloat", "depth", "cycles", "duplicate-exports"];
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")

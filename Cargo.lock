@@ -901,6 +901,7 @@ dependencies = [
  "oxiclean_core",
  "oxiclean_cycles",
  "oxiclean_depth",
+ "oxiclean_duplicate_exports",
  "rayon",
  "serde_json",
  "tempfile",
@@ -955,6 +956,16 @@ dependencies = [
 
 [[package]]
 name = "oxiclean_depth"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxiclean_core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "oxiclean_duplicate_exports"
 version = "0.1.0"
 dependencies = [
  "clap",

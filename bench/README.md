@@ -41,21 +41,27 @@ unresolved imports.
 | Next.js | bloat | ~1.0s | 2,344 | 164 | 88.6% |
 | Next.js | depth | ~1.0s | 2,344 | 202 | 88.6% |
 | Next.js | cycles | ~1.0s | 2,344 | 68 | 88.6% |
+| Next.js | duplicate-exports | ~1.1s | 2,344 | 10 | 88.6% |
 | Expo | bloat | ~0.7s | 4,656 | 868 | 74.7% |
 | Expo | depth | ~0.7s | 4,656 | 1,586 | 74.7% |
 | Expo | cycles | ~0.7s | 4,656 | 46 | 74.7% |
+| Expo | duplicate-exports | ~0.8s | 4,656 | 18 | 74.7% |
 | MUI | bloat | ~0.5s | 13,301 | 690 | 68.3% |
 | MUI | depth | ~0.5s | 13,301 | 3,788 | 68.3% |
 | MUI | cycles | ~0.5s | 13,301 | 4 | 68.3% |
+| MUI | duplicate-exports | ~0.5s | 13,301 | 2 | 68.3% |
 | Vite | bloat | ~40ms | 367 | 0 | 72.6% |
 | Vite | depth | ~50ms | 367 | 0 | 72.6% |
 | Vite | cycles | ~50ms | 367 | 49 | 72.6% |
+| Vite | duplicate-exports | ~45ms | 367 | 1 | 72.6% |
 | Playwright | bloat | ~50ms | 765 | 75 | 87.5% |
 | Playwright | depth | ~55ms | 765 | 53 | 87.5% |
 | Playwright | cycles | ~60ms | 765 | 76 | 87.5% |
+| Playwright | duplicate-exports | ~55ms | 765 | 5 | 87.5% |
 | Lit | bloat | ~70ms | 754 | 0 | 49.7% |
 | Lit | depth | ~70ms | 754 | 0 | 49.7% |
 | Lit | cycles | ~60ms | 754 | 20 | 49.7% |
+| Lit | duplicate-exports | ~75ms | 754 | 2 | 49.7% |
 
 Results are deterministic, so any change in violations comes from a code change.
 Times vary by about 20% between runs on shared machines; compare against a
@@ -73,12 +79,12 @@ plugins off. Neither tool installs dependencies.
 
 | Target | oxiclean | knip | Speed-up | Cycles (oxiclean / knip) | knip cycles oxiclean misses |
 |---|---|---|---|---|---|
-| Next.js | 0.94s | 307s | 326× | 68 / 44 | 0 |
-| Expo | 0.75s | 180s | 240× | 46 / 51 | 0 |
-| MUI | 0.51s | 105s | 208× | 4 / 6 | 0 |
-| Vite | 55ms | 3.0s | 54× | 49 / 65 | 1 (knip false positive) |
-| Playwright | 68ms | 2.1s | 31× | 76 / 71 | 0 |
-| Lit | 74ms | 2.5s | 34× | 20 / 17 | 0 |
+| Next.js | 1.18s | 379s | 321× | 68 / 44 | 0 |
+| Expo | 0.74s | 207s | 281× | 46 / 51 | 0 |
+| MUI | 0.54s | 112s | 209× | 4 / 6 | 0 |
+| Vite | 53ms | 3.1s | 58× | 49 / 65 | 1 (knip false positive) |
+| Playwright | 70ms | 2.2s | 31× | 76 / 71 | 0 |
+| Lit | 73ms | 3.0s | 40× | 20 / 17 | 0 |
 
 The cycle counts measure different things. knip reports one cycle per back
 edge of its depth-first search, so a tangle yields as many cycles as the
@@ -95,6 +101,31 @@ imports breaks.
   `packages/next/src/compiled/babel`, whose files import the package's own
   `next/dist/compiled/...` paths. oxiclean resolves those to the sources,
   which are copied unchanged into `dist`; knip does not follow them.
+
+### Duplicate exports (`duplicate-exports` vs knip `duplicates`)
+
+| Target | oxiclean | knip | Speed-up | Findings (oxiclean / knip) | knip only | oxiclean only |
+|---|---|---|---|---|---|---|
+| Next.js | 1.15s | 380s | 332× | 10 / 10 | 0 | 0 |
+| Expo | 0.78s | 222s | 286× | 18 / 18 | 0 | 0 |
+| MUI | 0.74s | 112s | 151× | 2 / 3 | 1 | 0 |
+| Vite | 55ms | 3.0s | 55× | 1 / 1 | 0 | 0 |
+| Playwright | 75ms | 2.2s | 30× | 5 / 5 | 1 | 1 |
+| Lit | 95ms | 2.8s | 30× | 2 / 4 | 2 | 0 |
+
+A finding is one group of names for the same export; it matches when both
+tools report the same names in the same file. Every difference comes
+from which files each tool looks at, not from how it reads them:
+
+- **knip also checks `.d.ts` files it reaches through types.** MUI's
+  `useAutocomplete.d.ts` and Playwright's `types/test.d.ts` export the same
+  type under two names. oxiclean doesn't parse declaration files yet.
+- **Playwright's `utils/third_party/extractZip.ts` is outside `src`,** so
+  knip's `project` leaves it out; oxiclean checks every file an entry reaches.
+- **Lit's two knip-only findings are in one `tsserver-plugin` test file** that
+  imports `lit`, which oxiclean resolves to the workspace package's sources. An import from the project that is
+  exported again is a re-export, which knip doesn't count; knip treats `lit`
+  as an external package, so its exports count.
 
 ## Choosing thresholds
 
