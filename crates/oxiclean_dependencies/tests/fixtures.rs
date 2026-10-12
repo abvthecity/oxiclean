@@ -178,3 +178,11 @@ fn next_app() {
 fn expo_app() {
     assert_eq!(dependencies("expo-app"), ["package.json unused-pkg:13"]);
 }
+
+/// Storybook, husky and lint-staged plugins: what `.storybook/main.ts`
+/// names, what stories and `.storybook/preview.ts` import, and the binaries
+/// husky's hooks and lint-staged run are used.
+#[test]
+fn repo_tooling() {
+    assert_eq!(dev_dependencies("repo-tooling"), ["package.json unused-pkg:15"]);
+}

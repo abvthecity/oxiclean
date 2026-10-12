@@ -159,6 +159,19 @@ pub struct PluginSettings {
     /// as `expo-router/entry`, and Expo Router's routes in `app`, which are
     /// entries. On when a package.json lists `expo`.
     pub expo: Option<bool>,
+    /// Storybook: the addons and framework `.storybook/main.*` names are
+    /// used, and stories (`*.stories.*`) and `.storybook`'s `main`,
+    /// `preview` and `manager` are entries. On when a package.json lists
+    /// `storybook`.
+    pub storybook: Option<bool>,
+    /// The commands husky's hooks in `.husky` and package.json
+    /// `simple-git-hooks` run, read as scripts. On when a package.json
+    /// lists `husky` or `simple-git-hooks`.
+    pub husky: Option<bool>,
+    /// The commands lint-staged's config runs, read as scripts. On when a
+    /// package.json lists `lint-staged`.
+    #[serde(rename = "lint-staged")]
+    pub lint_staged: Option<bool>,
 }
 
 impl PluginSettings {
@@ -181,6 +194,9 @@ impl PluginSettings {
             "vitest" => self.vitest,
             "next" => self.next,
             "expo" => self.expo,
+            "storybook" => self.storybook,
+            "husky" => self.husky,
+            "lint-staged" => self.lint_staged,
             _ => None,
         }
     }
@@ -205,6 +221,9 @@ impl PluginSettings {
             vitest: v,
             next: v,
             expo: v,
+            storybook: v,
+            husky: v,
+            lint_staged: v,
         }
     }
 }

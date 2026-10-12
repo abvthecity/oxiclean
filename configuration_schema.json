@@ -161,8 +161,24 @@
           ],
           "default": null
         },
+        "husky": {
+          "description": "The commands husky's hooks in `.husky` and package.json\n`simple-git-hooks` run, read as scripts. On when a package.json\nlists `husky` or `simple-git-hooks`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "jest": {
           "description": "What Jest's config names: presets, environments, transforms,\nreporters and the like are used, and setup files are entries. On\nwhen a package.json lists `jest`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "lint-staged": {
+          "description": "The commands lint-staged's config runs, read as scripts. On when a\npackage.json lists `lint-staged`.",
           "type": [
             "boolean",
             "null"
@@ -195,6 +211,14 @@
         },
         "prettier": {
           "description": "The shared config and plugins Prettier's config files and\n`prettier` name. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "storybook": {
+          "description": "Storybook: the addons and framework `.storybook/main.*` names are\nused, and stories (`*.stories.*`) and `.storybook`'s `main`,\n`preview` and `manager` are entries. On when a package.json lists\n`storybook`.",
           "type": [
             "boolean",
             "null"
