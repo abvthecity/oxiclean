@@ -19,7 +19,7 @@ use rayon::prelude::*;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    constants::{JS_TS_EXTENSIONS, declaration_for, is_declaration},
+    constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, declaration_for, is_declaration},
     exports::Export,
     sequencer::{Components, len_u32, sequence, strongly_connected},
     types::SpecKind,
@@ -241,7 +241,9 @@ fn in_node_modules(path: &Path) -> bool {
 }
 
 fn is_parseable(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|ext| JS_TS_EXTENSIONS.contains(&ext))
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| JS_TS_EXTENSIONS.contains(&ext) || COMPONENT_EXTENSIONS.contains(&ext))
 }
 
 impl ModuleGraph {

@@ -342,8 +342,9 @@ pub(crate) fn strip_compiled_extension(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// The files a package.json target such as `./dist/index.js` points to, as
-/// [`resolve`] finds them, preferring runtime files. A target with `*`, as
+/// The files a package.json target such as `./dist/index.js` points to:
+/// its source when it is in build output, else the file itself, preferring
+/// runtime files. A target with `*`, as
 /// in `"./*": "./src/*.ts"`, matches every source file it can stand for,
 /// `*` matching across directories as in `exports` patterns.
 pub(crate) fn package_target_files(
@@ -352,18 +353,22 @@ pub(crate) fn package_target_files(
     target: &str,
 ) -> Vec<PathBuf> {
     let target = target.trim_start_matches("./");
+    // The source of build output comes first, as in knip, so that results
+    // are the same whether or not the package has been built.
+    let out_dir_source = source_for_out_dir(project, pkg_dir, target)
+        .and_then(|p| Some(p.strip_prefix(pkg_dir).ok()?.to_str()?.replace('\\', "/")));
+    let sources = out_dir_source.into_iter().chain(source_for_build_target(target));
     if !target.contains('*') {
-        return resolve_package_target(project, pkg_dir, target, Mode::Runtime)
+        let source = sources.map(|s| normalize(&pkg_dir.join(s))).find_map(|p| {
+            resolve_file(&p, Mode::Runtime).or_else(|| resolve_file(&p, Mode::Declaration))
+        });
+        return source
+            .or_else(|| resolve_package_target(project, pkg_dir, target, Mode::Runtime))
             .or_else(|| resolve_package_target(project, pkg_dir, target, Mode::Declaration))
             .into_iter()
             .collect();
     }
-    let out_dir_source = source_for_out_dir(project, pkg_dir, target)
-        .and_then(|p| Some(p.strip_prefix(pkg_dir).ok()?.to_str()?.replace('\\', "/")));
-    let candidates = std::iter::once(strip_compiled_extension(target).to_string())
-        .chain(out_dir_source)
-        .chain(source_for_build_target(target));
-    for stem in candidates {
+    for stem in sources.chain(std::iter::once(strip_compiled_extension(target).to_string())) {
         let files = files_matching_stem(pkg_dir, &stem);
         if !files.is_empty() {
             return files;

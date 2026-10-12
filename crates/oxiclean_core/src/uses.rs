@@ -98,10 +98,22 @@ struct Collector {
 
 impl Collector {
     fn bind(&mut self, local: &str, request: &str, name: Option<&str>) {
-        self.bindings.entry(local.to_string()).or_insert_with(|| Binding {
-            request: request.to_string(),
-            name: name.map(str::to_string),
-        });
+        match self.bindings.get(local) {
+            None => {
+                let binding =
+                    Binding { request: request.to_string(), name: name.map(str::to_string) };
+                self.bindings.insert(local.to_string(), binding);
+            }
+            // The same name bound to two modules, as `const mod = await
+            // import()` in two functions: which one a use refers to is
+            // unknown, so both are used as a whole.
+            Some(b) if b.request != request || b.name.as_deref() != name => {
+                let other = b.request.clone();
+                self.use_(&other, Used::All);
+                self.use_(request, Used::All);
+            }
+            Some(_) => {}
+        }
     }
 
     fn use_(&mut self, request: &str, used: Used) {
@@ -310,7 +322,7 @@ impl<'a> Visit<'a> for Collector {
             for name in names.0 {
                 self.use_(&module.value, Used::Name(name));
             }
-            return;
+            // Imports referred to inside, such as `ns.Payload`, are used too.
         }
         walk::walk_ts_module_declaration(self, it);
     }
@@ -387,11 +399,22 @@ impl<'a> Visit<'a> for Collector {
                     return self.visit_binding_pattern(&it.id);
                 }
             }
-            // `const { a } = require('m')`
+            // `const { a } = require('m')` or `const m = require('m')`
             Expression::CallExpression(call) => {
-                if let (Some(request), Some(names)) = (require_request(call), names) {
-                    for n in names {
-                        self.use_(request, Used::Name(n));
+                if let Some(request) = require_request(call) {
+                    match (&it.id.kind, names) {
+                        (_, Some(names)) => {
+                            for n in names {
+                                self.use_(request, Used::Name(n));
+                            }
+                        }
+                        // knip counts this as importing `default`; members
+                        // read from it are used too.
+                        (BindingPatternKind::BindingIdentifier(id), None) => {
+                            self.use_(request, Used::Name("default".into()));
+                            self.bind(&id.name, request, None);
+                        }
+                        _ => self.use_(request, Used::All),
                     }
                     return self.visit_binding_pattern(&it.id);
                 }
@@ -587,6 +610,28 @@ Other.X; f(Other);";
   interface Events extends Base { created: Payload & { at: number } }
 }";
         assert_eq!(uses(src), ["./events:Events", "./events:Base", "./events:Payload"]);
+        // Imports referred to inside are used too.
+        let src = "import * as t from './types';
+declare module './events' { interface Events { created: t.Payload } }";
+        assert_eq!(uses(src), ["./events:Events", "./types:Payload"]);
+    }
+
+    #[test]
+    fn require_bindings() {
+        let src = "const lib = require('./lib'); lib.x;
+const { a, ...rest } = require('./rest');";
+        assert_eq!(uses(src), ["./lib:default", "./rest:*", "./lib:x"]);
+    }
+
+    /// The same name bound to two modules in different scopes.
+    #[test]
+    fn rebound_names_use_both_modules() {
+        let src = "async function one() { const mod = await import('./a'); mod.runA(); }
+async function two() { const mod = await import('./b'); mod.runB(); }";
+        assert_eq!(
+            uses(src),
+            ["./a:default", "./b:default", "./a:*", "./b:*", "./a:runA", "./a:runB"]
+        );
     }
 
     #[test]

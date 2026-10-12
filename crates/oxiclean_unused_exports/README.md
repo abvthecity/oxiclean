@@ -52,7 +52,8 @@ finds with its plugins off, in the root package and each workspace package:
 
 - the files `package.json` points to with `main`, `module`, `source`,
   `browser`, `types`, `typings`, `bin` and `exports` (every condition, and
-  `*` patterns). A target in unbuilt build output maps to its source: through
+  `*` patterns). A target in build output maps to its source, whether or
+  not the package has been built: through
   the package tsconfig's `outDir` and `rootDir` as in knip, or, as oxiclean
   resolves imports between workspace packages, from `dist/index.js` (or
   `build`, `lib`, `esm`, `cjs`, `out`) to `src/index.ts`;
@@ -79,8 +80,10 @@ An export is used when:
 - another file imports the module as a namespace and reads the export from
   it (`ns.a`, `ns['a']`, `ns.A` in a type, `<ns.A />`, or destructuring).
   A namespace used any other way, such as passed to a function, uses every
-  export, and so do `require('./x')` and `import('./x')` assigned to one
-  name;
+  export. `const m = require('./x')` and `const m = await import('./x')`
+  use `default` and the members read from `m`, as a namespace does;
+  destructuring with `...rest` and an `import('./x')` that isn't awaited use
+  every export;
 - `() => import('./x')` is passed to a function, as route loaders do: that
   uses the default export only;
 - it is re-exported (`export { a } from './x'`, `export * from './x'`, or an
@@ -90,7 +93,9 @@ An export is used when:
 - a used function, class or variable refers to it in its signature, such as
   a parameter or return type;
 - it is used inside `declare module './x' { ... }` in another file;
-- it is the same export of a JavaScript file's `.d.ts`, or the reverse.
+- it is the same export of a JavaScript file's `.d.ts`, or the reverse;
+- it is imported in a `<script>` block of a `.vue`, `.svelte` or `.astro`
+  file, or in Astro's frontmatter.
 
 These are never reported, as in knip:
 
@@ -104,7 +109,7 @@ Where oxiclean differs from knip:
 - knip keeps every member of a namespace import that is aliased
   (`const n = ns`), spread or nested further; oxiclean keeps every export of
   such a namespace too, so it reports less, never more;
-- knip counts `import.meta.glob` patterns, files that `fork()` or `spawn()`
+- knip reads `.mdx` files and counts `import.meta.glob` patterns, files that `fork()` or `spawn()`
   run, and the config files its plugins know; oxiclean doesn't read them
   yet, so files reached only that way are not checked;
 - knip maps build output to sources only through tsconfig `outDir`, so it

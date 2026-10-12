@@ -134,7 +134,8 @@ pub fn unused_exports<'g>(
         if entry_set.contains(&id) || module.in_node_modules() || usage.all[i] {
             continue;
         }
-        let mut reported: HashSet<&str> = HashSet::new();
+        // A value and a type may share a name; each is reported once.
+        let mut reported: HashSet<(&str, bool)> = HashSet::new();
         for e in &module.exports {
             // `export * as ns from './x'` is not an export of its own in knip.
             let whole_namespace = e.form == ExportForm::ReExport
@@ -143,7 +144,7 @@ pub fn unused_exports<'g>(
                 || usage.partly[i].contains(e.name.as_str())
                 || whole_namespace
                 || IGNORE_TAGS.iter().any(|t| e.has_tag(t))
-                || !reported.insert(&e.name)
+                || !reported.insert((&e.name, e.is_type()))
             {
                 continue;
             }
@@ -195,7 +196,8 @@ struct Tracker<'g> {
 #[derive(Default)]
 struct ExportIndex<'g> {
     by_name: HashMap<&'g str, Vec<&'g Export>>,
-    /// Names of the module's own exports by the local binding they export.
+    /// Names of the module's exports by the local binding they export,
+    /// imported bindings exported again included.
     by_local: HashMap<&'g str, Vec<&'g str>>,
 }
 
@@ -221,9 +223,7 @@ impl<'g> Tracker<'g> {
             let mut index = ExportIndex::default();
             for e in &graph.module(m).exports {
                 index.by_name.entry(e.name.as_str()).or_default().push(e);
-                if e.forwarded.is_none()
-                    && let Some(local) = &e.local
-                {
+                if let Some(local) = &e.local {
                     index.by_local.entry(local.as_str()).or_default().push(&e.name);
                 }
             }

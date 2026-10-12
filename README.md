@@ -369,7 +369,9 @@ Static `import`, re-exports (`export * from`, `export { x } from`), `require()`
 calls anywhere in a file, and TypeScript `import x = require()` are followed.
 Type-only imports and exports are ignored. Dynamic `import()` is not followed,
 because it loads the module as a separate chunk, which is the usual fix for
-bloat. Node.js built-ins such as `fs` or `node:path` are skipped.
+bloat. Node.js built-ins such as `fs` or `node:path` are skipped. The
+`<script>` blocks of `.vue`, `.svelte` and `.astro` files, and Astro's
+frontmatter, are read like any JS/TS file.
 
 ## License
 

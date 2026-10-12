@@ -147,7 +147,7 @@ mod tests {
         );
         write(root, "bin/tool.js", "");
         write(root, "utils/gen.mjs", "");
-        // Unbuilt: dist/ is mapped to src/. `types` finds the same file.
+        // dist/ is mapped to src/. `types` finds the same file.
         write(
             root,
             "packages/ui/package.json",
@@ -155,6 +155,8 @@ mod tests {
                "exports":{".":{"import":"./dist/index.js"},"./icons/*":{"types":"./dist/icons/*.d.ts","default":"./dist/icons/*.js"}}}"#,
         );
         write(root, "packages/ui/src/index.ts", "");
+        // Built output doesn't change the entries: the source still wins.
+        write(root, "packages/ui/dist/index.js", "");
         write(root, "packages/ui/src/icons/star.tsx", "");
         write(root, "packages/ui/src/icons/nested/moon.ts", "");
         write(root, "packages/ui/src/internal.ts", "");

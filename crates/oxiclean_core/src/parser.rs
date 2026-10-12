@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::{debug, trace, warn};
 
-use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
+use crate::constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
 use crate::uses::{self, ModuleUses};
@@ -86,7 +86,16 @@ pub(crate) fn parse_file(file: &Path, with_exports: bool) -> Result<ParsedImport
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
 
-    let st = source_type_for(file);
+    let is_component = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| COMPONENT_EXTENSIONS.contains(&ext));
+    let (src, st) = if is_component {
+        (component_scripts(&src), SourceType::ts())
+    } else {
+        let st = source_type_for(file);
+        (src, st)
+    };
     let allocator = Allocator::default();
     let ParserReturn { program, errors, panicked, .. } =
         OxcParser::new(&allocator, &src, st).parse();
@@ -224,6 +233,37 @@ impl<'a> Visit<'a> for ImportCollector {
 /// How to parse `path`. JavaScript files may contain JSX whatever their
 /// extension, as Next.js (SWC), Metro (Babel) and most bundlers allow, and a
 /// `.js` file may be either an ES module or a CommonJS script.
+/// The JS/TS of a `.vue`, `.svelte` or `.astro` file: its `<script>`
+/// blocks and Astro's `---` frontmatter, with everything else blanked to
+/// spaces so that offsets and lines stay those of the file.
+fn component_scripts(src: &str) -> String {
+    let mut keep = vec![false; src.len()];
+    let mut mark = |from: usize, to: usize| keep[from..to].iter_mut().for_each(|k| *k = true);
+    if let Some(rest) = src.strip_prefix("---")
+        && let Some(end) = rest.find("\n---")
+    {
+        mark(3, 3 + end);
+    }
+    let mut at = 0;
+    while let Some(open) = src[at..].find("<script") {
+        let open = at + open;
+        let Some(body) = src[open..].find('>').map(|i| open + i + 1) else { break };
+        let Some(close) = src[body..].find("</script>").map(|i| body + i) else { break };
+        mark(body, close);
+        at = close + "</script>".len();
+    }
+    let mut out = String::with_capacity(src.len());
+    for (i, c) in src.char_indices() {
+        if keep[i] || c == '\n' {
+            out.push(c);
+        } else {
+            // As many spaces as the character had bytes, to keep offsets.
+            out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        }
+    }
+    out
+}
+
 fn source_type_for(path: &Path) -> SourceType {
     let st = SourceType::from_path(path).unwrap_or_default();
     if !st.is_javascript() {
@@ -370,6 +410,30 @@ mod tests {
         let got: Vec<(&str, SpecKind)> =
             specs.iter().map(|s| (s.request.as_str(), s.kind)).collect();
         assert_eq!(got, [("./worker", SpecKind::Type), ("./w2", SpecKind::Type)]);
+    }
+
+    #[test]
+    fn component_files_are_parsed_from_their_scripts() {
+        let temp_dir = TempDir::new().unwrap();
+        let vue = create_test_file(
+            temp_dir.path(),
+            "App.vue",
+            "<template><div>{{ a }} é</div></template>\n<script setup lang=\"ts\">\nimport { a } from './a';\n</script>\n<script>export default {}</script>",
+        );
+        let astro = create_test_file(
+            temp_dir.path(),
+            "Page.astro",
+            "---\nimport Layout from './Layout.astro';\n---\n<Layout><script>import './client';</script></Layout>",
+        );
+        let parsed = parse_imports(&vue).unwrap();
+        assert_eq!(parsed.error, None);
+        let got: Vec<(&str, u32)> =
+            parsed.specs.iter().map(|s| (s.request.as_str(), s.line)).collect();
+        assert_eq!(got, [("./a", 3)]);
+        assert_eq!(parsed.exports.len(), 1);
+        let got: Vec<String> =
+            parse_imports(&astro).unwrap().specs.into_iter().map(|s| s.request).collect();
+        assert_eq!(got, ["./Layout.astro", "./client"]);
     }
 
     #[test]
