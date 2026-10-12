@@ -15,6 +15,13 @@ use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
 
+/// The runtime imports of `file`, cached in `cache`: type-only imports are
+/// left out, so a declaration file has none. Assets such as `.css` have
+/// none either. Syntax errors are logged, and the imports found before them
+/// returned.
+///
+/// # Errors
+/// Fails if the file can't be read.
 pub fn imports_for(
     file: &Path,
     cache: &DashMap<PathBuf, Vec<Specifier>>,
