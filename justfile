@@ -62,7 +62,7 @@ release-optimized:
 
 # Install oxiclean CLI to cargo bin
 install:
-    cargo install --path apps/oxiclean
+    cargo install --path crates/oxiclean
 
 # Run all quality checks (allows clippy warnings)
 ci: fmt-check lint test

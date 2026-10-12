@@ -6,7 +6,7 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 
 ```bash
 # Install oxiclean CLI
-cargo install --path apps/oxiclean
+cargo install --path crates/oxiclean
 
 # Or run from monorepo
 just run-oxiclean import-bloat --help

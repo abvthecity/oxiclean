@@ -37,12 +37,12 @@ oxiclean import-bloat --entry-glob "apps/*/src/**/*.tsx"
 - `--threshold <N>` - Max reachable modules before warning (default: 200)
 - `--entry-glob <PATTERN>` - Glob pattern to filter entry files
 
-See [crates/oxiclean_import_bloat/README.md](../../crates/oxiclean_import_bloat/README.md) for details.
+See [crates/oxiclean_import_bloat/README.md](../oxiclean_import_bloat/README.md) for details.
 
 ## Adding New Tools
 
 1. Create a library crate with a `Config` struct that derives `clap::Parser`
-2. Add the crate as a dependency in `apps/oxiclean/Cargo.toml`
+2. Add the crate as a dependency in `crates/oxiclean/Cargo.toml`
 3. Add a new variant to the `Commands` enum
 4. Handle the command in the match statement
 
@@ -61,7 +61,7 @@ pub fn run(cfg: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-// In apps/oxiclean/src/main.rs
+// In crates/oxiclean/src/main.rs
 enum Commands {
     ImportBloat(oxiclean_import_bloat::Config),
     MyTool(my_tool::Config),

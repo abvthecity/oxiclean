@@ -6,7 +6,7 @@ A Rust monorepo for code quality and analysis tools for JavaScript/TypeScript pr
 
 ```bash
 # Install
-cargo install --path apps/oxiclean
+cargo install --path crates/oxiclean
 
 # Run import bloat checker
 oxiclean import-bloat --root ./my-project --threshold 200
@@ -45,9 +45,8 @@ just
 
 ```
 oxiclean/
-├── apps/
-│   └── oxiclean/              # Main CLI application
 ├── crates/
+│   ├── oxiclean/              # Main CLI application (binary)
 │   ├── oxiclean_core/         # Shared utilities (parser, resolver, etc.)
 │   ├── oxiclean_import_bloat/ # Import bloat detection library
 │   └── oxiclean_import_depth/ # Import depth analysis library
