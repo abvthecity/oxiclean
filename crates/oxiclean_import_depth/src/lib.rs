@@ -1,37 +1,28 @@
 //! Import depth analysis for JavaScript/TypeScript projects.
 //!
-//! This crate analyzes import statements in JS/TS codebases to identify files
-//! that have excessive import depth (number of module traversals), which can
-//! indicate complex dependency chains and slow module resolution.
+//! For every direct import of an entry file, this measures the longest chain
+//! of imports below it. Deep chains slow module evaluation and resolution and
+//! usually point at layering problems. Modules that import each other in a
+//! cycle count as a single level, so results are stable across runs.
 //!
 //! # Examples
 //!
-//! ## Basic Usage
-//!
 //! ```no_run
-//! use oxiclean_import_depth::{Config, run_import_depth_check};
-//! use std::io::{BufWriter, Write};
+//! use oxiclean_core::{CommonArgs, report};
+//! use oxiclean_import_depth::{Config, REPORT_STYLE, run_import_depth_check};
+//! use std::path::Path;
 //!
-//! # fn main() -> anyhow::Result<()> {
-//! let cfg = Config {
-//!     root: Some(std::path::PathBuf::from("/path/to/project")),
-//!     threshold: 10,
-//!     entry_glob: None,
-//!     project: Default::default(),
-//! };
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let cfg = Config { common: CommonArgs::with_root("/path/to/project"), threshold: 10 };
+//! let result = run_import_depth_check(&cfg)?;
 //!
-//! let result = run_import_depth_check(cfg.clone())?;
-//!
-//! if !result.warnings.is_empty() {
-//!     // Use buffered output for better performance
-//!     let mut stdout = BufWriter::new(std::io::stdout());
-//!     oxiclean_import_depth::print_warnings_tree(
-//!         &mut stdout,
-//!         &result.warnings,
-//!         &cfg,
-//!         cfg.threshold,
-//!     )?;
-//!     stdout.flush()?;
+//! let root = Path::new("/path/to/project");
+//! let ctx = report::ReportContext { root, cwd: root };
+//! let mut stdout = std::io::stdout().lock();
+//! if result.findings.is_empty() {
+//!     report::print_ok(&mut stdout, &REPORT_STYLE, cfg.threshold)?;
+//! } else {
+//!     report::print_findings(&mut stdout, &result.findings, &REPORT_STYLE, cfg.threshold, ctx)?;
 //! }
 //! # Ok(())
 //! # }
@@ -39,12 +30,7 @@
 
 mod checker;
 mod config;
-mod depth;
-mod reporter;
-mod types;
 
-// Re-export public API
-pub use checker::run_import_depth_check;
-pub use config::Config;
-pub use reporter::{print_no_depth_issues_message, print_warnings_tree};
-pub use types::{CheckResult, Warning};
+pub use checker::{check, run_import_depth_check};
+pub use config::{Config, REPORT_STYLE};
+pub use oxiclean_core::{CheckResult, Finding, FindingKind};

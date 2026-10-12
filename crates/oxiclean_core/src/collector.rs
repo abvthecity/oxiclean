@@ -1,72 +1,73 @@
-use anyhow::{Context, Result};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use log::{debug, trace};
 use std::path::{Component, Path, PathBuf};
 
-use crate::constants::JS_TS_EXTENSIONS;
+use crate::{
+    constants::JS_TS_EXTENSIONS,
+    error::{Error, Result},
+};
 
+/// Where and how to look for entry files.
+#[derive(Debug, Clone, Default)]
 pub struct CollectorConfig {
     pub root: PathBuf,
-    pub entry_glob: Option<String>,
+    /// Patterns matched against each file's path relative to `root`; a file
+    /// matching any of them is an entry. Patterns with glob syntax (`*`, `?`,
+    /// `[`, `{`) are globs; plain strings match any path containing them, as
+    /// `--entry-glob` always has. When empty, every JS/TS file inside a `src`
+    /// directory is an entry.
+    pub entry_globs: Vec<String>,
 }
 
 /// Directories whose files are tests or fixtures rather than application code.
 const SKIPPED_DIRS: &[&str] = &["node_modules", "__tests__", "__mocks__", "__fixtures__"];
 
+/// Collects entry files under `cfg.root`, sorted by path.
+///
+/// `.gitignore` files are honoured even when the root is not inside a git
+/// repository. `node_modules`, test directories, `*.test.*`/`*.spec.*` files
+/// and `.d.ts` declarations are always skipped.
+///
+/// # Errors
+/// Fails if a glob is invalid or the directory walk fails.
 pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
-    debug!("Collecting entry files");
-    // If entries glob provided, walk and filter by suffix; else treat all top-level src files as entries
-    let mut files: Vec<PathBuf> = Vec::new();
     let root = &cfg.root;
-    let matcher = cfg.entry_glob.as_deref().map(EntryMatcher::new).transpose()?;
+    let matcher = EntryMatcher::new(&cfg.entry_globs)?;
     debug!("Walking directory tree from root: {}", root.display());
+
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .ignore(true)
         .git_ignore(true)
-        // Honor .gitignore even when the root is not inside a git checkout
+        // Without this, .gitignore is ignored outside a git repository and
+        // node_modules-like output directories get walked.
         .require_git(false)
         .filter_entry(|e| {
             e.file_name().to_str().is_none_or(|n| n != ".git" && !SKIPPED_DIRS.contains(&n))
         })
         .build();
 
+    let mut files = Vec::new();
     for res in walker {
-        let dent = res?;
+        let dent = res.map_err(|source| Error::Walk { path: root.clone(), source })?;
         let p = dent.path();
+        // `is_file` follows symlinks, so symlinked sources are still entries.
         if !p.is_file() {
             continue;
         }
-
-        // Skip test files (*.test.*, *.spec.*) and type declarations (*.d.ts)
-        let file_name = dent.file_name().to_string_lossy();
-        if file_name.contains(".test.")
-            || file_name.contains(".spec.")
-            || file_name.ends_with(".d.ts")
-            || file_name.ends_with(".d.mts")
-            || file_name.ends_with(".d.cts")
-        {
-            trace!("Skipping test or declaration file: {}", p.display());
+        if !is_source_file(p) {
+            trace!("Skipping non-source, test or declaration file: {}", p.display());
             continue;
         }
-
-        if let Some(ext) = p.extension().and_then(|e| e.to_str())
-            && JS_TS_EXTENSIONS.contains(&ext)
-        {
-            if let Some(matcher) = &matcher {
-                if let Ok(rel_path) = p.strip_prefix(root)
-                    && matcher.is_match(rel_path)
-                {
-                    trace!("Matched entry file: {}", rel_path.display());
-                    files.push(p.to_path_buf());
-                }
-            } else {
-                // Heuristic: anything under src is considered
-                if is_under_src(p.strip_prefix(root).unwrap_or(p)) {
-                    trace!("Found entry file in /src/: {}", p.display());
-                    files.push(p.to_path_buf());
-                }
-            }
+        let rel = p.strip_prefix(root).unwrap_or(p);
+        let is_entry = match &matcher {
+            Some(m) => m.is_match(rel),
+            None => is_under_src(rel),
+        };
+        if is_entry {
+            trace!("Found entry file: {}", rel.display());
+            files.push(p.to_path_buf());
         }
     }
     files.sort();
@@ -74,37 +75,64 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// `--entry-glob` filter. Patterns with glob syntax (`*`, `?`, `[`, `{`) are
-/// matched against the whole path relative to the root; plain strings keep the
-/// original behavior of matching any path that contains them.
-enum EntryMatcher {
-    Glob(globset::GlobMatcher),
-    Substring(String),
+/// The `--entry-glob` filter: real globs plus plain substrings.
+struct EntryMatcher {
+    globs: GlobSet,
+    substrings: Vec<String>,
 }
 
 impl EntryMatcher {
-    fn new(pattern: &str) -> Result<Self> {
-        if pattern.contains(['*', '?', '[', '{']) {
-            let glob = globset::GlobBuilder::new(pattern.trim_start_matches("./"))
+    fn new(patterns: &[String]) -> Result<Option<Self>> {
+        if patterns.is_empty() {
+            return Ok(None);
+        }
+        let mut builder = GlobSetBuilder::new();
+        let mut substrings = Vec::new();
+        for pattern in patterns {
+            if !pattern.contains(['*', '?', '[', '{']) {
+                substrings.push(pattern.clone());
+                continue;
+            }
+            // `*` stops at `/`, like .gitignore; use `**` to cross directories.
+            let glob = GlobBuilder::new(pattern.trim_start_matches("./"))
                 .literal_separator(true)
                 .build()
-                .with_context(|| format!("Invalid --entry-glob pattern '{}'", pattern))?;
-            Ok(Self::Glob(glob.compile_matcher()))
-        } else {
-            Ok(Self::Substring(pattern.to_string()))
+                .map_err(|source| Error::InvalidGlob { glob: pattern.clone(), source })?;
+            builder.add(glob);
         }
+        let globs = builder
+            .build()
+            .map_err(|source| Error::InvalidGlob { glob: patterns.join(", "), source })?;
+        Ok(Some(Self { globs, substrings }))
     }
 
-    fn is_match(&self, rel_path: &Path) -> bool {
-        match self {
-            Self::Glob(glob) => glob.is_match(rel_path),
-            Self::Substring(s) => {
-                rel_path.to_string_lossy().replace('\\', "/").contains(s.as_str())
-            }
+    fn is_match(&self, rel: &Path) -> bool {
+        if self.globs.is_match(rel) {
+            return true;
         }
+        if self.substrings.is_empty() {
+            return false;
+        }
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        self.substrings.iter().any(|s| rel.contains(s.as_str()))
     }
 }
 
+/// A JS/TS source file that is not a test or a type declaration.
+fn is_source_file(p: &Path) -> bool {
+    let Some(name) = p.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(ext) = p.extension().and_then(|e| e.to_str()) else { return false };
+    if !JS_TS_EXTENSIONS.contains(&ext) {
+        return false;
+    }
+    let is_declaration =
+        name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts");
+    let is_test = name.contains(".test.") || name.contains(".spec.");
+    !is_declaration && !is_test
+}
+
+/// Whether any parent directory of `rel` is named `src`. Compares whole path
+/// components so it works with any separator.
 fn is_under_src(rel: &Path) -> bool {
     let mut parents = rel.parent().into_iter().flat_map(Path::components);
     parents.any(|c| c == Component::Normal("src".as_ref()))
@@ -139,7 +167,7 @@ mod tests {
         // File outside src should not be collected
         create_test_file(root, "lib/utils.js", "// utils");
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 3);
@@ -161,7 +189,7 @@ mod tests {
         create_test_file(root, "src/utils.js", "// utils");
 
         let cfg =
-            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("index".to_string()) };
+            CollectorConfig { root: root.to_path_buf(), entry_globs: vec!["index".to_string()] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
@@ -177,7 +205,7 @@ mod tests {
         create_test_file(root, "src/file.test.js", "// test");
         create_test_file(root, "src/file.spec.ts", "// spec");
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
@@ -204,7 +232,7 @@ mod tests {
         create_test_file(root, "src/file.json", "{}");
         create_test_file(root, "src/file.txt", "text");
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 8); // All JS/TS variants
@@ -222,7 +250,7 @@ mod tests {
 
         create_test_file(root, "lib/utils.js", "// utils");
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 0);
@@ -237,8 +265,10 @@ mod tests {
         create_test_file(root, "src/pages/about.js", "// about");
         create_test_file(root, "src/components/Button.js", "// button");
 
-        let cfg =
-            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("pages".to_string()) };
+        let cfg = CollectorConfig {
+            root: root.to_path_buf(),
+            entry_globs: vec!["src/pages/*.js".to_string()],
+        };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 2);
@@ -259,7 +289,7 @@ mod tests {
         create_test_file(root, "src/types.d.ts", "// types");
         create_test_file(root, "node_modules/pkg/src/index.js", "// dep");
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
@@ -267,39 +297,89 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_entries_with_real_glob() {
+    fn test_collect_entries_skips_node_modules_without_git() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
+        create_test_file(root, "src/a.ts", "");
+        create_test_file(root, "packages/x/node_modules/pkg/src/c.js", "");
 
-        create_test_file(root, "src/pages/home.tsx", "// home");
-        create_test_file(root, "src/pages/nested/deep.tsx", "// deep");
-        create_test_file(root, "src/pages/util.ts", "// util");
-
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: Some("src/pages/*.tsx".to_string()),
-        };
-        let entries = collect_entries(&cfg).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].ends_with("src/pages/home.tsx"));
-
-        let cfg =
-            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("**/*.tsx".to_string()) };
-        assert_eq!(collect_entries(&cfg).unwrap().len(), 2);
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
+        assert_eq!(collect_entries(&cfg).unwrap(), vec![root.join("src/a.ts")]);
     }
 
     #[test]
-    fn test_gitignore_honored_outside_git_checkout() {
+    fn test_collect_entries_honours_gitignore_without_git() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
+        create_test_file(root, ".gitignore", "dist/\n");
+        create_test_file(root, "src/a.ts", "");
+        create_test_file(root, "dist/src/a.js", "");
 
-        create_test_file(root, ".gitignore", "generated/\n");
-        create_test_file(root, "src/app.ts", "// app");
-        create_test_file(root, "generated/src/out.ts", "// generated");
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_globs: vec![] };
+        assert_eq!(collect_entries(&cfg).unwrap(), vec![root.join("src/a.ts")]);
+    }
 
-        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
-        let entries = collect_entries(&cfg).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].ends_with("src/app.ts"));
+    #[test]
+    fn test_collect_entries_real_glob() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        create_test_file(root, "src/pages/home.tsx", "");
+        create_test_file(root, "src/pages/nested/about.tsx", "");
+        create_test_file(root, "src/pages/util.ts", "");
+
+        let star = CollectorConfig {
+            root: root.to_path_buf(),
+            entry_globs: vec!["src/pages/*.tsx".to_string()],
+        };
+        assert_eq!(collect_entries(&star).unwrap(), vec![root.join("src/pages/home.tsx")]);
+
+        let globstar = CollectorConfig {
+            root: root.to_path_buf(),
+            entry_globs: vec!["src/pages/**/*.tsx".to_string()],
+        };
+        assert_eq!(
+            collect_entries(&globstar).unwrap(),
+            vec![root.join("src/pages/home.tsx"), root.join("src/pages/nested/about.tsx")]
+        );
+    }
+
+    #[test]
+    fn test_collect_entries_several_globs() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        create_test_file(root, "apps/web/main.ts", "");
+        create_test_file(root, "apps/api/server.ts", "");
+        create_test_file(root, "apps/api/lib.ts", "");
+
+        let cfg = CollectorConfig {
+            root: root.to_path_buf(),
+            entry_globs: vec!["apps/web/main.ts".to_string(), "apps/*/server.ts".to_string()],
+        };
+        assert_eq!(
+            collect_entries(&cfg).unwrap(),
+            vec![root.join("apps/api/server.ts"), root.join("apps/web/main.ts")]
+        );
+    }
+
+    #[test]
+    fn test_collect_entries_plain_string_is_substring() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        create_test_file(root, "apps/web/pages/home.ts", "");
+        create_test_file(root, "apps/web/lib/util.ts", "");
+
+        let cfg =
+            CollectorConfig { root: root.to_path_buf(), entry_globs: vec!["pages".to_string()] };
+        assert_eq!(collect_entries(&cfg).unwrap(), vec![root.join("apps/web/pages/home.ts")]);
+    }
+
+    #[test]
+    fn test_collect_entries_invalid_glob() {
+        let temp_dir = TempDir::new().unwrap();
+        let cfg = CollectorConfig {
+            root: temp_dir.path().to_path_buf(),
+            entry_globs: vec!["src/[".to_string()],
+        };
+        assert!(matches!(collect_entries(&cfg), Err(Error::InvalidGlob { .. })));
     }
 }

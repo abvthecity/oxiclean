@@ -1,17 +1,18 @@
 [package]
 name = "oxiclean_import_depth"
+description = "Finds imports that start overly deep import chains in JavaScript/TypeScript projects"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
-colored.workspace = true
-dashmap.workspace = true
 log.workspace = true
-oxiclean_core = { path = "../oxiclean_core" }
-path-clean.workspace = true
-rayon.workspace = true
+oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli"] }
 
 [lib]
 name = "oxiclean_import_depth"
@@ -19,3 +20,6 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[lints]
+workspace = true

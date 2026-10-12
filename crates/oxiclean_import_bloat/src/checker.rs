@@ -1,177 +1,161 @@
-use anyhow::{Result, anyhow};
-use dashmap::DashMap;
-use log::{debug, info, trace, warn};
-use rayon::prelude::*;
-use std::{collections::HashSet, path::PathBuf, sync::Arc, thread};
+use std::collections::{HashMap, HashSet};
 
-use oxiclean_core::{
-    CollectorConfig, ResolutionStats, Specifier, collect_entries, imports_for, resolve,
-};
+use log::info;
+use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, ModuleId, Result};
 
-use crate::{
-    config::Config,
-    graph::reachable_modules,
-    types::{CheckResult, Warning},
-};
+use crate::config::Config;
 
-pub fn run_import_bloat_check(mut cfg: Config) -> Result<CheckResult> {
-    info!("Starting import bloat check");
+/// Runs the import bloat check described by `cfg`.
+///
+/// # Errors
+/// Fails if the project root can't be found, an entry glob is invalid, or no
+/// entry files are found.
+pub fn run_import_bloat_check(cfg: &Config) -> Result<CheckResult> {
+    info!("Starting import bloat check (threshold {})", cfg.threshold);
+    let analysis = cfg.common.analyze()?;
+    Ok(check(&analysis, cfg.threshold))
+}
 
-    // Initialize config (resolve root, load the project context)
-    cfg.initialize()?;
-    let root = cfg.root().ok_or_else(|| anyhow!("Config not initialized"))?.clone();
+/// Flags each entry whose whole graph, and each direct import of an entry whose
+/// own graph, reaches `threshold` unique modules.
+#[must_use]
+pub fn check(analysis: &Analysis, threshold: usize) -> CheckResult {
+    let graph = &analysis.graph;
 
-    debug!("Collecting entry files with glob: {:?}", cfg.entry_glob);
-    let collector_cfg = CollectorConfig { root: root.clone(), entry_glob: cfg.entry_glob.clone() };
-
-    let entries = collect_entries(&collector_cfg)?;
-    if entries.is_empty() {
-        warn!("No entry files found under {}", root.display());
-        return Err(anyhow!("No entry files found under {}", root.display()));
+    let mut queries: Vec<ModuleId> = analysis.entries.clone();
+    for &entry in &analysis.entries {
+        queries.extend(graph.module(entry).edges.iter().map(|e| e.target));
     }
-    info!("Found {} entry files", entries.len());
+    queries.sort_unstable();
+    queries.dedup();
+    let counts: HashMap<ModuleId, usize> =
+        queries.iter().copied().zip(graph.reachable_counts(&queries)).collect();
 
-    // Thread-safe caches using DashMap
-    let import_cache: Arc<DashMap<PathBuf, Vec<Specifier>>> = Arc::new(DashMap::new());
-    let resolve_cache: Arc<DashMap<(PathBuf, String), Option<PathBuf>>> = Arc::new(DashMap::new());
-    let reachable_cache: Arc<DashMap<PathBuf, HashSet<PathBuf>>> = Arc::new(DashMap::new());
-
-    // Wrap config in Arc for sharing across threads
-    let cfg = Arc::new(cfg);
-
-    info!("Processing {} entry files in parallel", entries.len());
-
-    // Process entries in parallel using rayon
-    let warnings: Vec<Warning> = entries
-        .par_iter()
-        .flat_map(|entry| {
-            let thread_id = thread::current().id();
-            debug!("Thread {:?} processing: {}", thread_id, entry.display());
-            trace!("Computing reachable modules for entry: {}", entry.display());
-
-            let cfg = Arc::clone(&cfg);
-            let import_cache = Arc::clone(&import_cache);
-            let resolve_cache = Arc::clone(&resolve_cache);
-            let reachable_cache = Arc::clone(&reachable_cache);
-
-            let root = match cfg.root() {
-                Some(r) => r.clone(),
-                None => {
-                    warn!("Config root not initialized");
-                    return vec![];
-                }
-            };
-
-            // Compute reachable modules for this entry
-            let reachable = match reachable_modules(
-                &cfg.project,
-                entry,
-                &import_cache,
-                &resolve_cache,
-                &reachable_cache,
-            ) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("Error computing reachable modules for {}: {}", entry.display(), e);
-                    return vec![];
-                }
-            };
-
-            debug!("Entry {} has {} reachable modules", entry.display(), reachable.len());
-
-            // Get relative path for better display
-            let rel_entry =
-                entry.strip_prefix(&root).unwrap_or(entry).to_string_lossy().to_string();
-
-            let mut entry_warnings = Vec::new();
-
-            // For each direct import from entry, compute its own reachable set and warn per-import
-            trace!("Analyzing direct imports from entry");
-            let direct_imports = match imports_for(entry, &import_cache) {
-                Ok(imports) => imports,
-                Err(e) => {
-                    warn!("Error parsing imports for {}: {}", entry.display(), e);
-                    return vec![];
-                }
-            };
-
-            debug!("Entry has {} direct imports", direct_imports.len());
-
-            for spec in direct_imports.iter().filter(|s| s.is_static()) {
-                trace!("Checking import: '{}'", spec.request);
-
-                let resolved = match resolve(&cfg.project, entry, &spec.request, &resolve_cache) {
-                    Ok(Some(r)) => r,
-                    Ok(None) => {
-                        trace!("Could not resolve import: '{}'", spec.request);
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("Error resolving '{}': {}", spec.request, e);
-                        continue;
-                    }
-                };
-
-                let rset = match reachable_modules(
-                    &cfg.project,
-                    &resolved,
-                    &import_cache,
-                    &resolve_cache,
-                    &reachable_cache,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(
-                            "Error computing reachable modules for {}: {}",
-                            resolved.display(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-
-                if rset.len() >= cfg.threshold {
-                    // Get the resolved path relative to root for display
-                    let resolved_rel = resolved
-                        .strip_prefix(&root)
-                        .unwrap_or(&resolved)
-                        .to_string_lossy()
-                        .to_string();
-
-                    entry_warnings.push(Warning {
-                        import_statement: format!("import '{}'", spec.request),
-                        from_file: rel_entry.clone(),
-                        reachable_unique_modules: rset.len(),
-                        resolved_path: Some(resolved_rel),
-                    });
-                }
-            }
-
-            // Also consider the whole entry's graph if desired
-            if reachable.len() >= cfg.threshold {
-                entry_warnings.push(Warning {
-                    import_statement: "Entry file (entire graph)".to_string(),
-                    from_file: rel_entry,
-                    reachable_unique_modules: reachable.len(),
-                    resolved_path: None,
+    let mut findings = Vec::new();
+    for &entry in &analysis.entries {
+        let module = graph.module(entry);
+        let mut seen = HashSet::new();
+        for edge in &module.edges {
+            let count = counts[&edge.target];
+            if seen.insert(edge.target) && count >= threshold {
+                findings.push(Finding {
+                    file: module.path.clone(),
+                    kind: FindingKind::Import {
+                        request: edge.request.clone(),
+                        resolved: graph.module(edge.target).path.clone(),
+                    },
+                    value: count,
                 });
             }
+        }
+        if counts[&entry] >= threshold {
+            findings.push(Finding {
+                file: module.path.clone(),
+                kind: FindingKind::WholeGraph,
+                value: counts[&entry],
+            });
+        }
+    }
 
-            entry_warnings
-        })
-        .collect();
+    info!("Import bloat check complete. Found {} findings", findings.len());
+    analysis.finish(findings)
+}
 
-    info!("Import bloat check complete. Found {} warnings", warnings.len());
-    debug!(
-        "Cache statistics: imports={}, resolutions={}, reachable={}",
-        import_cache.len(),
-        resolve_cache.len(),
-        reachable_cache.len()
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxiclean_core::CommonArgs;
+    use std::{fs, path::Path};
+    use tempfile::TempDir;
 
-    Ok(CheckResult {
-        warnings,
-        files_analyzed: import_cache.len(),
-        resolution: ResolutionStats::from_cache(&resolve_cache),
-    })
+    fn write(root: &Path, path: &str, content: &str) {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, content).unwrap();
+    }
+
+    fn run(root: &Path, entry_glob: &str, threshold: usize) -> CheckResult {
+        let cfg = Config { common: CommonArgs::with_root(root).entry_glob(entry_glob), threshold };
+        run_import_bloat_check(&cfg).unwrap()
+    }
+
+    /// (request or "<entry>", value) pairs, in report order.
+    fn summary(result: &CheckResult) -> Vec<(String, usize)> {
+        result
+            .findings
+            .iter()
+            .map(|f| match &f.kind {
+                FindingKind::Import { request, .. } => (request.clone(), f.value),
+                _ => ("<entry>".to_string(), f.value),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn counts_unique_modules_per_import() {
+        let t = TempDir::new().unwrap();
+        write(t.path(), "src/index.js", "import './a'; import './b';");
+        write(t.path(), "src/a.js", "import './c';");
+        write(t.path(), "src/b.js", "import './c';");
+        write(t.path(), "src/c.js", "// c");
+
+        let result = run(t.path(), "src/index.js", 1);
+        assert_eq!(
+            summary(&result),
+            vec![("<entry>".into(), 4), ("./a".into(), 2), ("./b".into(), 2)]
+        );
+        assert_eq!(result.files_analyzed, 4);
+    }
+
+    #[test]
+    fn cycles_count_each_module_once() {
+        let t = TempDir::new().unwrap();
+        write(t.path(), "src/index.js", "import './a';");
+        write(t.path(), "src/a.js", "import './b';");
+        write(t.path(), "src/b.js", "import './a';");
+
+        assert_eq!(
+            summary(&run(t.path(), "src/index.js", 1)),
+            vec![("<entry>".into(), 3), ("./a".into(), 2)]
+        );
+    }
+
+    #[test]
+    fn below_threshold_reports_nothing() {
+        let t = TempDir::new().unwrap();
+        write(t.path(), "src/index.js", "import './a';");
+        write(t.path(), "src/a.js", "");
+
+        assert!(run(t.path(), "src/index.js", 3).findings.is_empty());
+    }
+
+    #[test]
+    fn dynamic_imports_are_skipped_by_default() {
+        let t = TempDir::new().unwrap();
+        write(t.path(), "src/index.js", "import('./lazy');");
+        write(t.path(), "src/lazy.js", "import './c';");
+        write(t.path(), "src/c.js", "");
+
+        assert_eq!(summary(&run(t.path(), "src/index.js", 1)), vec![("<entry>".into(), 1)]);
+
+        let cfg = Config {
+            common: CommonArgs::with_root(t.path())
+                .entry_glob("src/index.js")
+                .include_dynamic(true),
+            threshold: 1,
+        };
+        let result = run_import_bloat_check(&cfg).unwrap();
+        assert_eq!(summary(&result), vec![("<entry>".into(), 3), ("./lazy".into(), 2)]);
+    }
+
+    #[test]
+    fn non_js_imports_are_leaves() {
+        let t = TempDir::new().unwrap();
+        write(t.path(), "src/index.js", "import './style.css';");
+        write(t.path(), "src/style.css", "body { color: red }");
+
+        let result = run(t.path(), "src/index.js", 1);
+        assert_eq!(summary(&result), vec![("<entry>".into(), 2), ("./style.css".into(), 1)]);
+        assert!(result.parse_failures.is_empty());
+    }
 }

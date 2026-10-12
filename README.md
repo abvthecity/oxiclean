@@ -57,6 +57,16 @@ oxiclean/
 
 ## Tools
 
+Both tools accept the same options for choosing what to analyse:
+
+| Option | Meaning |
+|---|---|
+| `--root <DIR>` | Project root. Defaults to the git root of the current directory. |
+| `--entry-glob <GLOB>` | Only treat files matching this glob (relative to the root) as entries, e.g. `"src/pages/**/*.tsx"`. `*` stays within one directory; `**` crosses directories. A pattern without glob characters matches any path containing it. Repeat to give several. Without it, every JS/TS file inside a `src` directory is an entry. |
+| `--include-dynamic` | Also follow dynamic `import()` calls. They are skipped by default because lazily loaded modules are split into separate chunks. |
+
+Both exit with status 1 when anything crosses the threshold, so they can gate CI. Files that fail to parse are listed at the end of the report.
+
 ### Import Bloat Checker
 
 Detects excessive imports in JavaScript/TypeScript projects that can lead to large bundle sizes. Counts the total number of unique modules reachable from import statements (breadth-first analysis).
@@ -78,9 +88,10 @@ src/pages/Dashboard.tsx (345 modules)
 
 **Features:**
 - Resolves Node.js modules and TypeScript path mappings
-- Handles static and dynamic imports
-- Respects `.gitignore` patterns
-- Skips test files
+- Follows re-exports (`export * from`) so barrel files are counted
+- Skips dynamic `import()` unless `--include-dynamic` is given
+- Respects `.gitignore` patterns, even outside a git repository
+- Skips test files, `node_modules` and `.d.ts` declarations
 
 ### Import Depth Checker
 
@@ -102,12 +113,12 @@ src/pages/Dashboard.tsx
 ```
 
 **Features:**
-- Computes maximum depth using DFS with cycle detection
+- Computes the longest import chain on the module graph. Modules that import each other in a cycle count as one level, so results are the same on every run
 - Correctly handles TypeScript type imports:
   - `import type { Foo }` - Ignored (type-only)
   - `import { type Foo }` - Counted (runtime with type specifier)
 - Resolves Node.js modules and TypeScript path mappings
-- Handles circular dependencies gracefully
+- Handles very deep chains without recursion
 
 ### Difference Between Tools
 
