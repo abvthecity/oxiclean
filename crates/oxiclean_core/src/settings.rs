@@ -112,6 +112,10 @@ pub struct Rules {
     /// Type-only imports don't count. Default threshold: 1 file, so every
     /// cycle is reported.
     pub cycles: Option<RuleSetting>,
+    /// Files that export the same thing under more than one name, as knip's
+    /// `duplicates`. Exports tagged `@alias` don't count. Default threshold:
+    /// 2 names.
+    pub duplicate_exports: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -122,12 +126,13 @@ impl Rules {
             "bloat" => self.bloat.as_ref(),
             "depth" => self.depth.as_ref(),
             "cycles" => self.cycles.as_ref(),
+            "duplicate-exports" => self.duplicate_exports.as_ref(),
             _ => None,
         }
     }
 
     fn all(&self) -> impl Iterator<Item = &RuleSetting> {
-        [&self.bloat, &self.depth, &self.cycles].into_iter().flatten()
+        [&self.bloat, &self.depth, &self.cycles, &self.duplicate_exports].into_iter().flatten()
     }
 }
 

@@ -37,6 +37,9 @@ enum Commands {
     /// Check for circular imports in JavaScript/TypeScript projects
     #[command(name = "cycles")]
     Cycles(oxiclean_cycles::Config),
+    /// Check for modules that export the same thing under several names
+    #[command(name = "duplicate-exports")]
+    DuplicateExports(oxiclean_duplicate_exports::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -60,6 +63,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_cycles::run_cycles_check(cfg)?,
             oxiclean_cycles::REPORT_STYLE,
             oxiclean_cycles::RULE,
+        ),
+        Commands::DuplicateExports(cfg) => (
+            oxiclean_duplicate_exports::run_duplicate_exports_check(cfg)?,
+            oxiclean_duplicate_exports::REPORT_STYLE,
+            oxiclean_duplicate_exports::RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

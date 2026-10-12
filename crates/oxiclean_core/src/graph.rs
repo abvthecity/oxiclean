@@ -20,6 +20,7 @@ use tracing::{debug, trace, warn};
 
 use crate::{
     constants::JS_TS_EXTENSIONS,
+    exports::Export,
     sequencer::{Components, len_u32, sequence, strongly_connected},
 };
 
@@ -55,8 +56,11 @@ pub struct RawImport {
 
 /// What the builder learns from parsing one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedFile {
     pub imports: Vec<RawImport>,
+    /// The names the file exports.
+    pub exports: Vec<Export>,
     /// Set when the file had syntax errors. Its imports are still used, but
     /// may be incomplete, so the file is reported as a [`ParseFailure`].
     pub error: Option<String>,
@@ -73,9 +77,21 @@ pub struct Edge {
 
 /// A module (file) in the graph.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Module {
     pub path: PathBuf,
     pub edges: Vec<Edge>,
+    /// The names the module exports. Empty for files that aren't parsed:
+    /// assets and, by default, files in `node_modules`.
+    pub exports: Vec<Export>,
+}
+
+impl Module {
+    /// Whether the module is a file inside `node_modules`.
+    #[must_use]
+    pub fn in_node_modules(&self) -> bool {
+        in_node_modules(&self.path)
+    }
 }
 
 /// A file that could not be read or parsed cleanly. The module stays in the
@@ -183,17 +199,17 @@ impl ModuleGraph {
             trace!("Graph frontier: {} modules", frontier.len());
             // Parse and resolve the whole frontier in parallel. Only this step
             // touches the file system; interning below is sequential and cheap.
-            type Expanded = (ModuleId, Vec<(String, u32, PathBuf)>, Option<String>);
+            type Expanded = (ModuleId, Vec<(String, u32, PathBuf)>, Vec<Export>, Option<String>);
             let expanded: Vec<Expanded> = frontier
                 .par_iter()
                 .map(|&id| {
                     let path = &modules[id.idx()].path;
                     if !is_parseable(path) || (!opts.follow_node_modules && in_node_modules(path)) {
-                        return (id, Vec::new(), None);
+                        return (id, Vec::new(), Vec::new(), None);
                     }
                     let parsed = match parse(path) {
                         Ok(parsed) => parsed,
-                        Err(e) => return (id, Vec::new(), Some(e.to_string())),
+                        Err(e) => return (id, Vec::new(), Vec::new(), Some(e.to_string())),
                     };
                     let resolved = parsed
                         .imports
@@ -207,12 +223,12 @@ impl ModuleGraph {
                             target.map(|t| (imp.request, imp.line, t))
                         })
                         .collect();
-                    (id, resolved, parsed.error)
+                    (id, resolved, parsed.exports, parsed.error)
                 })
                 .collect();
 
             let mut next = Vec::new();
-            for (id, resolved, error) in expanded {
+            for (id, resolved, exports, error) in expanded {
                 let mut edges = Vec::with_capacity(resolved.len());
                 for (request, line, target_path) in resolved {
                     let target = match index.get(&target_path) {
@@ -226,6 +242,7 @@ impl ModuleGraph {
                     edges.push(Edge { target, request, line });
                 }
                 modules[id.idx()].edges = edges;
+                modules[id.idx()].exports = exports;
                 if let Some(message) = error {
                     let path = modules[id.idx()].path.clone();
                     warn!("Could not parse {} cleanly: {message}", path.display());
@@ -269,6 +286,11 @@ impl ModuleGraph {
     #[must_use]
     pub fn module(&self, id: ModuleId) -> &Module {
         &self.modules[id.idx()]
+    }
+
+    /// Every module in the graph, in the order they were found.
+    pub fn modules(&self) -> impl ExactSizeIterator<Item = &Module> {
+        self.modules.iter()
     }
 
     /// Files that could not be read or parsed, sorted by path.
@@ -477,7 +499,7 @@ fn intern(
 ) -> ModuleId {
     let id = ModuleId(len_u32(modules.len()));
     index.insert(path.clone(), id);
-    modules.push(Module { path, edges: Vec::new() });
+    modules.push(Module { path, edges: Vec::new(), exports: Vec::new() });
     id
 }
 
@@ -509,7 +531,7 @@ mod tests {
                             .collect()
                     })
                     .unwrap_or_default();
-                Ok(ParsedFile { imports, error: None })
+                Ok(ParsedFile { imports, ..ParsedFile::default() })
             },
             |_, req| Some(PathBuf::from(format!("{req}.js"))),
             BuildOptions::default(),
@@ -643,7 +665,7 @@ mod tests {
                             .collect()
                     })
                     .unwrap_or_default();
-                Ok(ParsedFile { imports, error: None })
+                Ok(ParsedFile { imports, ..ParsedFile::default() })
             },
             |_, req| Some(PathBuf::from(format!("{req}.js"))),
             BuildOptions::default().follow_node_modules(true),
@@ -724,7 +746,7 @@ mod tests {
             } else {
                 vec![]
             };
-            Ok(ParsedFile { imports, error: None })
+            Ok(ParsedFile { imports, ..ParsedFile::default() })
         };
         let resolve = |_: &Path, req: &str| Some(PathBuf::from(format!("{req}.js")));
         let entries = [PathBuf::from("a.js")];
@@ -749,6 +771,7 @@ mod tests {
                 Some("b.js") => Ok(ParsedFile {
                     imports: vec![RawImport { request: "c".into(), dynamic: false, line: 0 }],
                     error: Some("syntax error".into()),
+                    ..ParsedFile::default()
                 }),
                 _ => Ok(ParsedFile::default()),
             },

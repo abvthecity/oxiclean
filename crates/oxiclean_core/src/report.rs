@@ -31,6 +31,41 @@ pub enum FindingKind {
     WholeGraph,
     /// A circular import that starts in the file.
     Cycle(CycleFinding),
+    /// Names the file exports for the same thing.
+    DuplicateExport(DuplicateExport),
+}
+
+/// Names a file exports for the same thing, for
+/// [`FindingKind::DuplicateExport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DuplicateExport {
+    /// The original export first, then each name that repeats it.
+    pub names: Vec<ExportName>,
+}
+
+impl DuplicateExport {
+    #[must_use]
+    pub fn new(names: Vec<ExportName>) -> Self {
+        Self { names }
+    }
+}
+
+/// An exported name and where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExportName {
+    /// The name importers use; `default` for the default export.
+    pub name: String,
+    /// 1-based line of the name.
+    pub line: u32,
+}
+
+impl ExportName {
+    #[must_use]
+    pub fn new(name: String, line: u32) -> Self {
+        Self { name, line }
+    }
 }
 
 /// The imports of a circular import, for [`FindingKind::Cycle`].
@@ -103,6 +138,7 @@ impl Finding {
         match &self.kind {
             FindingKind::Import { line, .. } => *line,
             FindingKind::Cycle(cycle) => cycle.steps.first().map_or(0, |s| s.line),
+            FindingKind::DuplicateExport(dup) => dup.names.first().map_or(0, |n| n.line),
             FindingKind::WholeGraph => 0,
         }
     }
@@ -156,12 +192,31 @@ fn request(f: &Finding) -> &str {
     match &f.kind {
         FindingKind::Import { request, .. } => request,
         FindingKind::Cycle(cycle) => cycle.steps.first().map_or("", |s| s.request.as_str()),
+        FindingKind::DuplicateExport(dup) => dup.names.first().map_or("", |n| n.name.as_str()),
         FindingKind::WholeGraph => "",
     }
 }
 
-/// Lines printed under a finding: the files of a cycle.
+/// How a finding listed under its file is introduced, e.g. `import './a'`.
+fn label(f: &Finding) -> String {
+    match &f.kind {
+        FindingKind::DuplicateExport(_) => format!("export '{}'", request(f)),
+        _ => format!("import '{}'", request(f)),
+    }
+}
+
+/// Lines printed under a finding: the files of a cycle, or the names that
+/// repeat an export.
 fn details(f: &Finding, ctx: ReportContext<'_>) -> Vec<String> {
+    if let FindingKind::DuplicateExport(dup) = &f.kind {
+        let file = ctx.display(&f.file);
+        return dup
+            .names
+            .iter()
+            .skip(1)
+            .map(|n| format!("{file}:{} also exports it as '{}'", n.line, n.name))
+            .collect();
+    }
     let FindingKind::Cycle(cycle) = &f.kind else { return Vec::new() };
     let mut lines: Vec<String> = cycle
         .steps
@@ -280,9 +335,9 @@ pub fn print_findings<W: Write>(
             let prefix = if idx == last { "└──" } else { "├──" };
             writeln!(
                 writer,
-                "{}  import '{}' ({}){}",
+                "{}  {} ({}){}",
                 prefix.dimmed(),
-                request(f),
+                label(f),
                 (style.value_label)(f.value).red(),
                 warn_tag(f)
             )?;
@@ -332,9 +387,9 @@ fn print_summary<W: Write>(
     for (idx, f) in top.iter().enumerate() {
         writeln!(
             writer,
-            "    {}. import '{}' ({}) - {}",
+            "    {}. {} ({}) - {}",
             idx + 1,
-            request(f),
+            label(f),
             (style.value_label)(f.value).red(),
             ctx.display(&f.file).blue()
         )?;

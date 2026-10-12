@@ -99,6 +99,7 @@ impl CommonArgs {
                             line: s.line,
                         })
                         .collect(),
+                    exports: parsed.exports,
                     error: parsed.error,
                 })
             },

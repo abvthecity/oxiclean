@@ -4,22 +4,29 @@
 #
 # Usage: scripts/bench-knip.sh [check...]
 #   check   oxiclean check to compare (default: all with a knip equivalent).
-#           Supported: cycles (knip `cycles`).
+#           Supported: cycles (knip `cycles`), duplicate-exports (knip
+#           `duplicates`).
 #
 # Both tools get the same entry files: oxiclean's default (every non-test JS/TS
 # file inside a `src` directory). knip runs with that as `entry` and `project`
 # in every workspace and with all of its plugins off, so neither tool picks up
-# entries the other doesn't know about. Repos are cached as in scripts/bench.sh
+# entries the other doesn't know about. knip then only reports on files inside
+# `src` directories, while oxiclean also reports on files outside them that
+# the entries import. (Making every file a knip project file instead makes
+# knip analyse files no entry reaches.) Repos are cached as in scripts/bench.sh
 # ($OXICLEAN_BENCH_DIR) and are not installed; knip is installed once into
 # $OXICLEAN_BENCH_DIR/.knip. Each tool runs $OXICLEAN_BENCH_RUNS times and the
 # fastest time is kept. Detailed results go to $OXICLEAN_BENCH_DIR/.knip/results.
 # Set OXICLEAN_BENCH_TARGETS to a space-separated list of names to run only those.
 #
-# The cycle counts measure different things: knip reports one cycle per back
-# edge of its depth-first search, oxiclean picks short cycles until removing
-# the last import of each leaves none. `knip_missed` counts knip cycles that
-# none of oxiclean's last imports breaks, and should be 0. `ox_only` counts
-# oxiclean cycles that share no file with any knip cycle.
+# `ox` and `knip` count each tool's findings. For cycles they measure
+# different things: knip reports one cycle per back edge of its depth-first
+# search, oxiclean picks short cycles until removing the last import of each
+# leaves none. `knip_missed` counts knip cycles that none of oxiclean's last
+# imports breaks, and should be 0; `ox_only` counts oxiclean cycles that share
+# no file with any knip cycle. For duplicate exports, a finding matches when
+# both tools list the same names in the same file: `knip_missed` counts knip
+# findings oxiclean lacks and `ox_only` the reverse.
 #
 # Needs bash 4+, GNU date, jq and Node.js (Linux).
 set -euo pipefail
@@ -33,7 +40,7 @@ KNIP_VERSION=6.41.0
 KNIP_DIR=$BENCH_DIR/.knip
 OUT_DIR=$KNIP_DIR/results
 
-declare -A KNIP_TYPE=([cycles]=cycles)
+declare -A KNIP_TYPE=([cycles]=cycles [duplicate-exports]=duplicates)
 checks=("$@")
 if [[ ${#checks[@]} -eq 0 ]]; then checks=("${!KNIP_TYPE[@]}"); fi
 for check in "${checks[@]}"; do
@@ -100,8 +107,18 @@ compare_cycles() {
     | "\($oc | length) \($kc | length) \($missed) \($only)"'
 }
 
-printf '\n%-10s %-13s %10s %10s %7s %7s %12s %9s\n' \
-  target check oxiclean knip ox_cyc knip_cyc knip_missed ox_only
+# Prints: our duplicates, knip's, knip's that we lack, and ours that knip
+# lacks. A duplicate is a file and its set of names.
+compare_duplicates() {
+  local ours=$1 theirs=$2
+  jq -rn --slurpfile o "$ours" --slurpfile k "$theirs" '
+    ($o[0].findings | map({file, names: ([.names[].name] | sort)})) as $od
+    | ($k[0].issues | map(.file as $f | (.duplicates // [])[] | {file: $f, names: (map(.name) | sort)})) as $kd
+    | "\($od | length) \($kd | length) \($kd - $od | length) \($od - $kd | length)"'
+}
+
+printf '\n%-10s %-17s %10s %10s %7s %7s %12s %9s\n' \
+  target check oxiclean knip ox knip knip_missed ox_only
 while IFS=$'\t' read -r name _ sha; do
   [[ -z $name || $name == \#* ]] && continue
   if [[ -n $TARGETS && " $TARGETS " != *" $name "* ]]; then continue; fi
@@ -120,12 +137,12 @@ while IFS=$'\t' read -r name _ sha; do
     knip_ms=$(best_time "$dir" "$theirs" "$KNIP" --config "$CONFIG" --include "$type" \
       --reporter json --no-progress --no-exit-code --no-config-hints)
     if [[ $ox_ms == FAIL || $knip_ms == FAIL ]]; then
-      printf '%-10s %-13s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \
+      printf '%-10s %-17s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \
         "$([[ $ox_ms == FAIL ]] && echo "$ours" || echo "$theirs")"
       continue
     fi
-    read -r oc kc missed only < <(compare_cycles "$ours" "$theirs")
-    printf '%-10s %-13s %8sms %8sms %7s %7s %12s %9s\n' \
+    read -r oc kc missed only < <("compare_${type}" "$ours" "$theirs")
+    printf '%-10s %-17s %8sms %8sms %7s %7s %12s %9s\n' \
       "$name" "$check" "$ox_ms" "$knip_ms" "$oc" "$kc" "$missed" "$only"
   done
 done < bench/targets.tsv

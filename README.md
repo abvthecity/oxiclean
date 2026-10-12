@@ -17,11 +17,15 @@ oxiclean depth --root ./my-project
 # Find circular imports
 oxiclean cycles --root ./my-project
 
+# Find modules that export the same thing twice
+oxiclean duplicate-exports --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
 oxiclean depth --help
 oxiclean cycles --help
+oxiclean duplicate-exports --help
 ```
 
 ## Development
@@ -38,12 +42,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, linting and benchmarks.
 ```
 oxiclean/
 ├── crates/
-│   ├── oxiclean/              # Main CLI application (binary)
-│   ├── oxiclean_core/         # Shared utilities (parser, resolver, etc.)
-│   ├── oxiclean_bloat/        # Import bloat detection library
-│   ├── oxiclean_cycles/       # Circular import detection library
-│   └── oxiclean_depth/        # Import depth analysis library
-└── Cargo.toml                 # Workspace configuration
+│   ├── oxiclean/                    # Main CLI application (binary)
+│   ├── oxiclean_core/               # Shared utilities (parser, resolver, etc.)
+│   ├── oxiclean_bloat/              # Import bloat detection library
+│   ├── oxiclean_cycles/             # Circular import detection library
+│   ├── oxiclean_duplicate_exports/  # Duplicate export detection library
+│   └── oxiclean_depth/              # Import depth analysis library
+└── Cargo.toml                       # Workspace configuration
 ```
 
 ## Tools
@@ -60,7 +65,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicate-exports` reports every export with a second name, so its threshold (the number of names) defaults to 2.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -152,11 +157,40 @@ cycle only when they cover every file in it. The result is the same on every
 run. JSON output
 lists every import of the cycle, and SARIF output links to each of them.
 
+### Duplicate Exports Checker
+
+Finds modules that export the same thing under more than one name, like
+knip's `duplicates` issue type: `export const b = a` or `export default a`
+where `a` is already exported. Importers can then reach one value through
+two names. It checks every parsed file outside `node_modules`.
+
+As in knip, these don't count: a name with an `@alias` tag in the comment
+before it, re-exports and imports from the project passed on as the original, renames with
+`export { a as b }`, and `export default a` when `a` is exported with
+`export { a }`. Unlike knip, the original export may come after the name
+that repeats it. See the [checker's README](crates/oxiclean_duplicate_exports/README.md#what-counts)
+for every case.
+
+**Usage:**
+```bash
+oxiclean duplicate-exports --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Duplicate exports detected (threshold: 2 names)
+
+src/button.ts
+└──  export 'Button' (exported as 2 names)
+        src/button.ts:12 also exports it as 'default'
+```
+
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
 - **Import Depth**: Counts longest import chain (depth) - indicates module resolution complexity
 - **Import Cycles**: Lists files that import each other - order-dependent initialisation bugs and code that can't be split
+- **Duplicate Exports**: Lists exports with a second name - two ways to import one thing
 
 These metrics provide complementary insights into code complexity.
 

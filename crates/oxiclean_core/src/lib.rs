@@ -2,7 +2,7 @@
 //!
 //! This crate provides shared functionality for analyzing JavaScript/TypeScript
 //! projects, including:
-//! - Parsing import statements from JS/TS files
+//! - Parsing the imports and exports of JS/TS files
 //! - Resolving module paths (relative, tsconfig paths, node_modules, workspace packages)
 //! - Collecting entry files from a project
 //! - Building the module graph and analysing it ([`ModuleGraph`])
@@ -14,6 +14,7 @@ mod collector;
 mod config;
 mod constants;
 mod error;
+mod exports;
 mod graph;
 mod jsonc;
 mod parser;
@@ -30,12 +31,15 @@ pub use collector::{CollectorConfig, collect_entries};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
 pub use error::{Error, Result};
+pub use exports::{Export, ExportForm, ExportKind};
 pub use graph::{
     BuildOptions, Cycle, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
 };
 pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
-pub use report::{CheckResult, CycleFinding, CycleStep, Finding, FindingKind};
+pub use report::{
+    CheckResult, CycleFinding, CycleStep, DuplicateExport, ExportName, Finding, FindingKind,
+};
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
 pub use settings::{ConfigFile, RulePolicy, Severity};
