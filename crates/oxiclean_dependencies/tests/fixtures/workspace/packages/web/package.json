@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "mdx-chart": "^1.0.0",
+    "modern-normalize": "^3.0.0",
     "preact": "^10.0.0"
   }
 }

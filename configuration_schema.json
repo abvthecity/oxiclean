@@ -121,6 +121,14 @@
           ],
           "default": null
         },
+        "css": {
+          "description": "Stylesheets (`.css`, `.scss`, `.sass`, `.less`): `@import`, `@use`,\n`@forward` and Tailwind's `@plugin`, `@config` and `@reference`.\nAlways on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "html": {
           "description": "HTML pages: `<script>` blocks and `<script src>`; pages that load the\nproject's scripts are entries. Always on by default.",
           "type": [
