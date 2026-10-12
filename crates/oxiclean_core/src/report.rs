@@ -49,6 +49,30 @@ pub enum FindingKind {
     /// A barrel file: a module that mostly re-exports others. The value is
     /// how many modules importing it pulls in.
     Barrel(Barrel),
+    /// A third-party package that pulls in many modules. The finding's file
+    /// is the package.json that lists it; the value is the number of
+    /// modules importing it pulls in.
+    HeavyDependency(HeavyDependency),
+}
+
+/// A package that pulls in many modules, for
+/// [`FindingKind::HeavyDependency`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HeavyDependency {
+    /// The package's name.
+    pub name: String,
+    /// 1-based line of the package in the package.json, or 0 when unknown.
+    pub line: u32,
+    /// How many of the project's files import it.
+    pub importers: usize,
+}
+
+impl HeavyDependency {
+    #[must_use]
+    pub fn new(name: String, line: u32, importers: usize) -> Self {
+        Self { name, line, importers }
+    }
 }
 
 /// What a barrel file forwards, for [`FindingKind::Barrel`].
@@ -234,6 +258,7 @@ impl Finding {
             FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => unused.line,
             FindingKind::UnusedDependency(dep) => dep.line,
             FindingKind::UnusedCatalogEntry(entry) => entry.line,
+            FindingKind::HeavyDependency(dep) => dep.line,
             FindingKind::Barrel(_) | FindingKind::WholeGraph => 0,
         }
     }
@@ -291,6 +316,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => &unused.name,
         FindingKind::UnusedDependency(dep) => &dep.name,
         FindingKind::UnusedCatalogEntry(entry) => &entry.name,
+        FindingKind::HeavyDependency(dep) => &dep.name,
         FindingKind::Barrel(_) | FindingKind::WholeGraph => "",
     }
 }
@@ -310,6 +336,9 @@ fn label(f: &Finding) -> String {
             "barrel re-exporting {} modules, imported by {} files",
             barrel.reexports, barrel.importers
         ),
+        FindingKind::HeavyDependency(dep) => {
+            format!("package '{}', imported by {} files", dep.name, dep.importers)
+        }
         _ => format!("import '{}'", request(f)),
     }
 }

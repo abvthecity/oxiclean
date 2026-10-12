@@ -275,6 +275,10 @@ pub struct Rules {
     /// Barrel files, modules that mostly re-export others, that pull in
     /// too many modules when imported. Default threshold: 25 modules.
     pub barrels: Option<RuleSetting>,
+    /// Third-party packages that pull in too many modules, counted through
+    /// `node_modules`, reported on the package.json that lists them.
+    /// Default threshold: 100 modules.
+    pub heavy_dependencies: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -293,6 +297,7 @@ impl Rules {
             "dependencies" => self.dependencies.as_ref(),
             "catalog" => self.catalog.as_ref(),
             "barrels" => self.barrels.as_ref(),
+            "heavy-dependencies" => self.heavy_dependencies.as_ref(),
             _ => None,
         }
     }
@@ -310,6 +315,7 @@ impl Rules {
             &self.dependencies,
             &self.catalog,
             &self.barrels,
+            &self.heavy_dependencies,
         ]
         .into_iter()
         .flatten()

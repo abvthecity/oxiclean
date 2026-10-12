@@ -42,3 +42,21 @@ pub const CATALOG_STYLE: ReportStyle = ReportStyle {
     max_unit: "",
     ok_message: "No unused catalog entries detected.",
 };
+
+/// Name of the heavy dependencies rule in `.oxicleanrc.json` and in JSON
+/// and SARIF output.
+pub const HEAVY_RULE: &str = "heavy-dependencies";
+
+/// Heavy dependencies threshold used when the config file sets none.
+pub const HEAVY_DEFAULT_THRESHOLD: usize = 100;
+
+/// How heavy dependency findings are worded in the terminal report.
+pub const HEAVY_STYLE: ReportStyle = ReportStyle {
+    description: "Packages whose import pulls in too many modules",
+    heading: "Heavy dependencies detected",
+    threshold_unit: "modules",
+    value_label: |n| format!("pulls in {n} modules"),
+    max_label: "Heaviest dependency",
+    max_unit: "modules",
+    ok_message: "No heavy dependencies detected.",
+};

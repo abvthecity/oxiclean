@@ -61,6 +61,9 @@ enum Commands {
     /// Check for barrel files whose import pulls in too many modules
     #[command(name = "barrels")]
     Barrels(oxiclean_bloat::Config),
+    /// Check for installed packages whose import pulls in too many modules
+    #[command(name = "heavy-dependencies")]
+    HeavyDependencies(oxiclean_dependencies::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -124,6 +127,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_bloat::run_barrels_check(cfg)?,
             oxiclean_bloat::BARRELS_STYLE,
             oxiclean_bloat::BARRELS_RULE,
+        ),
+        Commands::HeavyDependencies(cfg) => (
+            oxiclean_dependencies::run_heavy_dependencies_check(cfg)?,
+            oxiclean_dependencies::HEAVY_STYLE,
+            oxiclean_dependencies::HEAVY_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

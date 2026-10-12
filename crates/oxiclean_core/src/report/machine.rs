@@ -79,6 +79,10 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
             "barrel file re-exporting {} modules: importing it pulls in {value} ({limit})",
             barrel.reexports
         ),
+        FindingKind::HeavyDependency(dep) => format!(
+            "package '{}' pulls in {value} ({limit}), imported by {} files",
+            dep.name, dep.importers
+        ),
     }
 }
 
@@ -163,6 +167,12 @@ pub fn write_json<W: Write>(
                     v["reexports"] = json!(barrel.reexports);
                     v["importers"] = json!(barrel.importers);
                 }
+                FindingKind::HeavyDependency(dep) => {
+                    v["kind"] = json!("heavy-dependency");
+                    v["line"] = json!(dep.line);
+                    v["name"] = json!(dep.name);
+                    v["importers"] = json!(dep.importers);
+                }
             }
             v
         })
@@ -245,7 +255,8 @@ pub fn write_sarif<W: Write>(
                 | FindingKind::UnusedMember(_)
                 | FindingKind::UnusedDependency(_)
                 | FindingKind::UnusedCatalogEntry(_)
-                | FindingKind::Barrel(_) => Vec::new(),
+                | FindingKind::Barrel(_)
+                | FindingKind::HeavyDependency(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -320,6 +331,7 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
         FindingKind::Import { request, .. } => key.push_str(request),
         FindingKind::WholeGraph => key.push_str("<entry>"),
         FindingKind::Barrel(_) => key.push_str("<barrel>"),
+        FindingKind::HeavyDependency(dep) => key.push_str(&dep.name),
         FindingKind::Cycle(cycle) => {
             for step in &cycle.steps {
                 key.push_str(&rel(&step.file, root));

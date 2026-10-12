@@ -119,3 +119,22 @@ pnpm-workspace.yaml
 ├──  catalog entry 'lodash' (default) (never referenced)
 └──  catalog entry 'vue' (legacy) (never referenced)
 ```
+
+## Heavy dependencies
+
+`oxiclean heavy-dependencies` scores each package a `package.json` lists
+by the modules importing it pulls in, reading the installed files in
+`node_modules`: every entry point of the package that the files the
+package entries reach import, and what those import in turn, other
+packages included. Packages at or above the threshold (default 100
+modules) are reported on the `package.json` line that lists them, with
+how many files import them. Imports resolve as in oxiclean's other checks,
+through `exports` conditions such as `import`, `module` and `browser`, so a
+package whose entry is a single bundled file counts as one module.
+
+```
+⚠ Heavy dependencies detected (threshold: 100 modules)
+
+package.json
+└──  package 'date-fns', imported by 12 files (pulls in 302 modules)
+```

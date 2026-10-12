@@ -47,7 +47,7 @@ pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     Barrel, CheckResult, CycleFinding, CycleStep, DuplicateExport, ExportName, Finding,
-    FindingKind, UnusedCatalogEntry, UnusedDependency, UnusedExport,
+    FindingKind, HeavyDependency, UnusedCatalogEntry, UnusedDependency, UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};

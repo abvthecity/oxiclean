@@ -8,7 +8,9 @@
 //! [`unused_dependencies`] for what counts as a use.
 //!
 //! The `catalog` rule ([`run_catalog_check`]) reports pnpm catalog entries
-//! no package.json refers to, as knip's `catalog`.
+//! no package.json refers to, as knip's `catalog`, and the
+//! `heavy-dependencies` rule ([`run_heavy_dependencies_check`]) packages whose
+//! import pulls in many modules.
 //!
 //! # Examples
 //!
@@ -39,13 +41,17 @@
 mod catalog;
 mod checker;
 mod config;
+mod heavy;
 mod scripts;
 
 pub use catalog::{run_catalog_check, unused_catalog_entries};
 pub use checker::{Unused, check, run_dependencies_check, unused_dependencies};
 pub use config::{
     CATALOG_RULE, CATALOG_STYLE, Config, DEFAULT_THRESHOLD, DEPENDENCIES_RULE, DEPENDENCIES_STYLE,
+    HEAVY_DEFAULT_THRESHOLD, HEAVY_RULE, HEAVY_STYLE,
 };
+pub use heavy::{check_heavy_dependencies, run_heavy_dependencies_check};
 pub use oxiclean_core::{
-    CheckResult, DependencyField, Finding, FindingKind, UnusedCatalogEntry, UnusedDependency,
+    CheckResult, DependencyField, Finding, FindingKind, HeavyDependency, UnusedCatalogEntry,
+    UnusedDependency,
 };
