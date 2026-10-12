@@ -8,7 +8,7 @@ use std::{
 use globset::GlobSet;
 use oxiclean_core::{
     Analysis, BuildOptions, CheckResult, DependencyField, Finding, FindingKind, Project, Result,
-    RulePolicy, UnusedDependency, parse_jsonc, split_package_request,
+    RulePolicy, UnusedDependency, split_package_request,
 };
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -161,8 +161,9 @@ pub struct Unused {
 ///   packages by the installed packages' `bin` field, or else by
 ///   a short list of known binaries or the unscoped name; every package of the nearest
 ///   package.json that provides the binary is used;
-/// - a tsconfig.json or `tsconfig.*.json` beside the package.json names it
-///   in `extends`, `compilerOptions.types`, `jsxImportSource` or `plugins`;
+/// - a config file beside the package.json names it, as a plugin reads it:
+///   tsconfig `extends`, `compilerOptions.types`, `jsxImportSource` or
+///   `plugins`;
 /// - an installed package that is imported, loaded by a script or named by
 ///   a tsconfig lists it in `peerDependencies`;
 /// - it is `typescript`, or `@types/node`, `@types/bun` or `@types/jest`,
@@ -204,7 +205,8 @@ pub fn unused_dependencies(analysis: &Analysis) -> Vec<Unused> {
                 };
             }
         }
-        script_imports.extend(tsconfig_refs(&manifest.dir).into_iter().map(|r| (i, r)));
+        script_imports
+            .extend(analysis.plugins.references(&manifest.dir).into_iter().map(|r| (i, r)));
     }
     for (i, name) in imports {
         used.import(i, name);
@@ -489,52 +491,6 @@ fn ships_types(pkg: &Value) -> bool {
         .iter()
         .any(|k| pkg.get(*k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
         || pkg.get("exports").is_some_and(has_types_condition)
-}
-
-/// The packages the tsconfig files in `dir` name: `extends`,
-/// `compilerOptions.types` (each also as its `@types` package),
-/// `compilerOptions.jsxImportSource` and `compilerOptions.plugins[].name`.
-fn tsconfig_refs(dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(std::result::Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n == "tsconfig.json" || (n.starts_with("tsconfig.") && n.ends_with(".json"))
-            })
-        })
-        .collect();
-    files.sort();
-    let mut out = Vec::new();
-    for file in files {
-        let Some(json) = fs::read_to_string(&file).ok().and_then(|s| parse_jsonc(&s)) else {
-            continue;
-        };
-        match json.get("extends") {
-            Some(Value::String(s)) => out.push(s.clone()),
-            Some(Value::Array(a)) => {
-                out.extend(a.iter().filter_map(Value::as_str).map(str::to_owned));
-            }
-            _ => {}
-        }
-        let Some(options) = json.get("compilerOptions") else { continue };
-        if let Some(Value::Array(types)) = options.get("types") {
-            for t in types.iter().filter_map(Value::as_str) {
-                out.push(t.to_string());
-                if let Some(name) = package_name(t) {
-                    out.push(types_package(name));
-                }
-            }
-        }
-        if let Some(Value::String(s)) = options.get("jsxImportSource") {
-            out.push(s.clone());
-        }
-        if let Some(Value::Array(plugins)) = options.get("plugins") {
-            out.extend(plugins.iter().filter_map(|p| p.get("name")?.as_str()).map(str::to_owned));
-        }
-    }
-    out
 }
 
 /// The 1-based line of the key `name` in the top-level `field` object of a

@@ -11,9 +11,10 @@ use std::{
 };
 use tracing::{debug, trace, warn};
 
-use crate::constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, is_declaration};
+use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::members;
+use crate::plugins::Plugins;
 use crate::types::{SpecKind, Specifier};
 use crate::uses::{self, ModuleUses};
 
@@ -76,44 +77,41 @@ pub struct ParsedImports {
 /// # Errors
 /// Fails if the file can't be read.
 pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
-    parse_file(file, true, true)
+    parse_file(file, &Plugins::default(), true, true)
 }
 
 /// [`parse_imports`], leaving [`ParsedImports::exports`] and
 /// [`ParsedImports::uses`] empty unless `with_exports`, and
 /// [`Export::members`] empty unless `with_members` too: checks that only
-/// follow imports skip the extra walks over the AST.
+/// follow imports skip the extra walks over the AST. Files of formats
+/// other than JS/TS are read by the plugin in `plugins` that knows them,
+/// and have no imports when it is off.
 pub(crate) fn parse_file(
     file: &Path,
+    plugins: &Plugins,
     with_exports: bool,
     with_members: bool,
 ) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
-    let raw =
+    let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
-    let src = raw.clone();
 
-    let is_component = file
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| COMPONENT_EXTENSIONS.contains(&ext));
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or_default();
-    let (src, st) = if ext == "mdx" {
-        (mdx_esm(&src), SourceType::tsx())
-    } else if is_component {
-        (component_scripts(&src), SourceType::ts())
+    let (src, st, extra) = if JS_TS_EXTENSIONS.contains(&ext) {
+        (src, source_type_for(file), Vec::new())
+    } else if let Some(extracted) = plugins.for_file(file).and_then(|p| p.extract(file, &src)) {
+        (extracted.js, extracted.source_type, extracted.imports)
     } else {
-        let st = source_type_for(file);
-        (src, st)
+        return Ok(ParsedImports::default());
     };
     let allocator = Allocator::default();
     let ParserReturn { program, errors, panicked, .. } =
         OxcParser::new(&allocator, &src, st).parse();
 
     let mut collector = ImportCollector::new(&src);
-    if ext == "html" {
-        // Read before the scripts are blanked out of `src`.
-        collector.script_sources(file, &raw);
+    for (request, offset) in &extra {
+        let span = Span::new(u32::try_from(*offset).unwrap_or(u32::MAX), 0);
+        collector.push(request, SpecKind::Static, span);
     }
     collector.visit_program(&program);
     collector.reference_types(&program.comments, &src);
@@ -176,33 +174,6 @@ impl ImportCollector {
 }
 
 impl ImportCollector {
-    /// The files an HTML page loads with `<script src="...">`. A `src`
-    /// starting with `/` is relative to the page's package directory, the
-    /// root a dev server such as Vite serves; URLs are left out.
-    fn script_sources(&mut self, file: &Path, src: &str) {
-        let dir = file.parent().unwrap_or(Path::new("."));
-        let root = dir.ancestors().find(|d| d.join("package.json").is_file()).unwrap_or(dir);
-        for (offset, tag) in script_tags(src) {
-            let Some(value) = attribute(tag, "src") else { continue };
-            if value.contains("://") || value.starts_with("//") || value.is_empty() {
-                continue;
-            }
-            let request = match value.strip_prefix('/') {
-                Some(rest) => {
-                    let depth = dir.strip_prefix(root).map_or(0, |d| d.components().count());
-                    match depth {
-                        0 => format!("./{rest}"),
-                        _ => format!("{}{rest}", "../".repeat(depth)),
-                    }
-                }
-                None if value.starts_with('.') => value.to_string(),
-                None => format!("./{value}"),
-            };
-            let span = Span::new(u32::try_from(offset).unwrap_or(u32::MAX), 0);
-            self.push(&request, SpecKind::Static, span);
-        }
-    }
-
     /// `/// <reference types="x" />` loads `x`'s types: a type-only import.
     fn reference_types(&mut self, comments: &[Comment], src: &str) {
         for comment in comments.iter().filter(|c| c.is_line()) {
@@ -313,125 +284,6 @@ impl<'a> Visit<'a> for ImportCollector {
 /// How to parse `path`. JavaScript files may contain JSX whatever their
 /// extension, as Next.js (SWC), Metro (Babel) and most bundlers allow, and a
 /// `.js` file may be either an ES module or a CommonJS script.
-/// The JS/TS of a `.vue`, `.svelte` or `.astro` file: its `<script>`
-/// blocks and Astro's `---` frontmatter, with everything else blanked to
-/// spaces so that offsets and lines stay those of the file.
-fn component_scripts(src: &str) -> String {
-    let mut keep = vec![false; src.len()];
-    let mut mark = |from: usize, to: usize| keep[from..to].iter_mut().for_each(|k| *k = true);
-    if let Some(rest) = src.strip_prefix("---")
-        && let Some(end) = rest.find("\n---")
-    {
-        mark(3, 3 + end);
-    }
-    let mut at = 0;
-    while let Some(open) = src[at..].find("<script") {
-        let open = at + open;
-        let Some(body) = src[open..].find('>').map(|i| open + i + 1) else { break };
-        let Some(close) = src[body..].find("</script>").map(|i| body + i) else { break };
-        if is_js_script(&src[open..body]) {
-            mark(body, close);
-        }
-        at = close + "</script>".len();
-    }
-    let mut out = String::with_capacity(src.len());
-    for (i, c) in src.char_indices() {
-        if keep[i] || c == '\n' {
-            out.push(c);
-        } else {
-            // As many spaces as the character had bytes, to keep offsets.
-            out.extend(std::iter::repeat_n(' ', c.len_utf8()));
-        }
-    }
-    out
-}
-
-/// Whether `path` is an HTML page that runs the project's code: a
-/// `<script>` with a local `src`, or an inline module script, as a Vite
-/// app's `index.html` has. Such pages are entries, as knip's Vite plugin
-/// takes them.
-pub(crate) fn is_script_page(path: &Path) -> bool {
-    if path.extension().and_then(|e| e.to_str()) != Some("html") {
-        return false;
-    }
-    let Ok(src) = fs::read_to_string(path) else { return false };
-    script_tags(&src).any(|(_, tag)| {
-        let local_src = attribute(tag, "src")
-            .is_some_and(|v| !v.is_empty() && !v.contains("://") && !v.starts_with("//"));
-        is_js_script(tag) && (local_src || attribute(tag, "type") == Some("module"))
-    })
-}
-
-/// Each `<script ...>` opening tag in `src` with its byte offset.
-fn script_tags(src: &str) -> impl Iterator<Item = (usize, &str)> {
-    src.match_indices("<script").filter_map(|(open, _)| {
-        let end = src[open..].find('>')?;
-        Some((open, &src[open..open + end + 1]))
-    })
-}
-
-/// Whether a `<script>` tag holds JS/TS: no `type`, or a JavaScript or
-/// module one, rather than JSON, a template or an import map.
-fn is_js_script(tag: &str) -> bool {
-    attribute(tag, "type").is_none_or(|t| {
-        matches!(
-            t.to_ascii_lowercase().as_str(),
-            "" | "module" | "text/javascript" | "application/javascript" | "text/typescript" | "ts"
-        )
-    })
-}
-
-/// The value of attribute `name` in an HTML opening tag, quoted or not.
-fn attribute<'t>(tag: &'t str, name: &str) -> Option<&'t str> {
-    let bytes = tag.as_bytes();
-    let mut from = 0;
-    while let Some(i) = tag[from..].find(name) {
-        let at = from + i;
-        from = at + name.len();
-        let before_ok = at > 0 && bytes[at - 1].is_ascii_whitespace();
-        let rest = tag[from..].trim_start();
-        let (true, Some(value)) = (before_ok, rest.strip_prefix('=')) else { continue };
-        let value = value.trim_start();
-        return Some(match value.chars().next() {
-            Some(q @ ('"' | '\'')) => value[1..].split(q).next().unwrap_or_default(),
-            _ => value.split(|c: char| c.is_whitespace() || c == '>' || c == '/').next()?,
-        });
-    }
-    None
-}
-
-/// The ESM of an MDX file: each block of lines that starts with `import`
-/// or `export` at the start of a line, up to a blank line, with everything
-/// else blanked to spaces so that offsets and lines stay those of the file.
-/// Code fences are skipped.
-fn mdx_esm(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let (mut in_esm, mut in_fence) = (false, false);
-    for line in src.split_inclusive('\n') {
-        let text = line.trim_end();
-        if text.trim_start().starts_with("```") || text.trim_start().starts_with("~~~") {
-            in_fence = !in_fence;
-            in_esm = false;
-        } else if !in_fence && (text.starts_with("import ") || text.starts_with("export ")) {
-            in_esm = true;
-        } else if text.trim().is_empty() {
-            in_esm = false;
-        }
-        if in_esm && !in_fence {
-            out.push_str(line);
-        } else {
-            for c in line.chars() {
-                if c == '\n' {
-                    out.push(c);
-                } else {
-                    out.extend(std::iter::repeat_n(' ', c.len_utf8()));
-                }
-            }
-        }
-    }
-    out
-}
-
 fn source_type_for(path: &Path) -> SourceType {
     let st = SourceType::from_path(path).unwrap_or_default();
     if !st.is_javascript() {
@@ -673,13 +525,13 @@ import type F = require('./f');";
             parse_imports(&file).unwrap().specs.into_iter().map(|s| (s.request, s.line)).collect();
         let t = |r: &str, line| (r.to_string(), line);
         assert_eq!(got, [t("../src/main.ts", 2), t("./legacy.js", 3), t("./inline", 7)]);
-        assert!(is_script_page(&file));
+        assert!(Plugins::default().is_entry(&file));
         let plain = create_test_file(
             temp_dir.path(),
             "plain.html",
             "<p>hi</p><script src=\"https://x/y.js\"></script>",
         );
-        assert!(!is_script_page(&plain));
+        assert!(!Plugins::default().is_entry(&plain));
     }
 
     #[test]

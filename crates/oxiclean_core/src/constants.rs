@@ -30,11 +30,6 @@ pub const RESOLVE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx"
 
 /// Suffixes of TypeScript declaration files, tried after every runtime
 /// file when resolving an import.
-/// Formats that embed JS/TS that imports other modules: single-file
-/// components' `<script>` blocks (and Astro's frontmatter), HTML pages'
-/// scripts and `<script src>`, and MDX's `import` and `export` lines.
-pub const COMPONENT_EXTENSIONS: &[&str] = &["vue", "svelte", "astro", "html", "mdx"];
-
 pub const DECLARATION_SUFFIXES: &[&str] = &[".d.ts", ".d.mts", ".d.cts"];
 
 /// Whether `path` is a TypeScript declaration file such as `index.d.ts`.

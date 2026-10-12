@@ -95,10 +95,60 @@ pub struct ConfigFile {
     /// Names of packages, globs such as "@types/*" allowed, that the unused
     /// dependency checks never report, as knip's `ignoreDependencies`.
     pub ignore_dependencies: Vec<String>,
+    /// Turns plugins on or off. A plugin that isn't listed is on when its
+    /// tool is used: when a package.json lists one of its packages, or
+    /// always for file formats and TypeScript.
+    pub plugins: PluginSettings,
     /// Settings per rule. A rule that isn't listed runs with its defaults.
     pub rules: Rules,
     /// Settings for some workspace packages or files. Later overrides win.
     pub overrides: Vec<Override>,
+}
+
+/// Plugins: what oxiclean knows about a file format or a tool. `true`
+/// turns one on and `false` off; one left out is on when its tool is used.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PluginSettings {
+    /// HTML pages: `<script>` blocks and `<script src>`; pages that load the
+    /// project's scripts are entries. Always on by default.
+    pub html: Option<bool>,
+    /// MDX files: their `import` and `export` lines. Always on by default.
+    pub mdx: Option<bool>,
+    /// Vue single-file components' `<script>` blocks. Always on by default.
+    pub vue: Option<bool>,
+    /// Svelte components' `<script>` blocks. Always on by default.
+    pub svelte: Option<bool>,
+    /// Astro components' frontmatter and `<script>` blocks. Always on by
+    /// default.
+    pub astro: Option<bool>,
+    /// The packages tsconfig files name in `extends`, `types`,
+    /// `jsxImportSource` and `plugins`. Always on by default.
+    pub typescript: Option<bool>,
+}
+
+impl PluginSettings {
+    /// The setting for the plugin called `name`, if any.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<bool> {
+        match name {
+            "html" => self.html,
+            "mdx" => self.mdx,
+            "vue" => self.vue,
+            "svelte" => self.svelte,
+            "astro" => self.astro,
+            "typescript" => self.typescript,
+            _ => None,
+        }
+    }
+
+    /// Every plugin set to `on`.
+    #[must_use]
+    pub fn all(on: bool) -> Self {
+        let v = Some(on);
+        Self { html: v, mdx: v, vue: v, svelte: v, astro: v, typescript: v }
+    }
 }
 
 /// Every rule oxiclean knows. Each is set to a severity, or to
