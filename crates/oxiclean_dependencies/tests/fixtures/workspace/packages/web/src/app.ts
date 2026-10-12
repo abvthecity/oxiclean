@@ -1,3 +1,4 @@
+import './app.css';
 import { render } from 'preact';
 import Docs from './docs.mdx';
 

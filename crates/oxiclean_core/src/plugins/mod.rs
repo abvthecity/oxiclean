@@ -13,6 +13,7 @@
 //! `.oxicleanrc.json` turns any plugin on or off.
 
 mod components;
+mod css;
 mod html;
 mod markup;
 mod mdx;
@@ -77,6 +78,7 @@ const ALL: &[&dyn Plugin] = &[
     &components::Vue,
     &components::Svelte,
     &components::Astro,
+    &css::Css,
     &typescript::TypeScript,
 ];
 

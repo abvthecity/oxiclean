@@ -361,6 +361,7 @@ packages a tool's config files use.
 | `html` | `<script>` blocks and `<script src>`; pages that load the project's scripts are entries | always |
 | `mdx` | `import` and `export` lines of `.mdx` files | always |
 | `vue`, `svelte`, `astro` | components' `<script>` blocks, and Astro's frontmatter | always |
+| `css` | `@import`, `@use`, `@forward`, `@plugin`, `@config` and `@reference` in CSS, Sass, Less and PostCSS files | always |
 | `typescript` | packages tsconfig files name in `extends`, `types`, `jsxImportSource` and `plugins` | always |
 
 Tool plugins are on when a package.json in the project lists their

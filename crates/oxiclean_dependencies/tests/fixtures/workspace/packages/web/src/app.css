@@ -1,0 +1,4 @@
+/* A package used only from a stylesheet */
+@import "modern-normalize";
+
+body { margin: 0; }

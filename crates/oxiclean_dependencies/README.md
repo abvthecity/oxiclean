@@ -87,7 +87,8 @@ Where oxiclean differs from knip:
 
 - knip's plugins read tool configs (ESLint's `extends`, Babel's presets)
   and add their entries; oxiclean takes JS/TS config files and HTML pages
-  as entries and reads MDX imports, but reads no other formats, so
+  as entries and reads MDX imports and stylesheets' `@import`, `@use` and
+  `@plugin`, but reads no tool configs other than tsconfig yet, so
   packages only those name are reported unless they are in
   `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,

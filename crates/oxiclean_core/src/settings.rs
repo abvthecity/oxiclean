@@ -123,6 +123,10 @@ pub struct PluginSettings {
     /// Astro components' frontmatter and `<script>` blocks. Always on by
     /// default.
     pub astro: Option<bool>,
+    /// Stylesheets (`.css`, `.scss`, `.sass`, `.less`): `@import`, `@use`,
+    /// `@forward` and Tailwind's `@plugin`, `@config` and `@reference`.
+    /// Always on by default.
+    pub css: Option<bool>,
     /// The packages tsconfig files name in `extends`, `types`,
     /// `jsxImportSource` and `plugins`. Always on by default.
     pub typescript: Option<bool>,
@@ -138,6 +142,7 @@ impl PluginSettings {
             "vue" => self.vue,
             "svelte" => self.svelte,
             "astro" => self.astro,
+            "css" => self.css,
             "typescript" => self.typescript,
             _ => None,
         }
@@ -147,7 +152,7 @@ impl PluginSettings {
     #[must_use]
     pub fn all(on: bool) -> Self {
         let v = Some(on);
-        Self { html: v, mdx: v, vue: v, svelte: v, astro: v, typescript: v }
+        Self { html: v, mdx: v, vue: v, svelte: v, astro: v, css: v, typescript: v }
     }
 }
 
