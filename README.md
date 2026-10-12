@@ -465,6 +465,12 @@ bloat. Node.js built-ins such as `fs` or `node:path` are skipped. The
 frontmatter, and the `import` and `export` lines of `.mdx` files are read like
 any JS/TS file, and an HTML page's `<script src>` is an import. A `src`
 starting with `/` is relative to the page's package, as Vite serves it.
+Vite's `import.meta.glob('./pages/*.ts')` imports every file it matches,
+statically with `eager: true` and dynamically otherwise; patterns starting
+with `/` are relative to the package, and aliases aren't expanded.
+`new URL('./worker.ts', import.meta.url)`, as `new Worker()` takes, and
+`require.resolve()` find a file without loading it: the checks of exports
+and dependencies follow them, the others don't.
 
 ## License
 

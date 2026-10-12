@@ -13,10 +13,11 @@ use tracing::{debug, trace, warn};
 
 use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
+use crate::globs;
 use crate::members;
 use crate::plugins::Plugins;
 use crate::types::{SpecKind, Specifier};
-use crate::uses::{self, ModuleUses};
+use crate::uses::{self, ModuleUses, Usage, Used};
 
 /// The runtime imports of `file`, cached in `cache`: type-only imports are
 /// left out, so a declaration file has none. Assets such as `.css` have
@@ -115,6 +116,16 @@ pub(crate) fn parse_file(
     }
     collector.visit_program(&program);
     collector.reference_types(&program.comments, &src);
+    // What a glob imports is read through the module objects it returns,
+    // so every export counts as used, or the one its `import` option names.
+    let mut glob_uses = Vec::new();
+    for glob in std::mem::take(&mut collector.globs) {
+        for request in globs::expand(file, &glob.patterns) {
+            collector.push(&request, glob.kind, glob.span);
+            let used = glob.import.clone().map_or(Used::All, Used::Name);
+            glob_uses.push(Usage { request, used });
+        }
+    }
     let (exports, uses) = if with_exports {
         let line = |offset| collector.line(offset);
         let mut exports = exports::collect(&program, &line);
@@ -123,7 +134,9 @@ pub(crate) fn parse_file(
         if with_members {
             members::collect(program, &line, &mut exports);
         }
-        (exports, uses::collect(program))
+        let mut uses = uses::collect(program);
+        uses.usages.extend(glob_uses);
+        (exports, uses)
     } else {
         (Vec::new(), ModuleUses::default())
     };
@@ -148,6 +161,8 @@ pub(crate) fn parse_file(
 /// `require()`/`import()` calls nested inside functions or conditionals.
 struct ImportCollector {
     specs: Vec<Specifier>,
+    /// `import.meta.glob` calls, expanded once the walk is done.
+    globs: Vec<Glob>,
     /// Byte offset at which each line starts, for turning spans into lines.
     line_starts: Vec<u32>,
 }
@@ -157,7 +172,7 @@ impl ImportCollector {
         let line_starts = std::iter::once(0)
             .chain(src.match_indices('\n').map(|(i, _)| u32::try_from(i + 1).unwrap_or(u32::MAX)))
             .collect();
-        Self { specs: Vec::new(), line_starts }
+        Self { specs: Vec::new(), globs: Vec::new(), line_starts }
     }
 
     /// 1-based line of the byte at `offset`.
@@ -257,8 +272,33 @@ impl<'a> Visit<'a> for ImportCollector {
         } else if let Some(request) = uses::resolve_request(call) {
             // Finds a file without loading it, so nothing runs here.
             self.push(request, SpecKind::Type, call.span);
+        } else if let Some(glob) = import_meta_glob(call) {
+            self.globs.push(glob);
         }
         walk::walk_call_expression(self, call);
+    }
+
+    // `new URL('./worker.ts', import.meta.url)`, as `new Worker(...)` and
+    // assets take, finds a file without loading it.
+    fn visit_new_expression(&mut self, expr: &NewExpression<'a>) {
+        if let Expression::Identifier(callee) = &expr.callee
+            && callee.name == "URL"
+            && let [first, second, ..] = expr.arguments.as_slice()
+            && let Some(Expression::StringLiteral(url)) = first.as_expression()
+            && second.as_expression().is_some_and(is_import_meta_url)
+            && !url.value.contains(':')
+            && !url.value.starts_with('/')
+            // `new URL('.', import.meta.url)` is a directory.
+            && !matches!(url.value.as_str(), "" | "." | "..")
+            && !url.value.ends_with('/')
+        {
+            let value = url.value.as_str();
+            // A URL without `./` is still relative to the file.
+            let request =
+                if value.starts_with('.') { value.to_string() } else { format!("./{value}") };
+            self.push(&request, SpecKind::Type, expr.span);
+        }
+        walk::walk_new_expression(self, expr);
     }
 
     // `typeof import('x')` and `import('x').T` in a type refer to `x`'s
@@ -279,6 +319,66 @@ impl<'a> Visit<'a> for ImportCollector {
             self.push(&module.value, SpecKind::Type, decl.span);
         }
     }
+}
+
+fn is_import_meta(expr: &Expression<'_>) -> bool {
+    matches!(expr, Expression::MetaProperty(m) if m.meta.name == "import" && m.property.name == "meta")
+}
+
+fn is_import_meta_url(expr: &Expression<'_>) -> bool {
+    matches!(expr, Expression::StaticMemberExpression(m)
+        if m.property.name == "url" && is_import_meta(&m.object))
+}
+
+/// An `import.meta.glob('./pages/*.ts', { eager, import })` call.
+struct Glob {
+    patterns: Vec<String>,
+    /// Static when eager, else dynamic, as Vite loads them.
+    kind: SpecKind,
+    /// The one export each module is read for, from the `import` option.
+    import: Option<String>,
+    span: Span,
+}
+
+fn import_meta_glob(call: &CallExpression<'_>) -> Option<Glob> {
+    let Expression::StaticMemberExpression(callee) = &call.callee else { return None };
+    if !is_import_meta(&callee.object)
+        || !matches!(callee.property.name.as_str(), "glob" | "globEager")
+    {
+        return None;
+    }
+    let literal = |e: &Expression<'_>| match e {
+        Expression::StringLiteral(s) => Some(s.value.to_string()),
+        Expression::TemplateLiteral(t) => t.single_quasi().map(|q| q.to_string()),
+        _ => None,
+    };
+    let patterns = match call.arguments.first()?.as_expression()? {
+        Expression::ArrayExpression(a) => {
+            a.elements.iter().filter_map(|e| e.as_expression()).filter_map(literal).collect()
+        }
+        e => vec![literal(e)?],
+    };
+    let option = |name: &str| {
+        let Some(Expression::ObjectExpression(o)) = call.arguments.get(1)?.as_expression() else {
+            return None;
+        };
+        o.properties.iter().find_map(|p| match p {
+            ObjectPropertyKind::ObjectProperty(p)
+                if p.key.static_name().is_some_and(|k| k == name) =>
+            {
+                Some(&p.value)
+            }
+            _ => None,
+        })
+    };
+    let eager = callee.property.name == "globEager"
+        || matches!(option("eager"), Some(Expression::BooleanLiteral(b)) if b.value);
+    let import = match option("import") {
+        Some(Expression::StringLiteral(s)) if s.value != "*" => Some(s.value.to_string()),
+        _ => None,
+    };
+    let kind = if eager { SpecKind::Static } else { SpecKind::Dynamic };
+    Some(Glob { patterns, kind, import, span: call.span })
 }
 
 /// How to parse `path`. JavaScript files may contain JSX whatever their
@@ -416,6 +516,41 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].request, "fs");
         assert!(matches!(imports[0].kind, SpecKind::Static));
+    }
+
+    #[test]
+    fn worker_urls_and_glob_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::create_dir_all(temp_dir.path().join("pages")).unwrap();
+        fs::write(temp_dir.path().join("pages/a.ts"), "").unwrap();
+        fs::write(temp_dir.path().join("pages/b.ts"), "").unwrap();
+        let file = create_test_file(
+            temp_dir.path(),
+            "main.ts",
+            "new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+new URL('logo.svg', import.meta.url);
+new URL('https://example.com', import.meta.url);
+new URL('.', import.meta.url);
+const lazy = import.meta.glob('./pages/*.ts');
+const eager = import.meta.glob(['./pages/a.ts'], { eager: true, import: 'setup' });",
+        );
+        let specs = parse_imports(&file).unwrap().specs;
+        let got: Vec<(&str, SpecKind, u32)> =
+            specs.iter().map(|s| (s.request.as_str(), s.kind, s.line)).collect();
+        assert_eq!(
+            got,
+            [
+                ("./worker.ts", SpecKind::Type, 1),
+                ("./logo.svg", SpecKind::Type, 2),
+                ("./pages/a.ts", SpecKind::Dynamic, 5),
+                ("./pages/b.ts", SpecKind::Dynamic, 5),
+                ("./pages/a.ts", SpecKind::Static, 6),
+            ]
+        );
+        let uses = parse_file(&file, &Plugins::default(), true, false).unwrap().uses;
+        let used = |r: &str, u: Used| uses.usages.contains(&Usage { request: r.into(), used: u });
+        assert!(used("./pages/b.ts", Used::All));
+        assert!(used("./pages/a.ts", Used::Name("setup".into())));
     }
 
     #[test]

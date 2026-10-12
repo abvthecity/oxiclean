@@ -1,0 +1,10 @@
+{
+  "name": "vite-globs",
+  "private": true,
+  "main": "src/main.ts",
+  "dependencies": {
+    "only-in-page": "^1.0.0",
+    "only-in-worker": "^1.0.0",
+    "unused-pkg": "^1.0.0"
+  }
+}
