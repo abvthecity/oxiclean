@@ -64,6 +64,9 @@ enum Commands {
     /// Check for installed packages whose import pulls in too many modules
     #[command(name = "heavy-dependencies")]
     HeavyDependencies(oxiclean_dependencies::Config),
+    /// Check for packages the lockfile installs at more than one version
+    #[command(name = "duplicate-versions")]
+    DuplicateVersions(oxiclean_dependencies::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -132,6 +135,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_dependencies::run_heavy_dependencies_check(cfg)?,
             oxiclean_dependencies::HEAVY_STYLE,
             oxiclean_dependencies::HEAVY_RULE,
+        ),
+        Commands::DuplicateVersions(cfg) => (
+            oxiclean_dependencies::run_duplicate_versions_check(cfg)?,
+            oxiclean_dependencies::VERSIONS_STYLE,
+            oxiclean_dependencies::VERSIONS_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

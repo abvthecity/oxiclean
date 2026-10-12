@@ -31,6 +31,7 @@ const RULES: &[&str] = &[
     "catalog",
     "barrels",
     "heavy-dependencies",
+    "duplicate-versions",
 ];
 
 fn fixtures() -> PathBuf {

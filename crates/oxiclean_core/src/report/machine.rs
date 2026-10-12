@@ -83,6 +83,11 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
             "package '{}' pulls in {value} ({limit}), imported by {} files",
             dep.name, dep.importers
         ),
+        FindingKind::DuplicateVersions(dup) => format!(
+            "package '{}' is installed at {value}: {} ({limit})",
+            dup.name,
+            dup.versions.join(", ")
+        ),
     }
 }
 
@@ -173,6 +178,12 @@ pub fn write_json<W: Write>(
                     v["name"] = json!(dep.name);
                     v["importers"] = json!(dep.importers);
                 }
+                FindingKind::DuplicateVersions(dup) => {
+                    v["kind"] = json!("duplicate-versions");
+                    v["line"] = json!(dup.line);
+                    v["name"] = json!(dup.name);
+                    v["versions"] = json!(dup.versions);
+                }
             }
             v
         })
@@ -256,7 +267,8 @@ pub fn write_sarif<W: Write>(
                 | FindingKind::UnusedDependency(_)
                 | FindingKind::UnusedCatalogEntry(_)
                 | FindingKind::Barrel(_)
-                | FindingKind::HeavyDependency(_) => Vec::new(),
+                | FindingKind::HeavyDependency(_)
+                | FindingKind::DuplicateVersions(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -332,6 +344,7 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
         FindingKind::WholeGraph => key.push_str("<entry>"),
         FindingKind::Barrel(_) => key.push_str("<barrel>"),
         FindingKind::HeavyDependency(dep) => key.push_str(&dep.name),
+        FindingKind::DuplicateVersions(dup) => key.push_str(&dup.name),
         FindingKind::Cycle(cycle) => {
             for step in &cycle.steps {
                 key.push_str(&rel(&step.file, root));

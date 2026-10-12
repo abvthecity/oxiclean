@@ -60,3 +60,22 @@ pub const HEAVY_STYLE: ReportStyle = ReportStyle {
     max_unit: "modules",
     ok_message: "No heavy dependencies detected.",
 };
+
+/// Name of the duplicate package versions rule in `.oxicleanrc.json` and in
+/// JSON and SARIF output.
+pub const VERSIONS_RULE: &str = "duplicate-versions";
+
+/// Duplicate versions threshold used when the config file sets none: a
+/// package at two versions is reported.
+pub const VERSIONS_DEFAULT_THRESHOLD: usize = 2;
+
+/// How duplicate version findings are worded in the terminal report.
+pub const VERSIONS_STYLE: ReportStyle = ReportStyle {
+    description: "Packages the lockfile installs at more than one version",
+    heading: "Duplicate package versions detected",
+    threshold_unit: "versions",
+    value_label: |n| format!("{n} versions"),
+    max_label: "Most versions",
+    max_unit: "versions",
+    ok_message: "No duplicate package versions detected.",
+};
