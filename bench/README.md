@@ -1,14 +1,14 @@
 # Benchmarks
 
-`scripts/bench.sh` (or `just bench`) runs every checker against real-world
+`scripts/bench.sh` runs every checker against real-world
 monorepos pinned in [`targets.tsv`](targets.tsv) and compares the results with
 [`baseline.json`](baseline.json). Use it before and after a change to spot
 regressions in runtime, findings, or import resolution.
 
 ```bash
-just bench                      # compare against the baseline
-just bench --update-baseline    # record a new baseline
-just bench --install            # pnpm install each target first (needs network)
+scripts/bench.sh                      # compare against the baseline
+scripts/bench.sh --update-baseline    # record a new baseline
+scripts/bench.sh --install            # pnpm install each target first (needs network)
 ```
 
 Repos are cached in `target/bench-repos` (override with `OXICLEAN_BENCH_DIR`).

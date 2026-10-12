@@ -9,7 +9,7 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 cargo install --path crates/oxiclean
 
 # Or run from monorepo
-just run-oxiclean import-depth --help
+cargo run -- import-depth --help
 ```
 
 ## Usage
