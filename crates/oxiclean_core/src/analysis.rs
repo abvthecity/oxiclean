@@ -158,7 +158,7 @@ impl CommonArgs {
 
 /// The entries of the checks of exports when the config sets none: each
 /// package's entry points, test files, the files plugins make entries (as
-/// HTML pages that load scripts), and, as in knip, declaration files a
+/// HTML pages that load scripts and test setup files), and, as in knip, declaration files a
 /// tsconfig covers, which declare types for code oxiclean can't see.
 fn package_default_entries(
     project: &Project,
@@ -173,6 +173,9 @@ fn package_default_entries(
              cli file) found; set \"entries\" in the config file"
         );
     }
+    let mut dirs = vec![project.root.as_path()];
+    dirs.extend(project.workspace_packages().into_iter().map(|(_, d)| d));
+    paths.extend(dirs.into_iter().flat_map(|d| plugins.entries(d)));
     paths.extend(collect_files(root, |rel| {
         is_test_file(rel)
             || (is_declaration(rel) && project.tsconfig_for(&root.join(rel)).is_some())

@@ -156,3 +156,11 @@ fn plugins_option() {
 fn tool_configs() {
     assert_eq!(dev_dependencies("tool-configs"), ["package.json babel-plugin-unused:10"]);
 }
+
+/// Jest and Vitest plugins: what their configs name is used, and their
+/// setup files are entries, so `@testing-library/jest-dom` and `msw`, which
+/// only setup files import, are used; `jest-unused` is not.
+#[test]
+fn test_runners() {
+    assert_eq!(dev_dependencies("test-runners"), ["package.json jest-unused:14"]);
+}

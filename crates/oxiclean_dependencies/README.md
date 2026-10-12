@@ -73,8 +73,10 @@ A package is used when:
 - a config file beside the `package.json` names it: tsconfig `extends`,
   `compilerOptions.types`, `jsxImportSource` or `plugins`, ESLint
   `extends`, `plugins` or `parser`, Babel presets and plugins, PostCSS
-  plugins, or Prettier plugins and shared configs, by each tool's naming
-  rules (`airbnb` is `eslint-config-airbnb`);
+  plugins, Prettier plugins and shared configs, or what Jest's and
+  Vitest's configs name, by each tool's naming rules (`airbnb` is
+  `eslint-config-airbnb`, Jest's `jsdom` is `jest-environment-jsdom`).
+  Setup files these configs name are entries, so what they import is used;
 - an installed package that a file imports, a script loads or a config
   names lists it in `peerDependencies`;
 - it is `typescript`, or `@types/node`, `@types/bun` or `@types/jest`,
@@ -90,10 +92,10 @@ Where oxiclean differs from knip:
 
 - knip's plugins load tool configs by running them; oxiclean reads them
   without running them (see [Plugins](../../README.md#plugins)): tsconfig,
-  ESLint, Babel, PostCSS and Prettier configs so far, plus HTML pages, MDX
-  and stylesheets. A package that only another tool's config names, or
-  that a config computes, is reported unless it is in
-  `ignoreDependencies`;
+  ESLint, Babel, PostCSS, Prettier, Jest and Vitest configs so far, plus
+  HTML pages, MDX and stylesheets. A package that only another tool's
+  config names, that a config computes, or that a Jest preset's own config
+  names is reported unless it is in `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports
   the import as unlisted in the workspace package.
