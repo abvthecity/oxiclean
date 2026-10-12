@@ -18,6 +18,7 @@ oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli
 oxiclean_bloat = { version = "0.1.0", path = "../oxiclean_bloat" }
 oxiclean_cycles = { version = "0.1.0", path = "../oxiclean_cycles" }
 oxiclean_duplicates = { version = "0.1.0", path = "../oxiclean_duplicates" }
+oxiclean_unused_exports = { version = "0.1.0", path = "../oxiclean_unused_exports" }
 oxiclean_depth = { version = "0.1.0", path = "../oxiclean_depth" }
 rayon.workspace = true
 tracing.workspace = true

@@ -902,6 +902,7 @@ dependencies = [
  "oxiclean_cycles",
  "oxiclean_depth",
  "oxiclean_duplicates",
+ "oxiclean_unused_exports",
  "rayon",
  "serde_json",
  "tempfile",
@@ -934,6 +935,7 @@ dependencies = [
  "oxc_ast_visit",
  "oxc_parser",
  "oxc_span",
+ "oxc_syntax",
  "path-clean",
  "rayon",
  "schemars",
@@ -966,6 +968,16 @@ dependencies = [
 
 [[package]]
 name = "oxiclean_duplicates"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxiclean_core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "oxiclean_unused_exports"
 version = "0.1.0"
 dependencies = [
  "clap",

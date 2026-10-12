@@ -11,9 +11,10 @@ use std::{
 };
 use tracing::{debug, trace, warn};
 
-use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
+use crate::constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
+use crate::uses::{self, ModuleUses};
 
 /// The runtime imports of `file`, cached in `cache`: type-only imports are
 /// left out, so a declaration file has none. Assets such as `.css` have
@@ -51,8 +52,8 @@ pub fn imports_for(
 }
 
 /// The imports and exports of one file, plus the first syntax error if the
-/// file did not parse cleanly. After a syntax error `specs` and `exports` are
-/// incomplete, usually empty.
+/// file did not parse cleanly. After a syntax error `specs`, `exports` and
+/// `uses` are incomplete, usually empty.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ParsedImports {
@@ -60,6 +61,8 @@ pub struct ParsedImports {
     /// included as [`SpecKind::Type`].
     pub specs: Vec<Specifier>,
     pub exports: Vec<Export>,
+    /// What the file takes from the modules it imports.
+    pub uses: ModuleUses,
     pub error: Option<String>,
 }
 
@@ -72,18 +75,38 @@ pub struct ParsedImports {
 /// # Errors
 /// Fails if the file can't be read.
 pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
+    parse_file(file, true)
+}
+
+/// [`parse_imports`], leaving [`ParsedImports::exports`] and
+/// [`ParsedImports::uses`] empty unless `with_exports`: checks that only
+/// follow imports skip the extra walks over the AST.
+pub(crate) fn parse_file(file: &Path, with_exports: bool) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
 
-    let st = source_type_for(file);
+    let is_component = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| COMPONENT_EXTENSIONS.contains(&ext));
+    let (src, st) = if is_component {
+        (component_scripts(&src), SourceType::ts())
+    } else {
+        let st = source_type_for(file);
+        (src, st)
+    };
     let allocator = Allocator::default();
     let ParserReturn { program, errors, panicked, .. } =
         OxcParser::new(&allocator, &src, st).parse();
 
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
-    let exports = exports::collect(&program, &|offset| collector.line(offset));
+    let (exports, uses) = if with_exports {
+        (exports::collect(&program, &|offset| collector.line(offset)), uses::collect(&program))
+    } else {
+        (Vec::new(), ModuleUses::default())
+    };
     let mut specs = collector.specs;
     // A declaration file only describes types, so its imports load nothing.
     if is_declaration(file) {
@@ -98,7 +121,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
         errors.first().map(|e| e.message.to_string())
     };
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
-    Ok(ParsedImports { specs, exports, error })
+    Ok(ParsedImports { specs, exports, uses, error })
 }
 
 /// Walks the whole AST collecting module requests, including re-exports and
@@ -191,17 +214,56 @@ impl<'a> Visit<'a> for ImportCollector {
             && let Some(Expression::StringLiteral(sl)) = call.arguments[0].as_expression()
         {
             self.push(&sl.value, SpecKind::Static, call.span);
+        } else if let Some(request) = uses::resolve_request(call) {
+            // Finds a file without loading it, so nothing runs here.
+            self.push(request, SpecKind::Type, call.span);
         }
         walk::walk_call_expression(self, call);
     }
 
-    // `declare module 'x' { import ... }` blocks describe types, not runtime edges
-    fn visit_ts_module_declaration(&mut self, _decl: &TSModuleDeclaration<'a>) {}
+    // `declare module './x' { ... }` augments `./x`'s types: a type-only
+    // import of it. Imports inside describe types, not runtime edges.
+    fn visit_ts_module_declaration(&mut self, decl: &TSModuleDeclaration<'a>) {
+        if let TSModuleDeclarationName::StringLiteral(module) = &decl.id {
+            self.push(&module.value, SpecKind::Type, decl.span);
+        }
+    }
 }
 
 /// How to parse `path`. JavaScript files may contain JSX whatever their
 /// extension, as Next.js (SWC), Metro (Babel) and most bundlers allow, and a
 /// `.js` file may be either an ES module or a CommonJS script.
+/// The JS/TS of a `.vue`, `.svelte` or `.astro` file: its `<script>`
+/// blocks and Astro's `---` frontmatter, with everything else blanked to
+/// spaces so that offsets and lines stay those of the file.
+fn component_scripts(src: &str) -> String {
+    let mut keep = vec![false; src.len()];
+    let mut mark = |from: usize, to: usize| keep[from..to].iter_mut().for_each(|k| *k = true);
+    if let Some(rest) = src.strip_prefix("---")
+        && let Some(end) = rest.find("\n---")
+    {
+        mark(3, 3 + end);
+    }
+    let mut at = 0;
+    while let Some(open) = src[at..].find("<script") {
+        let open = at + open;
+        let Some(body) = src[open..].find('>').map(|i| open + i + 1) else { break };
+        let Some(close) = src[body..].find("</script>").map(|i| body + i) else { break };
+        mark(body, close);
+        at = close + "</script>".len();
+    }
+    let mut out = String::with_capacity(src.len());
+    for (i, c) in src.char_indices() {
+        if keep[i] || c == '\n' {
+            out.push(c);
+        } else {
+            // As many spaces as the character had bytes, to keep offsets.
+            out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        }
+    }
+    out
+}
+
 fn source_type_for(path: &Path) -> SourceType {
     let st = SourceType::from_path(path).unwrap_or_default();
     if !st.is_javascript() {
@@ -334,6 +396,44 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].request, "fs");
         assert!(matches!(imports[0].kind, SpecKind::Static));
+    }
+
+    #[test]
+    fn resolve_calls_find_files_without_loading_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.js",
+            "fork(require.resolve('./worker'));\nnew Worker(import.meta.resolve('./w2'));",
+        );
+        let specs = parse_imports(&file).unwrap().specs;
+        let got: Vec<(&str, SpecKind)> =
+            specs.iter().map(|s| (s.request.as_str(), s.kind)).collect();
+        assert_eq!(got, [("./worker", SpecKind::Type), ("./w2", SpecKind::Type)]);
+    }
+
+    #[test]
+    fn component_files_are_parsed_from_their_scripts() {
+        let temp_dir = TempDir::new().unwrap();
+        let vue = create_test_file(
+            temp_dir.path(),
+            "App.vue",
+            "<template><div>{{ a }} é</div></template>\n<script setup lang=\"ts\">\nimport { a } from './a';\n</script>\n<script>export default {}</script>",
+        );
+        let astro = create_test_file(
+            temp_dir.path(),
+            "Page.astro",
+            "---\nimport Layout from './Layout.astro';\n---\n<Layout><script>import './client';</script></Layout>",
+        );
+        let parsed = parse_imports(&vue).unwrap();
+        assert_eq!(parsed.error, None);
+        let got: Vec<(&str, u32)> =
+            parsed.specs.iter().map(|s| (s.request.as_str(), s.line)).collect();
+        assert_eq!(got, [("./a", 3)]);
+        assert_eq!(parsed.exports.len(), 1);
+        let got: Vec<String> =
+            parse_imports(&astro).unwrap().specs.into_iter().map(|s| s.request).collect();
+        assert_eq!(got, ["./Layout.astro", "./client"]);
     }
 
     #[test]

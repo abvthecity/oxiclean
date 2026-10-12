@@ -449,3 +449,44 @@ fn duplicates_in_every_format() {
     assert_eq!(result["ruleId"], "duplicates");
     assert_eq!(result["relatedLocations"][0]["physicalLocation"]["region"]["startLine"], 2);
 }
+
+/// Without `entries`, the checks of exports start from what each package
+/// offers: here the `exports` of `@acme/ui`, mapped from `dist` to `src`.
+#[test]
+fn unused_exports_and_types_in_every_format() {
+    let t = TempDir::new().unwrap();
+    write(t.path(), "pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
+    write(
+        t.path(),
+        "packages/ui/package.json",
+        r#"{"name":"@acme/ui","exports":{".":"./dist/index.js"}}"#,
+    );
+    write(t.path(), "packages/ui/src/index.ts", "export { Button } from './button';");
+    write(
+        t.path(),
+        "packages/ui/src/button.ts",
+        "export const Button = 1;\nexport const unusedHelper = 2;\nexport type Size = 'sm';",
+    );
+
+    let (code, out) = run(t.path(), &["unused-exports"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("export 'unusedHelper' (never imported)"), "{out}");
+    assert!(!out.contains("'Button'") && !out.contains("'Size'"), "{out}");
+
+    let (_, out) = run_stdout(t.path(), &["unused-types", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
+    let finding = &v["findings"][0];
+    assert_eq!(finding["kind"], "unused-export");
+    assert_eq!(finding["file"], "packages/ui/src/button.ts");
+    assert_eq!(finding["name"], "Size");
+    assert_eq!(finding["line"], 3);
+    assert_eq!(finding["package"], "@acme/ui");
+
+    let (_, out) = run_stdout(t.path(), &["unused-exports", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let result = &v["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "unused-exports");
+    assert_eq!(result["message"]["text"], "value 'unusedHelper' is exported but never imported");
+    assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 2);
+}

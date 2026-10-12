@@ -4,15 +4,23 @@
 #
 # Usage: scripts/bench-knip.sh [check...]
 #   check   oxiclean check to compare (default: all with a knip equivalent).
-#           Supported: cycles and duplicates, which knip names the same.
+#           Supported: cycles and duplicates, which knip names the same, and
+#           unused-exports and unused-types, which knip calls exports and types.
 #
-# Both tools get the same entry files: oxiclean's default (every non-test JS/TS
-# file inside a `src` directory). knip runs with that as `entry` and `project`
-# in every workspace and with all of its plugins off, so neither tool picks up
-# entries the other doesn't know about. knip then only reports on files inside
-# `src` directories, while oxiclean also reports on files outside them that
-# the entries import. (Making every file a knip project file instead makes
-# knip analyse files no entry reaches.) Repos are cached as in scripts/bench.sh
+# Both tools get the same entry files, with all of knip's plugins off so
+# neither tool picks up entries the other doesn't know about:
+# - For cycles and duplicates, oxiclean's default (every non-test JS/TS file
+#   inside a `src` directory). knip runs with that as `entry` and `project` in
+#   every workspace, so it only reports on files inside `src` directories,
+#   while oxiclean also reports on files outside them that the entries import.
+#   (Making every file a knip project file instead makes knip analyse files no
+#   entry reaches.)
+# - For unused exports and types, the default entries of both tools: each
+#   package's package.json `main`, `bin` and `exports` and its `index`, `main`
+#   and `cli` files, plus test files, which knip's test-runner plugins would
+#   add.
+#
+# Repos are cached as in scripts/bench.sh
 # ($OXICLEAN_BENCH_DIR) and are not installed; knip is installed once into
 # $OXICLEAN_BENCH_DIR/.knip. Each tool runs $OXICLEAN_BENCH_RUNS times and the
 # fastest time is kept. Detailed results go to $OXICLEAN_BENCH_DIR/.knip/results.
@@ -25,7 +33,8 @@
 # imports breaks, and should be 0; `ox_only` counts oxiclean cycles that share
 # no file with any knip cycle. For duplicate exports, a finding matches when
 # both tools list the same names in the same file: `knip_missed` counts knip
-# findings oxiclean lacks and `ox_only` the reverse.
+# findings oxiclean lacks and `ox_only` the reverse. For unused exports and
+# types, a finding is a file and a name, compared the same way.
 #
 # Needs bash 4+, GNU date, jq and Node.js (Linux).
 set -euo pipefail
@@ -39,7 +48,8 @@ KNIP_VERSION=6.41.0
 KNIP_DIR=$BENCH_DIR/.knip
 OUT_DIR=$KNIP_DIR/results
 
-declare -A KNIP_TYPE=([cycles]=cycles [duplicates]=duplicates)
+declare -A KNIP_TYPE=([cycles]=cycles [duplicates]=duplicates [unused-exports]=exports
+  [unused-types]=types)
 checks=("$@")
 if [[ ${#checks[@]} -eq 0 ]]; then checks=("${!KNIP_TYPE[@]}"); fi
 for check in "${checks[@]}"; do
@@ -55,17 +65,31 @@ if [[ ! -x $KNIP_DIR/node_modules/.bin/knip ]]; then
 fi
 KNIP=$KNIP_DIR/node_modules/.bin/knip
 
-# A knip config with oxiclean's default entries in every workspace and every
-# plugin turned off.
+# knip configs with every plugin turned off. knip.json has oxiclean's default
+# entries in every workspace; knip-exports.json has knip's own default entries
+# plus test files.
 CONFIG=$KNIP_DIR/knip.json
-(cd "$KNIP_DIR" && node --input-type=module -e '
-  const { Plugins } = await import("./node_modules/knip/dist/plugins/index.js");
-  const files = "**/src/**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}";
-  const skip = ["**/*.{test,spec}.*", "**/__tests__/**", "**/__mocks__/**", "**/__fixtures__/**", "**/*.d.{ts,mts,cts}"];
-  const workspace = { entry: [files, ...skip.map(p => "!" + p)], project: [files] };
-  for (const name of Object.keys(Plugins)) workspace[name] = false;
-  process.stdout.write(JSON.stringify({ workspaces: { ".": workspace, "**": workspace } }, null, 2));
-') >"$CONFIG"
+EXPORTS_CONFIG=$KNIP_DIR/knip-exports.json
+knip_config() {
+  (cd "$KNIP_DIR" && node --input-type=module -e '
+    const { Plugins } = await import("./node_modules/knip/dist/plugins/index.js");
+    const ext = "{js,jsx,ts,tsx,mjs,cjs,mts,cts}";
+    let workspace;
+    if (process.argv[1] === "exports") {
+      const entry = [`{index,cli,main}.${ext}`, `src/{index,cli,main}.${ext}`,
+        `**/*.{test,spec}.${ext}`, `**/__tests__/**/*.${ext}`];
+      workspace = { entry, project: [`**/*.${ext}`] };
+    } else {
+      const files = `**/src/**/*.${ext}`;
+      const skip = ["**/*.{test,spec}.*", "**/__tests__/**", "**/__mocks__/**", "**/__fixtures__/**", "**/*.d.{ts,mts,cts}"];
+      workspace = { entry: [files, ...skip.map(p => "!" + p)], project: [files] };
+    }
+    for (const name of Object.keys(Plugins)) workspace[name] = false;
+    process.stdout.write(JSON.stringify({ workspaces: { ".": workspace, "**": workspace } }, null, 2));
+  ' "$1")
+}
+knip_config src >"$CONFIG"
+knip_config exports >"$EXPORTS_CONFIG"
 
 ms_now() { date +%s%3N; }
 
@@ -116,6 +140,18 @@ compare_duplicates() {
     | "\($od | length) \($kd | length) \($kd - $od | length) \($od - $kd | length)"'
 }
 
+# Prints: our unused exports (or types), knip's, knip's that we lack, and ours
+# that knip lacks. A finding is a file and a name.
+compare_exports() {
+  local ours=$1 theirs=$2 type=${3:-exports}
+  jq -rn --slurpfile o "$ours" --slurpfile k "$theirs" --arg type "$type" '
+    ($o[0].findings | map({file, name}) | unique) as $ou
+    | ($k[0].issues | map(.file as $f | (.[$type] // [])[] | {file: $f, name}) | unique) as $ku
+    | "\($ou | length) \($ku | length) \($ku - $ou | length) \($ou - $ku | length)"'
+}
+
+compare_types() { compare_exports "$1" "$2" types; }
+
 printf '\n%-10s %-17s %10s %10s %7s %7s %12s %9s\n' \
   target check oxiclean knip ox knip knip_missed ox_only
 while IFS=$'\t' read -r name _ sha; do
@@ -133,7 +169,9 @@ while IFS=$'\t' read -r name _ sha; do
     theirs=$OUT_DIR/$name.knip-$type.json
     # No .oxicleanrc.json in the targets, so oxiclean runs with its defaults.
     ox_ms=$(best_time "$dir" "$ours" env NO_COLOR=1 "$BIN" "$check" --root . --format json)
-    knip_ms=$(best_time "$dir" "$theirs" "$KNIP" --config "$CONFIG" --include "$type" \
+    config=$CONFIG
+    if [[ $type == exports || $type == types ]]; then config=$EXPORTS_CONFIG; fi
+    knip_ms=$(best_time "$dir" "$theirs" "$KNIP" --config "$config" --include "$type" \
       --reporter json --no-progress --no-exit-code --no-config-hints)
     if [[ $ox_ms == FAIL || $knip_ms == FAIL ]]; then
       printf '%-10s %-17s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \

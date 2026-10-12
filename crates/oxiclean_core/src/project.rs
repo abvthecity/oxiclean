@@ -35,6 +35,10 @@ pub struct PathAlias {
 pub struct TsConfig {
     pub base_url: Option<PathBuf>,
     pub paths: Vec<PathAlias>,
+    /// `compilerOptions.outDir`, where the compiled files go.
+    pub out_dir: Option<PathBuf>,
+    /// `compilerOptions.rootDir`, the sources `out_dir` mirrors.
+    pub root_dir: Option<PathBuf>,
 }
 
 impl TsConfig {
@@ -144,6 +148,30 @@ impl Project {
         None
     }
 
+    /// The targets of tsconfig `paths` aliases named after a workspace
+    /// package, such as `"@acme/ui": ["./packages/ui/lib/index.mjs"]` or
+    /// `"@acme/ui/*": ["./packages/ui/lib/*.mjs"]`: absolute paths, possibly
+    /// with one `*`. Code importing the package loads them, so they are the
+    /// package's interface even when its package.json points elsewhere.
+    pub(crate) fn package_alias_targets(&self) -> Vec<String> {
+        let mut targets: Vec<String> = self
+            .tsconfigs
+            .values()
+            .flat_map(|cfg| &cfg.paths)
+            .filter(|alias| {
+                let name = match &alias.suffix {
+                    None => alias.prefix.as_str(),
+                    Some(_) => alias.prefix.trim_end_matches('/'),
+                };
+                self.workspace_packages.contains_key(name)
+            })
+            .flat_map(|alias| alias.targets.iter().cloned())
+            .collect();
+        targets.sort();
+        targets.dedup();
+        targets
+    }
+
     /// Directory of the workspace package called `name`, if any.
     pub fn workspace_package(&self, name: &str) -> Option<&Path> {
         self.workspace_packages.get(name).map(PathBuf::as_path)
@@ -223,12 +251,27 @@ impl Project {
                 if !parent.paths.is_empty() {
                     cfg.paths = parent.paths;
                 }
+                if parent.out_dir.is_some() {
+                    cfg.out_dir = parent.out_dir;
+                }
+                if parent.root_dir.is_some() {
+                    cfg.root_dir = parent.root_dir;
+                }
             }
         }
 
         let opts = json.get("compilerOptions");
         if let Some(base_url) = opts.and_then(|o| o.get("baseUrl")).and_then(|b| b.as_str()) {
             cfg.base_url = Some(normalize(&dir.join(base_url)));
+        }
+        let dir_option = |key: &str| {
+            opts.and_then(|o| o.get(key)).and_then(|v| v.as_str()).map(|v| normalize(&dir.join(v)))
+        };
+        if let Some(out_dir) = dir_option("outDir") {
+            cfg.out_dir = Some(out_dir);
+        }
+        if let Some(root_dir) = dir_option("rootDir") {
+            cfg.root_dir = Some(root_dir);
         }
         if let Some(paths) = opts.and_then(|o| o.get("paths")).and_then(|p| p.as_object()) {
             // Paths are relative to baseUrl if set, otherwise to the declaring tsconfig

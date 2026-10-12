@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use tracing::{debug, trace};
 
 use crate::{
-    constants::JS_TS_EXTENSIONS,
+    constants::{JS_TS_EXTENSIONS, is_declaration},
     error::{Error, Result},
 };
 
@@ -75,6 +75,50 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// The files under `root` outside `node_modules` and `.git` that `keep`
+/// accepts, given their path relative to `root`. `.gitignore` files are
+/// honoured as in [`collect_entries`].
+///
+/// # Errors
+/// Fails if the directory walk fails.
+pub(crate) fn collect_files(root: &Path, keep: impl Fn(&Path) -> bool) -> Result<Vec<PathBuf>> {
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != ".git" && e.file_name() != "node_modules")
+        .build();
+    let mut files = Vec::new();
+    for res in walker {
+        let dent = res.map_err(|source| Error::Walk { path: root.to_path_buf(), source })?;
+        let is_file = match dent.file_type() {
+            Some(t) if t.is_symlink() => dent.path().is_file(),
+            Some(t) => t.is_file(),
+            None => false,
+        };
+        if is_file && keep(dent.path().strip_prefix(root).unwrap_or(dent.path())) {
+            files.push(dent.into_path());
+        }
+    }
+    Ok(files)
+}
+
+/// A test file, by its path relative to the root: `*.test.*` and `*.spec.*`
+/// files and files in `__tests__` directories. Tests use a project's exports
+/// as other code does.
+pub(crate) fn is_test_file(rel: &Path) -> bool {
+    let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(ext) = rel.extension().and_then(|e| e.to_str()) else { return false };
+    if !JS_TS_EXTENSIONS.contains(&ext) || is_declaration(rel) {
+        return false;
+    }
+    let in_tests_dir = rel
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .any(|c| c == Component::Normal("__tests__".as_ref()));
+    in_tests_dir || name.contains(".test.") || name.contains(".spec.")
+}
+
 /// The `--entry-glob` filter: real globs plus plain substrings.
 struct EntryMatcher {
     globs: GlobSet,
@@ -125,10 +169,8 @@ fn is_source_file(p: &Path) -> bool {
     if !JS_TS_EXTENSIONS.contains(&ext) {
         return false;
     }
-    let is_declaration =
-        name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts");
     let is_test = name.contains(".test.") || name.contains(".spec.");
-    !is_declaration && !is_test
+    !is_declaration(p) && !is_test
 }
 
 /// Whether any parent directory of `rel` is named `src`. Compares whole path
