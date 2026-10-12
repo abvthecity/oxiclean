@@ -14,7 +14,7 @@ use crate::{
     entry_points::package_entry_points,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
-    parser::parse_file,
+    parser::{is_script_page, parse_file},
     report::{CheckResult, Finding, sort_findings},
     resolve,
     settings::file_globs,
@@ -71,8 +71,9 @@ impl CommonArgs {
     /// Like [`Self::analyze_with`], for the checks of exports. Unless the
     /// config sets `entries`, the entries are the files each package offers
     /// to others (package.json `main`, `exports`, `bin` and `scripts`, and
-    /// `index`, `main` and `cli` files), test files, and declaration
-    /// files in a tsconfig's directory, as in knip,
+    /// `index`, `main` and `cli` files, and config files), test files, HTML
+    /// pages that load scripts, and declaration files in a tsconfig's
+    /// directory, as in knip,
     /// rather than every file in `src`: an entry's exports always count as
     /// used, so with every file an entry nothing would be reported.
     ///
@@ -151,7 +152,8 @@ impl CommonArgs {
 }
 
 /// The entries of the checks of exports when the config sets none: each
-/// package's entry points, test files, and, as in knip, declaration files a
+/// package's entry points, test files, HTML pages that load scripts (as
+/// knip's Vite plugin takes them), and, as in knip, declaration files a
 /// tsconfig covers, which declare types for code oxiclean can't see.
 fn package_default_entries(project: &Project, root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = package_entry_points(project);
@@ -165,6 +167,7 @@ fn package_default_entries(project: &Project, root: &Path) -> Result<Vec<PathBuf
     paths.extend(collect_files(root, |rel| {
         is_test_file(rel)
             || (is_declaration(rel) && project.tsconfig_for(&root.join(rel)).is_some())
+            || is_script_page(&root.join(rel))
     })?);
     paths.sort();
     paths.dedup();
