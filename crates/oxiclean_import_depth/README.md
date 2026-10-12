@@ -6,7 +6,7 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 
 ```bash
 # Install oxiclean CLI
-cargo install --path apps/oxiclean
+cargo install --path crates/oxiclean
 
 # Or run from monorepo
 just run-oxiclean import-depth --help
