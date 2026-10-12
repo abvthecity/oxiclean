@@ -53,6 +53,10 @@
         "$ref": "#/$defs/Override"
       }
     },
+    "plugins": {
+      "description": "Turns plugins on or off. A plugin that isn't listed is on when its\ntool is used: when a package.json lists one of its packages, or\nalways for file formats and TypeScript.",
+      "$ref": "#/$defs/PluginSettings"
+    },
     "rules": {
       "description": "Settings per rule. A rule that isn't listed runs with its defaults.",
       "$ref": "#/$defs/Rules"
@@ -101,6 +105,61 @@
         },
         "rules": {
           "$ref": "#/$defs/Rules"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginSettings": {
+      "description": "Plugins: what oxiclean knows about a file format or a tool. `true`\nturns one on and `false` off; one left out is on when its tool is used.",
+      "type": "object",
+      "properties": {
+        "astro": {
+          "description": "Astro components' frontmatter and `<script>` blocks. Always on by\ndefault.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "html": {
+          "description": "HTML pages: `<script>` blocks and `<script src>`; pages that load the\nproject's scripts are entries. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "mdx": {
+          "description": "MDX files: their `import` and `export` lines. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "svelte": {
+          "description": "Svelte components' `<script>` blocks. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "typescript": {
+          "description": "The packages tsconfig files name in `extends`, `types`,\n`jsxImportSource` and `plugins`. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "vue": {
+          "description": "Vue single-file components' `<script>` blocks. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
         }
       },
       "additionalProperties": false

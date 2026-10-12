@@ -306,6 +306,8 @@ apply settings to some files. Every key is optional.
   // from each package's entry points. `*` stays within one directory and `**`
   // crosses directories.
   "entries": ["packages/*/src/**/*.{ts,tsx}"],
+  // Turn plugins on or off; see "Plugins" below
+  "plugins": { "html": true, "mdx": false },
   // Packages the unused dependency checks never report
   "ignoreDependencies": ["eslint-config-*"],
   // Also follow dynamic import() calls
@@ -345,6 +347,25 @@ the file, generated from the Rust types; point `$schema` at it for completion
 and validation in your editor. After changing the config types, regenerate it
 with `UPDATE_SCHEMA=1 cargo test -p oxiclean_core committed_schema`; a test
 fails while the committed schema is out of date.
+
+## Plugins
+
+Plugins teach oxiclean about file formats and tools around JS/TS, as knip's
+plugins do. Every check reads through them, so an import in an MDX page
+counts toward bloat, depth and cycles as well as unused dependencies. A
+plugin can parse a format into imports, make files entries, and name the
+packages a tool's config files use.
+
+| Plugin | What it reads | On by default |
+|---|---|---|
+| `html` | `<script>` blocks and `<script src>`; pages that load the project's scripts are entries | always |
+| `mdx` | `import` and `export` lines of `.mdx` files | always |
+| `vue`, `svelte`, `astro` | components' `<script>` blocks, and Astro's frontmatter | always |
+| `typescript` | packages tsconfig files name in `extends`, `types`, `jsxImportSource` and `plugins` | always |
+
+Tool plugins are on when a package.json in the project lists their
+package. `"plugins": { "html": false }` in `.oxicleanrc.json` turns a plugin
+off, and `true` turns one on.
 
 ## Output formats
 

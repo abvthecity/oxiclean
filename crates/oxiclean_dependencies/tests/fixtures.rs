@@ -130,3 +130,22 @@ fn fields_option() {
     assert_eq!(lines(&result, "dependencies"), ["package.json a:1"]);
     assert_eq!(lines(&result, "devDependencies"), ["packages/app/package.json d:1"]);
 }
+
+/// `plugins` turns a plugin off: with `html` off, a package only an HTML
+/// page reaches is unused.
+#[test]
+fn plugins_option() {
+    let t = tempfile::TempDir::new().unwrap();
+    let write = |path: &str, text: &str| {
+        let p = t.path().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("package.json", r#"{"name":"web","dependencies":{"preact":"1"}}"#);
+    write("index.html", r#"<script type="module" src="/src/app.ts"></script>"#);
+    write("src/app.ts", "import 'preact';");
+    write("src/index.ts", "export {};");
+    assert!(lines(&run(t.path()), "dependencies").is_empty());
+    write(".oxicleanrc.json", r#"{ "plugins": { "html": false } }"#);
+    assert_eq!(lines(&run(t.path()), "dependencies"), ["package.json preact:1"]);
+}

@@ -14,7 +14,8 @@ use crate::{
     entry_points::package_entry_points,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
-    parser::{is_script_page, parse_file},
+    parser::parse_file,
+    plugins::Plugins,
     report::{CheckResult, Finding, sort_findings},
     resolve,
     settings::file_globs,
@@ -99,10 +100,12 @@ impl CommonArgs {
 
         let project = Project::load(&root);
         debug!("Found {} workspace packages", project.workspace_package_count());
+        let plugins = Plugins::detect(&project, &config.plugins);
+        debug!("Plugins: {:?}", plugins);
 
         let mut entry_paths =
             if config.entries.is_empty() && defaults == DefaultEntries::PackageEntryPoints {
-                package_default_entries(&project, &root)?
+                package_default_entries(&project, &plugins, &root)?
             } else {
                 collect_entries(&CollectorConfig {
                     root: root.clone(),
@@ -126,15 +129,17 @@ impl CommonArgs {
         let graph = ModuleGraph::build(
             &entry_paths,
             |file: &Path| {
-                parse_file(file, extra.read_exports, extra.read_members).map(|parsed| ParsedFile {
-                    imports: parsed
-                        .specs
-                        .into_iter()
-                        .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
-                        .collect(),
-                    exports: parsed.exports,
-                    uses: parsed.uses,
-                    error: parsed.error,
+                parse_file(file, &plugins, extra.read_exports, extra.read_members).map(|parsed| {
+                    ParsedFile {
+                        imports: parsed
+                            .specs
+                            .into_iter()
+                            .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
+                            .collect(),
+                        exports: parsed.exports,
+                        uses: parsed.uses,
+                        error: parsed.error,
+                    }
                 })
             },
             |from: &Path, request: &str| {
@@ -147,15 +152,19 @@ impl CommonArgs {
 
         let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();
         let resolution = ResolutionStats::from_cache(&resolve_cache);
-        Ok(Analysis { root, graph, entries, resolution, project, config, config_path })
+        Ok(Analysis { root, graph, entries, resolution, project, plugins, config, config_path })
     }
 }
 
 /// The entries of the checks of exports when the config sets none: each
-/// package's entry points, test files, HTML pages that load scripts (as
-/// knip's Vite plugin takes them), and, as in knip, declaration files a
+/// package's entry points, test files, the files plugins make entries (as
+/// HTML pages that load scripts), and, as in knip, declaration files a
 /// tsconfig covers, which declare types for code oxiclean can't see.
-fn package_default_entries(project: &Project, root: &Path) -> Result<Vec<PathBuf>> {
+fn package_default_entries(
+    project: &Project,
+    plugins: &Plugins,
+    root: &Path,
+) -> Result<Vec<PathBuf>> {
     let mut paths = package_entry_points(project);
     debug!("Found {} package entry points", paths.len());
     if paths.is_empty() {
@@ -167,7 +176,7 @@ fn package_default_entries(project: &Project, root: &Path) -> Result<Vec<PathBuf
     paths.extend(collect_files(root, |rel| {
         is_test_file(rel)
             || (is_declaration(rel) && project.tsconfig_for(&root.join(rel)).is_some())
-            || is_script_page(&root.join(rel))
+            || plugins.is_entry(&root.join(rel))
     })?);
     paths.sort();
     paths.dedup();
@@ -196,6 +205,8 @@ pub struct Analysis {
     pub resolution: ResolutionStats,
     /// tsconfig and workspace information.
     pub project: Project,
+    /// The plugins that are on.
+    pub plugins: Plugins,
     /// The config file's settings, or the defaults when there is none.
     pub config: ConfigFile,
     /// Where the config file was read from.

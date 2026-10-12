@@ -20,6 +20,7 @@ mod graph;
 mod jsonc;
 mod members;
 mod parser;
+mod plugins;
 mod project;
 pub mod report;
 mod resolver;
@@ -41,6 +42,7 @@ pub use graph::{
 pub use jsonc::parse_jsonc;
 pub use members::ExportMember;
 pub use parser::{ParsedImports, imports_for, parse_imports};
+pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     CheckResult, CycleFinding, CycleStep, DuplicateExport, ExportName, Finding, FindingKind,
@@ -48,6 +50,8 @@ pub use report::{
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
-pub use settings::{ConfigFile, DependencyField, DependencyFields, RulePolicy, Severity};
+pub use settings::{
+    ConfigFile, DependencyField, DependencyFields, PluginSettings, RulePolicy, Severity,
+};
 pub use types::{SpecKind, Specifier};
 pub use uses::{ModuleUses, Usage, Used};
