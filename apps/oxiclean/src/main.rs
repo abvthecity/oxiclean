@@ -1,13 +1,20 @@
-use anyhow::Result;
+use std::{
+    io::{BufWriter, Write},
+    process::ExitCode,
+    time::Instant,
+};
+
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use log::{debug, info};
-
-use std::io::{BufWriter, Write};
-use std::time::Instant;
+use log::debug;
+use oxiclean_core::{
+    CheckResult,
+    report::{self, ReportContext, ReportStyle},
+};
 
 #[derive(Parser)]
-#[command(name = "oxiclean")]
+#[command(name = "oxiclean", version)]
 #[command(about = "A collection of tools for cleaning up codebases", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -22,131 +29,55 @@ enum Commands {
     ImportDepth(oxiclean_import_depth::Config),
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     env_logger::init();
-
-    // stdio is blocked by LineWriter, use a BufWriter to reduce syscalls.
-    // See https://github.com/rust-lang/rust/issues/60673
-    let mut stdout = BufWriter::new(std::io::stdout());
-
     let cli = Cli::parse();
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
     let start = Instant::now();
+    let (result, style, threshold) = match &cli.command {
+        Commands::ImportBloat(cfg) => (
+            oxiclean_import_bloat::run_import_bloat_check(cfg)?,
+            oxiclean_import_bloat::REPORT_STYLE,
+            cfg.threshold,
+        ),
+        Commands::ImportDepth(cfg) => (
+            oxiclean_import_depth::run_import_depth_check(cfg)?,
+            oxiclean_import_depth::REPORT_STYLE,
+            cfg.threshold,
+        ),
+    };
+    let elapsed_ms = start.elapsed().as_millis();
 
-    match cli.command {
-        Commands::ImportBloat(cfg) => {
-            let num_threads = rayon::current_num_threads();
-            info!(
-                "Running import bloat check with threshold: {} (using {} threads)",
-                cfg.threshold, num_threads
-            );
-            debug!("Config: root={:?}, entry_glob={:?}", cfg.root, cfg.entry_glob);
+    let cwd = std::env::current_dir().context("could not read the current directory")?;
+    let ctx = ReportContext { root: &result.root, cwd: &cwd };
 
-            let result = oxiclean_import_bloat::run_import_bloat_check(cfg.clone())?;
-            debug!("Found {} warnings", result.warnings.len());
+    // stdout is line-buffered; a BufWriter avoids a syscall per line.
+    // See https://github.com/rust-lang/rust/issues/60673
+    let mut stdout = BufWriter::new(std::io::stdout().lock());
+    print_report(&mut stdout, &result, &style, threshold, elapsed_ms, ctx)?;
+    stdout.flush()?;
 
-            let elapsed_ms = start.elapsed().as_millis();
-
-            if !result.warnings.is_empty() {
-                oxiclean_import_bloat::print_warnings_tree(
-                    &mut stdout,
-                    &result.warnings,
-                    &cfg,
-                    cfg.threshold,
-                )?;
-
-                print_finished(
-                    &mut stdout,
-                    elapsed_ms,
-                    result.files_analyzed,
-                    &result.resolution,
-                    num_threads,
-                )?;
-                stdout.flush()?;
-
-                // Non-zero exit to fail CI
-                std::process::exit(1);
-            } else {
-                info!("No bloat detected");
-                oxiclean_import_bloat::print_no_bloat_message(&mut stdout, cfg.threshold)?;
-                print_finished(
-                    &mut stdout,
-                    elapsed_ms,
-                    result.files_analyzed,
-                    &result.resolution,
-                    num_threads,
-                )?;
-                stdout.flush()?;
-            }
-
-            Ok(())
-        }
-        Commands::ImportDepth(cfg) => {
-            let num_threads = rayon::current_num_threads();
-            info!(
-                "Running import depth check with threshold: {} (using {} threads)",
-                cfg.threshold, num_threads
-            );
-            debug!("Config: root={:?}, entry_glob={:?}", cfg.root, cfg.entry_glob);
-
-            let result = oxiclean_import_depth::run_import_depth_check(cfg.clone())?;
-            debug!("Found {} warnings", result.warnings.len());
-
-            let elapsed_ms = start.elapsed().as_millis();
-
-            if !result.warnings.is_empty() {
-                oxiclean_import_depth::print_warnings_tree(
-                    &mut stdout,
-                    &result.warnings,
-                    &cfg,
-                    cfg.threshold,
-                )?;
-
-                print_finished(
-                    &mut stdout,
-                    elapsed_ms,
-                    result.files_analyzed,
-                    &result.resolution,
-                    num_threads,
-                )?;
-                stdout.flush()?;
-
-                // Non-zero exit to fail CI
-                std::process::exit(1);
-            } else {
-                info!("No depth issues detected");
-                oxiclean_import_depth::print_no_depth_issues_message(&mut stdout, cfg.threshold)?;
-                print_finished(
-                    &mut stdout,
-                    elapsed_ms,
-                    result.files_analyzed,
-                    &result.resolution,
-                    num_threads,
-                )?;
-                stdout.flush()?;
-            }
-
-            Ok(())
-        }
-    }
+    // A non-zero exit fails CI when anything crossed the threshold.
+    Ok(if result.findings.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
-fn print_finished(
+fn print_report(
     out: &mut impl Write,
+    result: &CheckResult,
+    style: &ReportStyle,
+    threshold: usize,
     elapsed_ms: u128,
-    files_analyzed: usize,
-    resolution: &oxiclean_core::ResolutionStats,
-    num_threads: usize,
-) -> Result<()> {
-    writeln!(
-        out,
-        "\n{} Finished in {}ms on {} files (using {} threads).",
-        "●".bright_blue(),
-        elapsed_ms.to_string().cyan(),
-        files_analyzed.to_string().cyan(),
-        num_threads.to_string().cyan()
-    )?;
+    ctx: ReportContext<'_>,
+) -> std::io::Result<()> {
+    if result.findings.is_empty() {
+        report::print_ok(out, style, threshold)?;
+    } else {
+        report::print_findings(out, &result.findings, style, threshold, ctx)?;
+    }
+    report::print_finished(out, result, elapsed_ms, rayon::current_num_threads(), ctx)?;
+
+    let resolution = &result.resolution;
     writeln!(
         out,
         "{} Resolved {} of {} imports ({}%), {} built-ins skipped.",
@@ -155,6 +86,5 @@ fn print_finished(
         (resolution.resolved + resolution.unresolved).to_string().cyan(),
         format!("{:.1}", resolution.resolved_percent()).cyan(),
         resolution.builtin.to_string().cyan()
-    )?;
-    Ok(())
+    )
 }

@@ -1,54 +1,25 @@
-use anyhow::Result;
 use clap::Parser;
-use log::{debug, info};
-use oxiclean_core::Project;
-use std::{path::PathBuf, sync::Arc};
+use oxiclean_core::{CommonArgs, report::ReportStyle};
 
+/// Options for the import bloat check.
 #[derive(Debug, Clone, Parser)]
 #[command(name = "import-bloat")]
 #[command(about = "Check for import bloat in JavaScript/TypeScript projects")]
 pub struct Config {
-    /// Root directory of the project (defaults to git root)
-    #[arg(long)]
-    pub root: Option<PathBuf>,
+    #[command(flatten)]
+    pub common: CommonArgs,
 
-    /// Threshold for number of modules
-    #[arg(long, default_value = "200")]
+    /// Flag imports and entries that reach at least this many unique modules
+    #[arg(long, default_value_t = 200)]
     pub threshold: usize,
-
-    /// Glob pattern to filter entry files
-    #[arg(long)]
-    pub entry_glob: Option<String>,
-
-    /// Resolution context, populated by `initialize()`
-    #[clap(skip)]
-    pub project: Arc<Project>,
 }
 
-impl Config {
-    /// Initialize the config by resolving the root directory and loading tsconfig paths
-    pub fn initialize(&mut self) -> Result<()> {
-        // Resolve root directory
-        let root = if let Some(r) = self.root.take() {
-            debug!("Using provided root directory: {:?}", r);
-            r.canonicalize().unwrap_or(r)
-        } else {
-            debug!("No root provided, searching for git root");
-            oxiclean_core::find_git_root()?
-        };
-        info!("Using root directory: {}", root.display());
-
-        // Discover tsconfig files and workspace packages
-        debug!("Loading project context");
-        self.project = Arc::new(Project::load(&root));
-        debug!("Found {} workspace packages", self.project.workspace_package_count());
-
-        self.root = Some(root);
-        Ok(())
-    }
-
-    /// Get the root directory, returning None if not initialized
-    pub fn root(&self) -> Option<&PathBuf> {
-        self.root.as_ref()
-    }
-}
+/// How import bloat findings are worded in the terminal report.
+pub const REPORT_STYLE: ReportStyle = ReportStyle {
+    heading: "Import bloat detected",
+    threshold_unit: "modules",
+    value_label: |n| format!("{n} modules"),
+    max_label: "Maximum bloat",
+    max_unit: "modules",
+    ok_message: "No bloat detected.",
+};

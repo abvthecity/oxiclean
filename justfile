@@ -142,8 +142,3 @@ init-hooks:
 # Run all checks before committing
 pre-commit: fmt-check lint test
     @echo "✓ Ready to commit!"
-
-# Full clean including cargo cache for this project
-clean-all: clean
-    rm -rf ~/.cargo/registry/index/*
-    rm -rf ~/.cargo/git/db/*

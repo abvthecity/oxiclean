@@ -5,22 +5,33 @@
 //! - Parsing import statements from JS/TS files
 //! - Resolving module paths (relative, tsconfig paths, node_modules, workspace packages)
 //! - Collecting entry files from a project
-//! - Configuration utilities (git root finding, tsconfig reading)
+//! - Building the module graph and analysing it ([`ModuleGraph`])
+//! - Reporting findings ([`report`])
 
+mod analysis;
 mod collector;
 mod config;
 mod constants;
+mod error;
+mod graph;
 mod jsonc;
 mod parser;
 mod project;
+pub mod report;
 mod resolver;
 mod types;
 
 // Re-export public API
+pub use analysis::{Analysis, CommonArgs};
 pub use collector::{CollectorConfig, collect_entries};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
-pub use parser::imports_for;
+pub use error::{Error, Result};
+pub use graph::{
+    BuildOptions, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
+};
+pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
+pub use report::{CheckResult, Finding, FindingKind};
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use types::{SpecKind, Specifier};

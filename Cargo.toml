@@ -9,9 +9,12 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = []
+# Edition 2024 and let-chains need 1.88; the oxc crates need 1.89.
+rust-version = "1.89"
 license = "MIT"
-repository = ""
+repository = "https://github.com/abvthecity/oxiclean"
+keywords = ["typescript", "javascript", "static-analysis", "bundle-size", "monorepo"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 anyhow = "1.0.100"
@@ -19,17 +22,24 @@ clap = { version = "4.5", features = ["derive"] }
 colored = "2.1"
 dashmap = "6.1"
 env_logger = "0.11"
+globset = "0.4.18"
 ignore = "0.4.25"
 log = "0.4"
 oxc_allocator = "0.97.0"
 oxc_ast = "0.97.0"
+oxc_ast_visit = "0.97.0"
 oxc_parser = "0.97.0"
 oxc_span = "0.97.0"
-oxc_syntax = "0.97.0"
 path-clean = "1.0.1"
 rayon = "1.10"
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+thiserror = "2.0.17"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 
 [profile.release]
 opt-level = 3

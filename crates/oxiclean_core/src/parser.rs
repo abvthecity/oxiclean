@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
@@ -32,21 +32,50 @@ pub fn imports_for(
         return Ok(Vec::new());
     }
 
+    let parsed = parse_imports(file)?;
+    if let Some(error) = &parsed.error {
+        warn!("{} has syntax errors; imports may be incomplete: {error}", file.display());
+    }
+    cache.insert(file_buf, parsed.specs.clone());
+    Ok(parsed.specs)
+}
+
+/// The imports of one file, plus the first syntax error if the file did not
+/// parse cleanly. After a syntax error `specs` is incomplete, usually empty.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedImports {
+    pub specs: Vec<Specifier>,
+    pub error: Option<String>,
+}
+
+/// Reads and parses `file`, returning every runtime import it makes.
+///
+/// Unlike [`imports_for`] this does not cache, and it reports syntax errors
+/// instead of silently returning a partial list.
+///
+/// # Errors
+/// Fails if the file can't be read.
+pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
 
     let st = source_type_for(file);
     let allocator = Allocator::default();
-    let ParserReturn { program, .. } = OxcParser::new(&allocator, &src, st).parse();
+    let ParserReturn { program, errors, panicked, .. } =
+        OxcParser::new(&allocator, &src, st).parse();
 
     let mut collector = ImportCollector::default();
     collector.visit_program(&program);
     let specs = collector.specs;
 
+    let error = if panicked && errors.is_empty() {
+        Some("parser gave up".to_string())
+    } else {
+        errors.first().map(|e| e.message.to_string())
+    };
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
-    cache.insert(file_buf, specs.clone());
-    Ok(specs)
+    Ok(ParsedImports { specs, error })
 }
 
 /// Walks the whole AST collecting module requests, including re-exports and
@@ -455,5 +484,18 @@ mod tests {
         let cache = DashMap::new();
         let file = create_test_file(temp_dir.path(), "styles.css", "@import './other.css';");
         assert!(imports_for(&file, &cache).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_imports_reports_syntax_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = create_test_file(temp_dir.path(), "bad.ts", "import a from './a';\nconst = ;");
+        let parsed = parse_imports(&file).unwrap();
+        // oxc stops at the first fatal error, so the import list is lost and
+        // the caller must be told rather than seeing a file with no imports.
+        assert!(parsed.error.is_some());
+
+        let ok = create_test_file(temp_dir.path(), "ok.js", "import a from './a';");
+        assert!(parse_imports(&ok).unwrap().error.is_none());
     }
 }

@@ -1,36 +1,28 @@
 //! Import bloat detection for JavaScript/TypeScript projects.
 //!
-//! This crate analyzes import statements in JS/TS codebases to identify files
-//! that import too many modules, which can lead to large bundle sizes.
+//! For every entry file, this counts how many unique modules each of its
+//! imports pulls in (transitively), and flags imports and entries whose count
+//! reaches a threshold. Large counts usually mean a barrel file or a heavy
+//! dependency is dragged into a bundle.
 //!
 //! # Examples
 //!
-//! ## Basic Usage
-//!
 //! ```no_run
-//! use oxiclean_import_bloat::{Config, run_import_bloat_check};
-//! use std::io::{BufWriter, Write};
+//! use oxiclean_core::{CommonArgs, report};
+//! use oxiclean_import_bloat::{Config, REPORT_STYLE, run_import_bloat_check};
+//! use std::path::Path;
 //!
-//! # fn main() -> anyhow::Result<()> {
-//! let cfg = Config {
-//!     root: Some(std::path::PathBuf::from("/path/to/project")),
-//!     threshold: 200,
-//!     entry_glob: None,
-//!     project: Default::default(),
-//! };
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let cfg = Config { common: CommonArgs::with_root("/path/to/project"), threshold: 200 };
+//! let result = run_import_bloat_check(&cfg)?;
 //!
-//! let result = run_import_bloat_check(cfg.clone())?;
-//!
-//! if !result.warnings.is_empty() {
-//!     // Use buffered output for better performance
-//!     let mut stdout = BufWriter::new(std::io::stdout());
-//!     oxiclean_import_bloat::print_warnings_tree(
-//!         &mut stdout,
-//!         &result.warnings,
-//!         &cfg,
-//!         cfg.threshold,
-//!     )?;
-//!     stdout.flush()?;
+//! let root = Path::new("/path/to/project");
+//! let ctx = report::ReportContext { root, cwd: root };
+//! let mut stdout = std::io::stdout().lock();
+//! if result.findings.is_empty() {
+//!     report::print_ok(&mut stdout, &REPORT_STYLE, cfg.threshold)?;
+//! } else {
+//!     report::print_findings(&mut stdout, &result.findings, &REPORT_STYLE, cfg.threshold, ctx)?;
 //! }
 //! # Ok(())
 //! # }
@@ -38,12 +30,7 @@
 
 mod checker;
 mod config;
-mod graph;
-mod reporter;
-mod types;
 
-// Re-export public API
-pub use checker::run_import_bloat_check;
-pub use config::Config;
-pub use reporter::{print_no_bloat_message, print_warnings_tree};
-pub use types::{CheckResult, Warning};
+pub use checker::{check, run_import_bloat_check};
+pub use config::{Config, REPORT_STYLE};
+pub use oxiclean_core::{CheckResult, Finding, FindingKind};
