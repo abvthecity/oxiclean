@@ -60,16 +60,17 @@ A package is used when:
   A file's import counts for the nearest
   `package.json` that lists the package, from the file's own package up to
   the root, as Node's resolution finds it;
-- a script in the `package.json` runs one of its binaries, directly or
-  through `npx`, `pnpm exec`, `yarn`, `pnpm run` or `bun run` of a name
-  that isn't a script, `cross-env`, `env-cmd`, `dotenv`, `concurrently` or
-  `sh -c`, or loads it with `--require`, `--import` or `--loader` (or
-  `-r` after `node`, `mocha` and the like, and in `NODE_OPTIONS`). A binary belongs to
-  the package whose installed `package.json` lists it in `bin`; for a
-  package that isn't installed, to the one a short list of known binaries
-  names (`tsc` for `typescript`) or else the unscoped package named after
-  it. Every package of the nearest `package.json` that provides the
-  binary is used, as `playwright` and `@playwright/test` both are;
+- a script in the `package.json`, a husky hook or a lint-staged command
+  runs one of its binaries, directly or through `npx`, `pnpm exec`,
+  `yarn`, `pnpm run` or `bun run` of a name that isn't a script,
+  `cross-env`, `env-cmd`, `dotenv`, `concurrently` or `sh -c`, or loads it
+  with `--require`, `--import` or `--loader` (or `-r` after `node`,
+  `mocha` and the like, and in `NODE_OPTIONS`). A binary belongs to the
+  package whose installed `package.json` lists it in `bin`; for a package
+  that isn't installed, to the one a short list of known binaries names
+  (`tsc` for `typescript`) or else the unscoped package named after it.
+  Every package of the nearest `package.json` that provides the binary is
+  used, as `playwright` and `@playwright/test` both are;
 - a config file beside the `package.json` names it: tsconfig `extends`,
   `compilerOptions.types`, `jsxImportSource` or `plugins`, ESLint
   `extends`, `plugins` or `parser`, Babel presets and plugins, PostCSS
@@ -92,11 +93,11 @@ Where oxiclean differs from knip:
 
 - knip's plugins load tool configs by running them; oxiclean reads them
   without running them (see [Plugins](../../README.md#plugins)): tsconfig,
-  ESLint, Babel, PostCSS, Prettier, Jest, Vitest and Expo configs so far,
-  Next.js and Expo Router routes, HTML pages, MDX and stylesheets. A
-  package that only another tool's config names, that a config computes,
-  or that a Jest preset's own config names is reported unless it is in
-  `ignoreDependencies`;
+  ESLint, Babel, PostCSS, Prettier, Jest, Vitest, Expo, Storybook, husky
+  and lint-staged configs so far, Next.js and Expo Router routes, stories,
+  HTML pages, MDX and stylesheets. A package that only another tool's
+  config names, that a config computes, or that a Jest preset's own config
+  names is reported unless it is in `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports
   the import as unlisted in the workspace package.

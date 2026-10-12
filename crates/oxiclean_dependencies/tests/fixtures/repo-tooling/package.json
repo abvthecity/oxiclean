@@ -1,0 +1,24 @@
+{
+  "name": "repo-tooling",
+  "private": true,
+  "main": "src/index.ts",
+  "devDependencies": {
+    "@commitlint/cli": "^19.0.0",
+    "@storybook/addon-essentials": "^8.0.0",
+    "@storybook/react-vite": "^8.0.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0",
+    "only-in-preview": "^1.0.0",
+    "only-in-story": "^1.0.0",
+    "storybook": "^8.0.0",
+    "stylelint": "^16.0.0",
+    "unused-pkg": "^1.0.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "storybook": "storybook dev -p 6006"
+  },
+  "lint-staged": {
+    "*.css": "stylelint --fix"
+  }
+}

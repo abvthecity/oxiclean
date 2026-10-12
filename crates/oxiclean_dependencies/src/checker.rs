@@ -197,7 +197,8 @@ pub fn unused_dependencies(analysis: &Analysis) -> Vec<Unused> {
     let mut binaries: HashSet<(usize, String)> = HashSet::new();
     for (i, manifest) in manifests.all.iter().enumerate() {
         let is_script = |name: &str| manifest.script_names.contains(name);
-        for script in &manifest.scripts {
+        let tool_scripts = analysis.plugins.scripts(&manifest.dir);
+        for script in manifest.scripts.iter().chain(&tool_scripts) {
             for r in script_refs(script, &is_script) {
                 match r {
                     ScriptRef::Binary(bin) => binaries.insert((i, bin)),

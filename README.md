@@ -371,6 +371,9 @@ packages a tool's config files use.
 | `vitest` | environments, reporters and coverage providers in the `test` options of Vitest's or Vite's config; its setup files are entries | when `vitest` is listed |
 | `next` | pages, App Router files (`page`, `layout`, `route`...), middleware and instrumentation are entries | when `next` is listed |
 | `expo` | config plugins in `app.json` and `app.config.*` and a package `main` are used; Expo Router's `app` routes are entries | when `expo` is listed |
+| `storybook` | addons and framework `.storybook/main.*` names are used; stories and `.storybook`'s `main`, `preview` and `manager` are entries | when `storybook` is listed |
+| `husky` | commands in `.husky` hooks and `simple-git-hooks`, read as scripts | when `husky` or `simple-git-hooks` is listed |
+| `lint-staged` | commands lint-staged's config runs, read as scripts | when `lint-staged` is listed |
 
 Tool plugins read JSON configs and the object a JS/TS config exports,
 including one a function returns, without running them; YAML configs

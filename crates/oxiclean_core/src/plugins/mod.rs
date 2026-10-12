@@ -6,7 +6,9 @@
 //! - make files entries ([`Plugin::is_entry`], [`Plugin::entries`]), as
 //!   HTML pages that load scripts and Jest's setup files are;
 //! - name the packages a package's config files use by string
-//!   ([`Plugin::references`]), as tsconfig `extends` does.
+//!   ([`Plugin::references`]), as tsconfig `extends` does;
+//! - name shell commands a tool runs ([`Plugin::scripts`]), as husky's
+//!   hooks.
 //!
 //! A tool plugin is on when a package.json in the project lists one of its
 //! [`Plugin::enablers`]; a plugin with none is always on. `plugins` in
@@ -18,6 +20,7 @@ mod config;
 mod css;
 mod eslint;
 mod expo;
+mod git_hooks;
 mod html;
 mod jest;
 mod markup;
@@ -25,6 +28,7 @@ mod mdx;
 mod next;
 mod postcss;
 mod prettier;
+mod storybook;
 mod typescript;
 mod vitest;
 
@@ -88,6 +92,12 @@ pub(crate) trait Plugin: Sync {
     fn entries(&self, _dir: &Path) -> Vec<PathBuf> {
         Vec::new()
     }
+
+    /// Shell commands the tool runs in package directory `dir`, read as
+    /// package.json scripts are, as husky's hooks.
+    fn scripts(&self, _dir: &Path) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Every plugin, in the order they run.
@@ -107,6 +117,9 @@ const ALL: &[&dyn Plugin] = &[
     &vitest::Vitest,
     &next::Next,
     &expo::Expo,
+    &storybook::Storybook,
+    &git_hooks::Husky,
+    &git_hooks::LintStaged,
 ];
 
 /// The names of every plugin, for the config schema and error messages.
@@ -186,6 +199,12 @@ impl Plugins {
     #[must_use]
     pub fn entries(&self, dir: &Path) -> Vec<PathBuf> {
         self.enabled.iter().flat_map(|p| p.entries(dir)).collect()
+    }
+
+    /// Shell commands tools run in package directory `dir`.
+    #[must_use]
+    pub fn scripts(&self, dir: &Path) -> Vec<String> {
+        self.enabled.iter().flat_map(|p| p.scripts(dir)).collect()
     }
 }
 
