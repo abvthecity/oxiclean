@@ -70,9 +70,12 @@ A package is used when:
   names (`tsc` for `typescript`) or else the unscoped package named after
   it. Every package of the nearest `package.json` that provides the
   binary is used, as `playwright` and `@playwright/test` both are;
-- a `tsconfig.json` or `tsconfig.*.json` beside the `package.json` names it
-  in `extends`, `compilerOptions.types`, `jsxImportSource` or `plugins`;
-- an installed package that a file imports, a script loads or a tsconfig
+- a config file beside the `package.json` names it: tsconfig `extends`,
+  `compilerOptions.types`, `jsxImportSource` or `plugins`, ESLint
+  `extends`, `plugins` or `parser`, Babel presets and plugins, PostCSS
+  plugins, or Prettier plugins and shared configs, by each tool's naming
+  rules (`airbnb` is `eslint-config-airbnb`);
+- an installed package that a file imports, a script loads or a config
   names lists it in `peerDependencies`;
 - it is `typescript`, or `@types/node`, `@types/bun` or `@types/jest`,
   which declare globals.
@@ -85,11 +88,11 @@ binary doesn't use `@types/x`. A package listed in both `dependencies` and
 
 Where oxiclean differs from knip:
 
-- knip's plugins read tool configs (ESLint's `extends`, Babel's presets)
-  and add their entries; oxiclean takes JS/TS config files and HTML pages
-  as entries and reads MDX imports and stylesheets' `@import`, `@use` and
-  `@plugin`, but reads no tool configs other than tsconfig yet, so
-  packages only those name are reported unless they are in
+- knip's plugins load tool configs by running them; oxiclean reads them
+  without running them (see [Plugins](../../README.md#plugins)): tsconfig,
+  ESLint, Babel, PostCSS and Prettier configs so far, plus HTML pages, MDX
+  and stylesheets. A package that only another tool's config names, or
+  that a config computes, is reported unless it is in
   `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports

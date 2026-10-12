@@ -121,8 +121,24 @@
           ],
           "default": null
         },
+        "babel": {
+          "description": "The presets and plugins Babel's config files and `babel` name.\nAlways on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "css": {
           "description": "Stylesheets (`.css`, `.scss`, `.sass`, `.less`): `@import`, `@use`,\n`@forward` and Tailwind's `@plugin`, `@config` and `@reference`.\nAlways on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "eslint": {
+          "description": "The packages ESLint's `.eslintrc*` files and `eslintConfig` name in\n`extends`, `plugins`, `parser` and import resolvers. Always on by\ndefault.",
           "type": [
             "boolean",
             "null"
@@ -139,6 +155,22 @@
         },
         "mdx": {
           "description": "MDX files: their `import` and `export` lines. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "postcss": {
+          "description": "The plugins and syntaxes PostCSS's config files and `postcss` name.\nAlways on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "prettier": {
+          "description": "The shared config and plugins Prettier's config files and\n`prettier` name. Always on by default.",
           "type": [
             "boolean",
             "null"
