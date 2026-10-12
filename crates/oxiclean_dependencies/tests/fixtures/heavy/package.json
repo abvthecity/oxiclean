@@ -1,0 +1,10 @@
+{
+  "name": "heavy",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@scope/sub": "^1.0.0",
+    "big-lib": "^1.0.0",
+    "tiny": "^1.0.0"
+  }
+}

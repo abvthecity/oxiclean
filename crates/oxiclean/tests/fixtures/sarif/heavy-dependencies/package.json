@@ -1,0 +1,8 @@
+{
+  "name": "sarif-heavy",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "big-lib": "^1.0.0"
+  }
+}

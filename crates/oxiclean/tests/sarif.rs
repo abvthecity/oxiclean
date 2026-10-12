@@ -30,6 +30,7 @@ const RULES: &[&str] = &[
     "dependencies",
     "catalog",
     "barrels",
+    "heavy-dependencies",
 ];
 
 fn fixtures() -> PathBuf {

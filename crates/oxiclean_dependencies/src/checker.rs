@@ -56,12 +56,12 @@ const KNOWN_BINARIES: &[(&str, &[&str])] = &[
 ];
 
 /// The package.json fields that list dependencies.
-const FIELDS: [Field; 4] =
+pub(crate) const FIELDS: [Field; 4] =
     [Field::Dependencies, Field::DevDependencies, Field::Peer, Field::Optional];
 
 /// A package.json field that lists packages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Field {
+pub(crate) enum Field {
     Dependencies,
     DevDependencies,
     /// `peerDependencies`: never reported, as the package that installs
@@ -73,7 +73,7 @@ enum Field {
 
 impl Field {
     /// The field's key in package.json.
-    fn key(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Dependencies => "dependencies",
             Self::DevDependencies => "devDependencies",
@@ -253,15 +253,15 @@ fn is_always_used(name: &str) -> bool {
 
 /// A package.json of the root or a workspace package.
 #[derive(Debug)]
-struct Manifest {
-    dir: PathBuf,
-    text: String,
+pub(crate) struct Manifest {
+    pub(crate) dir: PathBuf,
+    pub(crate) text: String,
     /// The packages in each field, sorted.
-    listed: HashMap<Field, Vec<String>>,
+    pub(crate) listed: HashMap<Field, Vec<String>>,
     /// The packages in `dependencies`.
     dependencies: HashSet<String>,
     /// Every package in any field.
-    all: HashSet<String>,
+    pub(crate) all: HashSet<String>,
     scripts: Vec<String>,
     script_names: HashSet<String>,
     /// The nearest manifest in an ancestor directory.
@@ -269,13 +269,13 @@ struct Manifest {
 }
 
 #[derive(Debug)]
-struct Manifests {
-    all: Vec<Manifest>,
+pub(crate) struct Manifests {
+    pub(crate) all: Vec<Manifest>,
     by_dir: HashMap<PathBuf, usize>,
 }
 
 impl Manifests {
-    fn load(project: &Project) -> Self {
+    pub(crate) fn load(project: &Project) -> Self {
         let mut dirs: Vec<PathBuf> = vec![project.root.clone()];
         dirs.extend(project.workspace_packages().into_iter().map(|(_, d)| d.to_path_buf()));
         dirs.sort();
@@ -329,12 +329,12 @@ impl Manifests {
     }
 
     /// The manifest of the nearest directory at or above `dir`.
-    fn owner(&self, dir: &Path) -> Option<usize> {
+    pub(crate) fn owner(&self, dir: &Path) -> Option<usize> {
         dir.ancestors().find_map(|a| self.by_dir.get(a).copied())
     }
 
     /// `start` and the manifests above it, nearest first.
-    fn chain(&self, start: usize) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn chain(&self, start: usize) -> impl Iterator<Item = usize> + '_ {
         std::iter::successors(Some(start), |&i| self.all[i].parent)
     }
 }
@@ -458,7 +458,7 @@ impl<'a> Used<'a> {
 
 /// The package a bare request names, as `@scope/pkg` for
 /// `@scope/pkg/sub`; `None` for paths and `node:` modules.
-fn package_name(request: &str) -> Option<&str> {
+pub(crate) fn package_name(request: &str) -> Option<&str> {
     if !is_bare(request) {
         return None;
     }
@@ -496,7 +496,7 @@ fn ships_types(pkg: &Value) -> bool {
 
 /// The 1-based line of the key `name` in the top-level `field` object of a
 /// package.json's text, or 0 if it can't be found.
-fn dependency_line(text: &str, field: &str, name: &str) -> u32 {
+pub(crate) fn dependency_line(text: &str, field: &str, name: &str) -> u32 {
     let bytes = text.as_bytes();
     let (mut depth, mut line, mut i) = (0_usize, 1_u32, 0);
     // The key at depth 1 whose value is being read.

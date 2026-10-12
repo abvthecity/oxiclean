@@ -37,6 +37,9 @@ oxiclean dependencies --root ./my-project
 # Find pnpm catalog entries that no package.json refers to
 oxiclean catalog --root ./my-project
 
+# Find installed packages whose import pulls in too many modules
+oxiclean heavy-dependencies --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -83,7 +86,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -304,6 +307,29 @@ counts as a use.
 **Usage:**
 ```bash
 oxiclean dependencies --root ./my-project
+```
+
+### Heavy Dependencies Checker
+
+Finds the packages a `package.json` lists whose import pulls in at least
+`threshold` modules (default 100), counted through `node_modules`, so the
+packages must be installed. Every entry point of a package the project
+imports (`date-fns`, `@scope/pkg/sub`) counts together, with the packages
+those import in turn; only runtime imports count. Findings point at the
+package's line in the `package.json` that lists it and say how many files
+import it.
+
+**Usage:**
+```bash
+oxiclean heavy-dependencies --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Heavy dependencies detected (threshold: 100 modules)
+
+package.json
+└──  package 'date-fns', imported by 12 files (pulls in 302 modules)
 ```
 
 ### Unused Catalog Entries Checker

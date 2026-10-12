@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use oxiclean_core::CommonArgs;
 use oxiclean_dependencies::{
     CheckResult, Config, FindingKind, run_catalog_check, run_dependencies_check,
+    run_heavy_dependencies_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -211,4 +212,29 @@ fn catalog() {
         })
         .collect();
     assert_eq!(got, ["default lodash:7", "legacy vue:13"]);
+}
+
+/// `heavy-dependencies`: what importing each package pulls in through
+/// `node_modules`, its own dependencies included, and every entry point the
+/// project imports counted together.
+#[test]
+fn heavy_dependencies() {
+    let cfg = Config { common: CommonArgs::with_root(fixture("heavy")) };
+    let result = run_heavy_dependencies_check(&cfg).expect("fixture analyses");
+    let got: Vec<String> = result
+        .findings
+        .iter()
+        .map(|f| {
+            let FindingKind::HeavyDependency(d) = &f.kind else { panic!("{f:?}") };
+            format!("{}:{} {} modules, {} importers", d.name, d.line, f.value, d.importers)
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "big-lib:7 5 modules, 1 importers",
+            "@scope/sub:6 3 modules, 1 importers",
+            "tiny:8 1 modules, 1 importers",
+        ]
+    );
 }
