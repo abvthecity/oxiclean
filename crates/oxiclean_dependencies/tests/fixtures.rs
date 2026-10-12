@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
-use oxiclean_dependencies::{CheckResult, Config, FindingKind, run_unused_dependencies_check};
+use oxiclean_dependencies::{CheckResult, Config, FindingKind, run_dependencies_check};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
@@ -28,7 +28,7 @@ fn lines(result: &CheckResult, field: &str) -> Vec<String> {
 
 fn run(root: &Path) -> CheckResult {
     let cfg = Config { common: CommonArgs::with_root(root) };
-    run_unused_dependencies_check(&cfg).expect("fixture analyses")
+    run_dependencies_check(&cfg).expect("fixture analyses")
 }
 
 fn dependencies(name: &str) -> Vec<String> {
@@ -120,9 +120,9 @@ fn fields_option() {
     write(
         ".oxicleanrc.json",
         r#"{
-          "rules": { "unused-dependencies": ["error", { "fields": ["dependencies"] }] },
+          "rules": { "dependencies": ["error", { "fields": ["dependencies"] }] },
           "overrides": [
-            { "packages": ["app"], "rules": { "unused-dependencies": ["error", { "fields": ["devDependencies"] }] } }
+            { "packages": ["app"], "rules": { "dependencies": ["error", { "fields": ["devDependencies"] }] } }
           ]
         }"#,
     );

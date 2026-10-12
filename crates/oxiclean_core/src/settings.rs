@@ -140,7 +140,7 @@ pub struct Rules {
     /// `devDependencies`. The `fields` option picks which of the two to
     /// check. A package in both is reported in `devDependencies`. Default
     /// threshold: 1.
-    pub unused_dependencies: Option<RuleSetting>,
+    pub dependencies: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -156,7 +156,7 @@ impl Rules {
             "unused-types" => self.unused_types.as_ref(),
             "unused-enum-members" => self.unused_enum_members.as_ref(),
             "unused-namespace-members" => self.unused_namespace_members.as_ref(),
-            "unused-dependencies" => self.unused_dependencies.as_ref(),
+            "dependencies" => self.dependencies.as_ref(),
             _ => None,
         }
     }
@@ -171,7 +171,7 @@ impl Rules {
             &self.unused_types,
             &self.unused_enum_members,
             &self.unused_namespace_members,
-            &self.unused_dependencies,
+            &self.dependencies,
         ]
         .into_iter()
         .flatten()
@@ -210,12 +210,12 @@ pub struct RuleOptions {
     pub threshold: Option<usize>,
     /// Globs of files, relative to the root, this rule does not report on.
     pub ignore_patterns: Vec<String>,
-    /// For `unused-dependencies`: the package.json fields to check. Both by
+    /// For `dependencies`: the package.json fields to check. Both by
     /// default.
     pub fields: Option<Vec<DependencyField>>,
 }
 
-/// A package.json field `unused-dependencies` can check.
+/// A package.json field `dependencies` can check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum DependencyField {
@@ -393,11 +393,11 @@ pub struct ResolvedRule {
     pub threshold: usize,
     /// The file matches an ignore pattern.
     pub ignored: bool,
-    /// The package.json fields `unused-dependencies` checks.
+    /// The package.json fields `dependencies` checks.
     pub fields: DependencyFields,
 }
 
-/// Which package.json fields `unused-dependencies` checks.
+/// Which package.json fields `dependencies` checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DependencyFields {

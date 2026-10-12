@@ -14,7 +14,7 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::{Config, DEFAULT_THRESHOLD, UNUSED_DEPENDENCIES_RULE},
+    config::{Config, DEFAULT_THRESHOLD, DEPENDENCIES_RULE},
     scripts::{ScriptRef, is_bare, script_refs},
 };
 
@@ -96,13 +96,13 @@ fn field_key(field: DependencyField) -> &'static str {
 /// # Errors
 /// Fails if the project root can't be found, the config file is invalid, or
 /// no entry files are found.
-pub fn run_unused_dependencies_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {UNUSED_DEPENDENCIES_RULE} check");
+pub fn run_dependencies_check(cfg: &Config) -> Result<CheckResult> {
+    info!("Starting {DEPENDENCIES_RULE} check");
     // Type-only imports use packages too, so they are resolved and the
     // files only they reach are read.
     let analysis =
         cfg.common.analyze_package_entries(BuildOptions::default().resolve_passive(true))?;
-    let policy = analysis.policy(UNUSED_DEPENDENCIES_RULE, DEFAULT_THRESHOLD)?;
+    let policy = analysis.policy(DEPENDENCIES_RULE, DEFAULT_THRESHOLD)?;
     let ignored = analysis.config.ignored_dependencies()?;
     Ok(check(&analysis, &policy, &ignored))
 }
@@ -114,7 +114,7 @@ pub fn run_unused_dependencies_check(cfg: &Config) -> Result<CheckResult> {
 #[must_use]
 pub fn check(analysis: &Analysis, policy: &RulePolicy, ignored: &GlobSet) -> CheckResult {
     if policy.min_threshold().is_none() {
-        info!("{UNUSED_DEPENDENCIES_RULE} is disabled");
+        info!("{DEPENDENCIES_RULE} is disabled");
         return analysis.finish(policy, Vec::new());
     }
     let findings: Vec<Finding> = unused_dependencies(analysis)
@@ -129,7 +129,7 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy, ignored: &GlobSet) -> Che
             Finding::new(u.manifest, FindingKind::UnusedDependency(dep), 1)
         })
         .collect();
-    info!("{UNUSED_DEPENDENCIES_RULE} check complete. Found {} unused", findings.len());
+    info!("{DEPENDENCIES_RULE} check complete. Found {} unused", findings.len());
     analysis.finish(policy, findings)
 }
 

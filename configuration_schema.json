@@ -72,7 +72,7 @@
       ]
     },
     "DependencyField": {
-      "description": "A package.json field `unused-dependencies` can check.",
+      "description": "A package.json field `dependencies` can check.",
       "type": "string",
       "enum": [
         "dependencies",
@@ -110,7 +110,7 @@
       "type": "object",
       "properties": {
         "fields": {
-          "description": "For `unused-dependencies`: the package.json fields to check. Both by\ndefault.",
+          "description": "For `dependencies`: the package.json fields to check. Both by\ndefault.",
           "type": [
             "array",
             "null"
@@ -187,6 +187,17 @@
             }
           ]
         },
+        "dependencies": {
+          "description": "Packages a package.json lists in `dependencies` or `devDependencies`\nthat no file imports and no script runs, as knip's `dependencies` and\n`devDependencies`. The `fields` option picks which of the two to\ncheck. A package in both is reported in `devDependencies`. Default\nthreshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "depth": {
           "description": "Imports with too long a chain of imports below them.\nDefault threshold: 20 levels.",
           "anyOf": [
@@ -200,17 +211,6 @@
         },
         "duplicates": {
           "description": "Files that export the same thing under more than one name, as knip's\n`duplicates`. Exports tagged `@alias` don't count. Default threshold:\n2 names.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unused-dependencies": {
-          "description": "Packages a package.json lists in `dependencies` or `devDependencies`\nthat no file imports and no script runs, as knip's `dependencies` and\n`devDependencies`. The `fields` option picks which of the two to\ncheck. A package in both is reported in `devDependencies`. Default\nthreshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

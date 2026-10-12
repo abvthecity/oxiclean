@@ -2,7 +2,7 @@
 
 Finds packages a `package.json` lists that no file imports and no script
 runs. It is the equivalent of knip's `dependencies` and `devDependencies`
-issue types with its plugins off, as one rule, `unused-dependencies`. Its
+issue types with its plugins off, as one rule, `dependencies`. Its
 `fields` option picks the fields to check: `dependencies`,
 `devDependencies`, or both, the default.
 
@@ -12,7 +12,7 @@ The root's `package.json` and each workspace package's are checked.
 ## Usage
 
 ```bash
-oxiclean unused-dependencies --root ./my-project
+oxiclean dependencies --root ./my-project
 ```
 
 ### Options
@@ -28,11 +28,11 @@ in `ignoreDependencies` in `.oxicleanrc.json`, as in knip:
 ```json
 {
   "ignoreDependencies": ["@types/*", "eslint-config-*"],
-  "rules": { "unused-dependencies": ["error", { "fields": ["dependencies"] }] },
+  "rules": { "dependencies": ["error", { "fields": ["dependencies"] }] },
   "overrides": [
     {
       "packages": ["@acme/app"],
-      "rules": { "unused-dependencies": ["warn", { "fields": ["dependencies", "devDependencies"] }] }
+      "rules": { "dependencies": ["warn", { "fields": ["dependencies", "devDependencies"] }] }
     }
   ]
 }
