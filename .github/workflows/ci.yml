@@ -153,26 +153,24 @@ jobs:
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      CARGO_INCREMENTAL: 0
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      # Prebuilt binary: building cargo-audit from source took ~3 minutes
+      # per run, and sccache only recovered a fraction of that.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: Run cargo-audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit
 
   ci-success:
     name: CI Success
     if: always()
-    needs: [test, fmt, clippy, build-release, security-audit]
+    needs: [test, fmt, clippy, msrv, build-release, security-audit]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
