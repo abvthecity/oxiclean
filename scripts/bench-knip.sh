@@ -66,19 +66,24 @@ best_time() {
   echo "$best"
 }
 
-# Prints: cycles files_in_cycles shared_files
+# Prints: our cycles, knip's cycles, knip cycles that none of our closing
+# imports breaks (should be 0), and our cycles with no file in any knip cycle.
 compare_cycles() {
   local ours=$1 theirs=$2
   jq -rn --slurpfile o "$ours" --slurpfile k "$theirs" '
+    def edges: [range(length) as $i | [.[$i], .[($i + 1) % length]]];
     ($o[0].findings | map([.cycle[].file])) as $oc
     | ($k[0].issues | map(.cycles // [] | map(map(.name))) | add // []) as $kc
-    | ($oc | add // [] | unique) as $of
+    | ($oc | map([.[-1], .[0]])) as $closing
     | ($kc | add // [] | unique) as $kf
-    | "\($oc | length) \($kc | length) \($of | length) \($kf | length) \([$of[] | select(. as $f | $kf | index($f))] | length)"'
+    | ($kc | map(select(edges | map(. as $e | $closing | index([$e]) != null) | any | not))
+       | length) as $missed
+    | ($oc | map(select(map(. as $f | $kf | index($f) != null) | any | not)) | length) as $only
+    | "\($oc | length) \($kc | length) \($missed) \($only)"'
 }
 
-printf '\n%-10s %-13s %9s %9s %8s %8s %10s %10s %7s\n' \
-  target check oxiclean knip ox_cyc knip_cyc ox_files knip_files shared
+printf '\n%-10s %-13s %10s %10s %7s %7s %12s %9s\n' \
+  target check oxiclean knip ox_cyc knip_cyc knip_missed ox_only
 while IFS=$'\t' read -r name _ sha; do
   [[ -z $name || $name == \#* ]] && continue
   dir=$BENCH_DIR/$name
@@ -94,8 +99,8 @@ while IFS=$'\t' read -r name _ sha; do
     # No .oxicleanrc.json in the targets, so oxiclean runs with its defaults.
     ox_ms=$(best_time "$dir" "NO_COLOR=1 '$BIN' $check --root . --format json" "$ours")
     knip_ms=$(best_time "$dir" "'$KNIP' --config '$CONFIG' --include $type --reporter json --no-progress --no-exit-code --no-config-hints" "$theirs")
-    read -r oc kc of kf shared < <(compare_cycles "$ours" "$theirs")
-    printf '%-10s %-13s %8sms %8sms %8s %8s %10s %10s %7s\n' \
-      "$name" "$check" "$ox_ms" "$knip_ms" "$oc" "$kc" "$of" "$kf" "$shared"
+    read -r oc kc missed only < <(compare_cycles "$ours" "$theirs")
+    printf '%-10s %-13s %8sms %8sms %7s %7s %12s %9s\n' \
+      "$name" "$check" "$ox_ms" "$knip_ms" "$oc" "$kc" "$missed" "$only"
   done
 done < bench/targets.tsv
