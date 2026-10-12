@@ -48,6 +48,6 @@ pub use report::{
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
-pub use settings::{ConfigFile, RulePolicy, Severity};
+pub use settings::{ConfigFile, DependencyField, DependencyFields, RulePolicy, Severity};
 pub use types::{SpecKind, Specifier};
 pub use uses::{ModuleUses, Usage, Used};

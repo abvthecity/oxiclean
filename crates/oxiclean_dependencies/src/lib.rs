@@ -2,9 +2,9 @@
 //!
 //! Reports the packages the root's and each workspace package's
 //! package.json lists that no file imports and no script runs, like knip's
-//! `dependencies` and `devDependencies` issue types with its plugins off:
-//! `unused-dependencies` covers `dependencies` and
-//! `unused-dev-dependencies` covers `devDependencies`. See
+//! `dependencies` and `devDependencies` issue types with its plugins off,
+//! as one rule, `unused-dependencies`, whose `fields` option picks
+//! `dependencies`, `devDependencies` or both (the default). See
 //! [`unused_dependencies`] for what counts as a use.
 //!
 //! # Examples
@@ -37,12 +37,6 @@ mod checker;
 mod config;
 mod scripts;
 
-pub use checker::{
-    Field, Unused, check, run_unused_dependencies_check, run_unused_dev_dependencies_check,
-    unused_dependencies,
-};
-pub use config::{
-    Config, DEFAULT_THRESHOLD, UNUSED_DEPENDENCIES_RULE, UNUSED_DEPENDENCIES_STYLE,
-    UNUSED_DEV_DEPENDENCIES_RULE, UNUSED_DEV_DEPENDENCIES_STYLE,
-};
-pub use oxiclean_core::{CheckResult, Finding, FindingKind, UnusedDependency};
+pub use checker::{Unused, check, run_unused_dependencies_check, unused_dependencies};
+pub use config::{Config, DEFAULT_THRESHOLD, UNUSED_DEPENDENCIES_RULE, UNUSED_DEPENDENCIES_STYLE};
+pub use oxiclean_core::{CheckResult, DependencyField, Finding, FindingKind, UnusedDependency};

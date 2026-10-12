@@ -6,36 +6,37 @@
 use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
-use oxiclean_dependencies::{
-    CheckResult, Config, FindingKind, run_unused_dependencies_check,
-    run_unused_dev_dependencies_check,
-};
+use oxiclean_dependencies::{CheckResult, Config, FindingKind, run_unused_dependencies_check};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
 
-/// Each finding as `file name:line`.
-fn lines(result: &CheckResult) -> Vec<String> {
+/// Each finding in package.json field `field` as `file name:line`.
+fn lines(result: &CheckResult, field: &str) -> Vec<String> {
     result
         .findings
         .iter()
-        .map(|f| {
+        .filter_map(|f| {
             let FindingKind::UnusedDependency(dep) = &f.kind else { panic!("{f:?}") };
             let file = f.file.strip_prefix(&result.root).unwrap().to_string_lossy();
-            format!("{} {}:{}", file.replace('\\', "/"), dep.name, dep.line)
+            (dep.field == field)
+                .then(|| format!("{} {}:{}", file.replace('\\', "/"), dep.name, dep.line))
         })
         .collect()
 }
 
+fn run(root: &Path) -> CheckResult {
+    let cfg = Config { common: CommonArgs::with_root(root) };
+    run_unused_dependencies_check(&cfg).expect("fixture analyses")
+}
+
 fn dependencies(name: &str) -> Vec<String> {
-    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
-    lines(&run_unused_dependencies_check(&cfg).expect("fixture analyses"))
+    lines(&run(&fixture(name)), "dependencies")
 }
 
 fn dev_dependencies(name: &str) -> Vec<String> {
-    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
-    lines(&run_unused_dev_dependencies_check(&cfg).expect("fixture analyses"))
+    lines(&run(&fixture(name)), "devDependencies")
 }
 
 /// knip's `test/dependencies/basic.test.ts`: two dependencies and one
@@ -95,4 +96,37 @@ fn workspace() {
             "packages/ui/package.json left-pad:8",
         ]
     );
+}
+
+/// The `fields` option picks the fields to check, per package too.
+#[test]
+fn fields_option() {
+    let t = tempfile::TempDir::new().unwrap();
+    let write = |path: &str, text: &str| {
+        let p = t.path().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
+    write(
+        "package.json",
+        r#"{"name":"root","dependencies":{"a":"1"},"devDependencies":{"b":"1"}}"#,
+    );
+    write(
+        "packages/app/package.json",
+        r#"{"name":"app","main":"index.ts","dependencies":{"c":"1"},"devDependencies":{"d":"1"}}"#,
+    );
+    write("packages/app/index.ts", "export {};");
+    write(
+        ".oxicleanrc.json",
+        r#"{
+          "rules": { "unused-dependencies": ["error", { "fields": ["dependencies"] }] },
+          "overrides": [
+            { "packages": ["app"], "rules": { "unused-dependencies": ["error", { "fields": ["devDependencies"] }] } }
+          ]
+        }"#,
+    );
+    let result = run(t.path());
+    assert_eq!(lines(&result, "dependencies"), ["package.json a:1"]);
+    assert_eq!(lines(&result, "devDependencies"), ["packages/app/package.json d:1"]);
 }

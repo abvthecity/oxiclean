@@ -544,10 +544,10 @@ fn unused_dependencies_in_every_format() {
     assert!(out.contains("package 'lodash' (never used)"), "{out}");
     assert!(!out.contains("react"), "{out}");
 
-    let (_, out) = run_stdout(t.path(), &["unused-dev-dependencies", "--format", "json"]);
+    let (_, out) = run_stdout(t.path(), &["unused-dependencies", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
-    let finding = &v["findings"][0];
+    assert_eq!(v["findings"].as_array().unwrap().len(), 2, "{out}");
+    let finding = &v["findings"][1];
     assert_eq!(finding["kind"], "unused-dependency");
     assert_eq!(finding["file"], "package.json");
     assert_eq!(finding["name"], "prettier");

@@ -3,5 +3,8 @@
   "dependencies": {
     "used": "*",
     "unused": "*"
+  },
+  "devDependencies": {
+    "unused-dev": "*"
   }
 }

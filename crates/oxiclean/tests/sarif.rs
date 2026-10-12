@@ -28,7 +28,6 @@ const RULES: &[&str] = &[
     "unused-enum-members",
     "unused-namespace-members",
     "unused-dependencies",
-    "unused-dev-dependencies",
 ];
 
 fn fixtures() -> PathBuf {

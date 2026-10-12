@@ -71,6 +71,14 @@
         "deny"
       ]
     },
+    "DependencyField": {
+      "description": "A package.json field `unused-dependencies` can check.",
+      "type": "string",
+      "enum": [
+        "dependencies",
+        "devDependencies"
+      ]
+    },
     "Override": {
       "description": "Rule settings for the files of some workspace packages or paths.",
       "type": "object",
@@ -101,6 +109,16 @@
       "description": "Options shared by every rule.",
       "type": "object",
       "properties": {
+        "fields": {
+          "description": "For `unused-dependencies`: the package.json fields to check. Both by\ndefault.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DependencyField"
+          }
+        },
         "ignorePatterns": {
           "description": "Globs of files, relative to the root, this rule does not report on.",
           "type": "array",
@@ -192,18 +210,7 @@
           ]
         },
         "unused-dependencies": {
-          "description": "Packages in a package.json's `dependencies` that no file imports and\nno script runs, as knip's `dependencies`. Default threshold: 1.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "unused-dev-dependencies": {
-          "description": "The same for `devDependencies`, as knip's `devDependencies`. A\npackage also in `dependencies` is reported here. Default threshold: 1.",
+          "description": "Packages a package.json lists in `dependencies` or `devDependencies`\nthat no file imports and no script runs, as knip's `dependencies` and\n`devDependencies`. The `fields` option picks which of the two to\ncheck. A package in both is reported in `devDependencies`. Default\nthreshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

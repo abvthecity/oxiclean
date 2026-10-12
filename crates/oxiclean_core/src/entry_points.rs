@@ -122,8 +122,8 @@ fn config_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.path())
+        .filter(|p| p.is_file())
         .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(is_config_file))
         .map(|p| p.canonicalize().unwrap_or(p))
         .collect();
