@@ -20,10 +20,8 @@ anyhow = "1.0.100"
 clap = { version = "4.5", features = ["derive"] }
 colored = "2.1"
 dashmap = "6.1"
-env_logger = "0.11"
 globset = "0.4.18"
 ignore = "0.4.25"
-log = "0.4"
 oxc_allocator = "0.97.0"
 oxc_ast = "0.97.0"
 oxc_ast_visit = "0.97.0"
@@ -33,12 +31,19 @@ path-clean = "1.0.1"
 rayon = "1.10"
 serde_json = "1.0.145"
 thiserror = "2.0.17"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+# Diagnostics go through `tracing`; the report is written to an explicit
+# `impl Write`. See clippy.toml for the banned `log` macros.
+dbg_macro = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
 
 [profile.release]
 opt-level = 3

@@ -10,13 +10,13 @@
 use dashmap::DashMap;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use log::{debug, trace};
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tracing::{debug, trace};
 
 use crate::jsonc::parse_jsonc;
 
