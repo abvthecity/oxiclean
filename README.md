@@ -23,23 +23,11 @@ oxiclean import-depth --help
 ## Development
 
 ```bash
-# Build
-just build
-
-# Run tools (from monorepo)
-just run-oxiclean import-bloat --root ./project
-just run-oxiclean import-depth --root ./project
-
-# Quality checks
-just test      # Run tests
-just lint      # Run clippy
-just fmt       # Format code
-just ci        # Run all checks
-just bench     # Run against pinned Next.js and Expo checkouts (see bench/README.md)
-
-# Show all commands
-just
+cargo build                                       # build
+cargo run -- import-bloat --root ./my-project     # run the CLI from source
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, linting and benchmarks.
 
 ## Project Structure
 
@@ -50,8 +38,7 @@ oxiclean/
 │   ├── oxiclean_core/         # Shared utilities (parser, resolver, etc.)
 │   ├── oxiclean_import_bloat/ # Import bloat detection library
 │   └── oxiclean_import_depth/ # Import depth analysis library
-├── Cargo.toml                 # Workspace configuration
-└── justfile                   # Build commands
+└── Cargo.toml                 # Workspace configuration
 ```
 
 ## Tools
@@ -193,7 +180,7 @@ log, which GitHub code scanning and other tools can show inline on pull requests
 
 ## Debugging & Logging
 
-Oxiclean uses the `log` crate with `env_logger` for debug output. Enable logging via the `RUST_LOG` environment variable:
+Oxiclean logs diagnostics with [`tracing`](https://docs.rs/tracing) to stderr, so stdout carries only the report. Enable logging via the `RUST_LOG` environment variable (errors only by default):
 
 ```bash
 # Show all debug logs

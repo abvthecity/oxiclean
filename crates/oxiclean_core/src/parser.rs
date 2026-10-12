@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use log::{debug, trace, warn};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
@@ -10,6 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tracing::{debug, trace, warn};
 
 use crate::constants::JS_TS_EXTENSIONS;
 use crate::types::{SpecKind, Specifier};

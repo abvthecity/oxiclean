@@ -6,10 +6,10 @@ Unified command-line interface for code quality and analysis tools for JavaScrip
 
 ```bash
 # From the oxiclean monorepo
-just install
+cargo install --path crates/oxiclean
 
 # Or build and run directly
-just run-oxiclean --help
+cargo run -- --help
 ```
 
 ## Usage

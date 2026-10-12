@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use dashmap::DashMap;
-use log::{debug, info};
+use tracing::{debug, info};
 
 use crate::{
     CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, SpecKind, collect_entries,

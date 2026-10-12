@@ -14,12 +14,12 @@ readme = "../../README.md"
 anyhow.workspace = true
 clap.workspace = true
 colored.workspace = true
-env_logger.workspace = true
-log.workspace = true
 oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli"] }
 oxiclean_import_bloat = { version = "0.1.0", path = "../oxiclean_import_bloat" }
 oxiclean_import_depth = { version = "0.1.0", path = "../oxiclean_import_depth" }
 rayon.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

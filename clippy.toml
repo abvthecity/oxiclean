@@ -1,0 +1,9 @@
+# Diagnostics go through `tracing`, not the `log` crate.
+disallowed-macros = [
+    { path = "log::error", reason = "use tracing::error" },
+    { path = "log::warn", reason = "use tracing::warn" },
+    { path = "log::info", reason = "use tracing::info" },
+    { path = "log::debug", reason = "use tracing::debug" },
+    { path = "log::trace", reason = "use tracing::trace" },
+    { path = "log::log", reason = "use tracing::event" },
+]
