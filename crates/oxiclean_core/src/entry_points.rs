@@ -27,13 +27,21 @@ const ENTRY_NAMES: &[&str] = &["index", "main", "cli"];
 ///   `types`, `typings`, `bin` and `exports` (every condition) point to,
 ///   with unbuilt build output mapped to `src/` as imports are;
 /// - the JS/TS files its `scripts` name, such as `node scripts/build.js`;
-/// - `index`, `main` and `cli` files in the package directory or its `src`.
+/// - `index`, `main` and `cli` files in the package directory or its `src`;
+/// - the files tsconfig `paths` aliases named after a workspace package
+///   point to, as MUI's `"@mui/icons-material/*"` does.
 #[must_use]
 pub(crate) fn package_entry_points(project: &Project) -> Vec<PathBuf> {
     let mut dirs: Vec<&Path> = vec![project.root.as_path()];
     dirs.extend(project.workspace_packages().into_iter().map(|(_, dir)| dir));
     let mut files: Vec<PathBuf> =
         dirs.into_iter().flat_map(|dir| entries_of(project, dir)).collect();
+    let root = project.root.as_path();
+    for target in project.package_alias_targets() {
+        let Ok(rel) = Path::new(&target).strip_prefix(root) else { continue };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        files.extend(package_target_files(project, root, &rel));
+    }
     files.sort();
     files.dedup();
     files
@@ -166,6 +174,19 @@ mod tests {
         write(root, "packages/app/index.js", "");
         write(root, "packages/app/src/other.ts", "");
 
+        // A tsconfig alias named after a workspace package, as in MUI.
+        write(
+            root,
+            "tsconfig.json",
+            r#"{"compilerOptions":{"paths":{"icons/*":["./packages/icons/lib/*.mjs"]}}}"#,
+        );
+        write(
+            root,
+            "packages/icons/package.json",
+            r#"{"name":"icons","exports":{"./*":"./src/*.js"}}"#,
+        );
+        write(root, "packages/icons/lib/Star.mjs", "");
+
         let project = Project::load(root);
         assert_eq!(
             rel(root, package_entry_points(&project)),
@@ -173,6 +194,7 @@ mod tests {
                 "bin/tool.js",
                 "packages/app/index.js",
                 "packages/app/src/cli.ts",
+                "packages/icons/lib/Star.mjs",
                 "packages/ui/src/icons/nested/moon.ts",
                 "packages/ui/src/icons/star.tsx",
                 "packages/ui/src/index.ts",

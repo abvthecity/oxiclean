@@ -148,6 +148,30 @@ impl Project {
         None
     }
 
+    /// The targets of tsconfig `paths` aliases named after a workspace
+    /// package, such as `"@acme/ui": ["./packages/ui/lib/index.mjs"]` or
+    /// `"@acme/ui/*": ["./packages/ui/lib/*.mjs"]`: absolute paths, possibly
+    /// with one `*`. Code importing the package loads them, so they are the
+    /// package's interface even when its package.json points elsewhere.
+    pub(crate) fn package_alias_targets(&self) -> Vec<String> {
+        let mut targets: Vec<String> = self
+            .tsconfigs
+            .values()
+            .flat_map(|cfg| &cfg.paths)
+            .filter(|alias| {
+                let name = match &alias.suffix {
+                    None => alias.prefix.as_str(),
+                    Some(_) => alias.prefix.trim_end_matches('/'),
+                };
+                self.workspace_packages.contains_key(name)
+            })
+            .flat_map(|alias| alias.targets.iter().cloned())
+            .collect();
+        targets.sort();
+        targets.dedup();
+        targets
+    }
+
     /// Directory of the workspace package called `name`, if any.
     pub fn workspace_package(&self, name: &str) -> Option<&Path> {
         self.workspace_packages.get(name).map(PathBuf::as_path)

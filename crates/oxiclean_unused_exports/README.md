@@ -58,6 +58,9 @@ finds with its plugins off, in the root package and each workspace package:
   resolves imports between workspace packages, from `dist/index.js` (or
   `build`, `lib`, `esm`, `cjs`, `out`) to `src/index.ts`;
 - the JS/TS files its `scripts` run, such as `node scripts/build.js`;
+- the targets of tsconfig `paths` aliases named after a workspace package,
+  such as `"@mui/icons-material/*": ["./packages/mui-icons-material/lib/*"]`,
+  since imports of the package resolve through the alias;
 - `index`, `main` and `cli` files in the package directory and its `src`;
 - test files (`*.test.*`, `*.spec.*` and files in `__tests__`), which knip's
   test-runner plugins add;

@@ -128,6 +128,46 @@ reads them:
   knip doesn't count; knip treats `lit` as an external package, so its
   exports count.
 
+### Unused exports and types (`unused-exports`/`unused-types` vs knip `exports`/`types`)
+
+Here both tools use their own default entries: package.json entry points,
+`index`/`main`/`cli` files, test files and declaration files (see the
+[check's README](../crates/oxiclean_unused_exports/README.md#entry-files)),
+with knip's plugins off.
+
+| Target | Check | oxiclean | knip | Speed-up | Findings (oxiclean / knip) | knip only | oxiclean only |
+|---|---|---|---|---|---|---|---|
+| Next.js | exports | 1.1s | 494s | ~440× | 629 / 1,094 | 529 | 64 |
+| Next.js | types | 1.1s | 552s | ~490× | 305 / 305 | 27 | 27 |
+| Expo | exports | 1.1s | 274s | ~250× | 522 / 805 | 311 | 28 |
+| Expo | types | 1.1s | 285s | ~250× | 265 / 456 | 205 | 14 |
+| MUI | exports | 0.8s | 117s | ~145× | 15 / 27 | 17 | 5 |
+| MUI | types | 0.7s | 114s | ~160× | 8 / 35 | 29 | 2 |
+| Vite | exports | 91ms | 3.7s | ~40× | 79 / 142 | 63 | 0 |
+| Vite | types | 95ms | 3.7s | ~40× | 28 / 235 | 207 | 0 |
+| Playwright | exports | 134ms | 3.2s | ~24× | 110 / 280 | 171 | 1 |
+| Playwright | types | 138ms | 2.8s | ~20× | 221 / 255 | 36 | 2 |
+| Lit | exports | 83ms | 2.7s | ~32× | 47 / 28 | 2 | 21 |
+| Lit | types | 82ms | 2.8s | ~35× | 18 / 17 | 2 | 3 |
+
+A finding matches when both tools report the same name in the same file.
+Most differences come from which files are entries:
+
+- **knip maps build output to sources only through tsconfig `outDir`.**
+  oxiclean also maps `dist`, `build`, `lib`, `esm`, `cjs` and `out` to `src`,
+  as it does when resolving imports between workspace packages, so a package
+  whose `main` or `exports` point to `dist` keeps its public interface. knip
+  instead checks those files as internal and reports what the index
+  re-exports. This accounts for most knip-only findings in Vite (with the
+  mapping turned off, 5 exports and 12 types differ), Playwright, Next.js
+  and Expo.
+- **knip reads more kinds of entry:** `.mdx` files, `import.meta.glob`,
+  files run by `fork()` or `spawn()`, and declaration files from each
+  tsconfig's `include`.
+- **Most of Lit's oxiclean-only findings are in fixture and example
+  packages** (`labs/test-projects`, `localize/examples`), which oxiclean
+  checks and knip, from its workspace list, does not.
+
 ## Choosing thresholds
 
 The default thresholds (300 modules for `bloat`, 20 levels for
