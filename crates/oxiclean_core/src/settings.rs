@@ -143,6 +143,14 @@ pub struct PluginSettings {
     /// The shared config and plugins Prettier's config files and
     /// `prettier` name. Always on by default.
     pub prettier: Option<bool>,
+    /// What Jest's config names: presets, environments, transforms,
+    /// reporters and the like are used, and setup files are entries. On
+    /// when a package.json lists `jest`.
+    pub jest: Option<bool>,
+    /// What the `test` options of Vitest's or Vite's config name:
+    /// environments, reporters and coverage providers are used, and setup
+    /// files are entries. On when a package.json lists `vitest`.
+    pub vitest: Option<bool>,
 }
 
 impl PluginSettings {
@@ -161,6 +169,8 @@ impl PluginSettings {
             "babel" => self.babel,
             "postcss" => self.postcss,
             "prettier" => self.prettier,
+            "jest" => self.jest,
+            "vitest" => self.vitest,
             _ => None,
         }
     }
@@ -181,6 +191,8 @@ impl PluginSettings {
             babel: v,
             postcss: v,
             prettier: v,
+            jest: v,
+            vitest: v,
         }
     }
 }

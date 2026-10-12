@@ -217,6 +217,40 @@ pub(super) fn prefixed(name: &str, prefix: &str) -> String {
     }
 }
 
+/// Extensions tried for a file a config names without one.
+const SOURCE_EXTENSIONS: &[&str] =
+    &["", ".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", ".cjs"];
+
+/// Sorts what a config names into packages and files: `<rootDir>/setup.ts`
+/// and `./setup` are files in `dir`, anything else a package.
+#[derive(Debug, Default)]
+pub(super) struct Named {
+    pub packages: Vec<String>,
+    pub files: Vec<std::path::PathBuf>,
+}
+
+impl Named {
+    pub(super) fn add(&mut self, dir: &Path, name: &str) {
+        let name = name.replace("<rootDir>", ".");
+        if is_path(&name) {
+            let base = dir.join(&name);
+            let found = SOURCE_EXTENSIONS
+                .iter()
+                .map(|ext| std::path::PathBuf::from(format!("{}{ext}", base.display())))
+                .find(|p| p.is_file());
+            self.files.extend(found.map(|p| p.canonicalize().unwrap_or(p)));
+        } else if !name.is_empty() {
+            self.packages.push(name);
+        }
+    }
+
+    pub(super) fn add_all(&mut self, dir: &Path, value: Option<&Value>) {
+        for name in names(value) {
+            self.add(dir, name);
+        }
+    }
+}
+
 /// Whether `name` is a path rather than a package.
 pub(super) fn is_path(name: &str) -> bool {
     name.starts_with('.') || name.starts_with('/') || Path::new(name).is_absolute()

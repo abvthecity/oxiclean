@@ -367,6 +367,8 @@ packages a tool's config files use.
 | `babel` | presets and plugins Babel's config files and `babel` name | always |
 | `postcss` | plugins and syntaxes PostCSS's config files and `postcss` name | always |
 | `prettier` | the shared config and plugins Prettier's config files and `prettier` name | always |
+| `jest` | presets, environments, transforms and reporters Jest's config names; its setup files are entries | when `jest` is listed |
+| `vitest` | environments, reporters and coverage providers in the `test` options of Vitest's or Vite's config; its setup files are entries | when `vitest` is listed |
 
 Tool plugins read JSON configs and the object a JS/TS config exports,
 including one a function returns, without running them; YAML configs

@@ -153,6 +153,14 @@
           ],
           "default": null
         },
+        "jest": {
+          "description": "What Jest's config names: presets, environments, transforms,\nreporters and the like are used, and setup files are entries. On\nwhen a package.json lists `jest`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "mdx": {
           "description": "MDX files: their `import` and `export` lines. Always on by default.",
           "type": [
@@ -187,6 +195,14 @@
         },
         "typescript": {
           "description": "The packages tsconfig files name in `extends`, `types`,\n`jsxImportSource` and `plugins`. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "vitest": {
+          "description": "What the `test` options of Vitest's or Vite's config name:\nenvironments, reporters and coverage providers are used, and setup\nfiles are entries. On when a package.json lists `vitest`.",
           "type": [
             "boolean",
             "null"

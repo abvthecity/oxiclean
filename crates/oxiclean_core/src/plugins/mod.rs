@@ -3,8 +3,8 @@
 //!
 //! - parse a file format into JS/TS and imports ([`Plugin::extract`]), as
 //!   the HTML plugin reads `<script>` tags;
-//! - make files entries ([`Plugin::is_entry`]), as HTML pages that load
-//!   scripts are;
+//! - make files entries ([`Plugin::is_entry`], [`Plugin::entries`]), as
+//!   HTML pages that load scripts and Jest's setup files are;
 //! - name the packages a package's config files use by string
 //!   ([`Plugin::references`]), as tsconfig `extends` does.
 //!
@@ -18,13 +18,19 @@ mod config;
 mod css;
 mod eslint;
 mod html;
+mod jest;
 mod markup;
 mod mdx;
 mod postcss;
 mod prettier;
 mod typescript;
+mod vitest;
 
-use std::{collections::HashSet, fmt, path::Path};
+use std::{
+    collections::HashSet,
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use oxc_span::SourceType;
 use serde_json::Value;
@@ -74,6 +80,12 @@ pub(crate) trait Plugin: Sync {
     fn references(&self, _dir: &Path) -> Vec<String> {
         Vec::new()
     }
+
+    /// The files the config files in package directory `dir` make entries,
+    /// as Jest's `setupFiles`.
+    fn entries(&self, _dir: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// Every plugin, in the order they run.
@@ -89,6 +101,8 @@ const ALL: &[&dyn Plugin] = &[
     &babel::Babel,
     &postcss::Postcss,
     &prettier::Prettier,
+    &jest::Jest,
+    &vitest::Vitest,
 ];
 
 /// The names of every plugin, for the config schema and error messages.
@@ -162,6 +176,12 @@ impl Plugins {
     #[must_use]
     pub fn references(&self, dir: &Path) -> Vec<String> {
         self.enabled.iter().flat_map(|p| p.references(dir)).collect()
+    }
+
+    /// The files the config files in package directory `dir` make entries.
+    #[must_use]
+    pub fn entries(&self, dir: &Path) -> Vec<PathBuf> {
+        self.enabled.iter().flat_map(|p| p.entries(dir)).collect()
     }
 }
 
