@@ -73,8 +73,12 @@ jobs:
         shell: bash
         run: scripts/bench.sh ${{ inputs.install && '--install' || '' }} | tee bench.txt
 
+      # knip takes about 3 minutes per run on Next.js, so one run per check
+      # keeps this step near 12 minutes instead of 35.
       - name: Run knip comparison
         shell: bash
+        env:
+          OXICLEAN_BENCH_RUNS: 1
         run: scripts/bench-knip.sh | tee bench-knip.txt
 
       - name: Save bench repos
