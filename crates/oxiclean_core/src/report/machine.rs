@@ -71,6 +71,10 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
         FindingKind::UnusedDependency(dep) => {
             format!("'{}' is listed in {} but never imported or run", dep.name, dep.field)
         }
+        FindingKind::UnusedCatalogEntry(entry) => format!(
+            "'{}' is in the {} catalog but no package.json refers to it",
+            entry.name, entry.catalog
+        ),
     }
 }
 
@@ -143,6 +147,12 @@ pub fn write_json<W: Write>(
                     v["line"] = json!(dep.line);
                     v["name"] = json!(dep.name);
                     v["field"] = json!(dep.field);
+                }
+                FindingKind::UnusedCatalogEntry(entry) => {
+                    v["kind"] = json!("unused-catalog-entry");
+                    v["line"] = json!(entry.line);
+                    v["name"] = json!(entry.name);
+                    v["catalog"] = json!(entry.catalog);
                 }
             }
             v
@@ -224,7 +234,8 @@ pub fn write_sarif<W: Write>(
                 | FindingKind::WholeGraph
                 | FindingKind::UnusedExport(_)
                 | FindingKind::UnusedMember(_)
-                | FindingKind::UnusedDependency(_) => Vec::new(),
+                | FindingKind::UnusedDependency(_)
+                | FindingKind::UnusedCatalogEntry(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -317,6 +328,11 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
             key.push_str(&dep.field);
             key.push('\0');
             key.push_str(&dep.name);
+        }
+        FindingKind::UnusedCatalogEntry(entry) => {
+            key.push_str(&entry.catalog);
+            key.push('\0');
+            key.push_str(&entry.name);
         }
     }
     // FNV-1a: stable across Rust versions and platforms, unlike `DefaultHasher`.

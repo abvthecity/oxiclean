@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
-use oxiclean_dependencies::{CheckResult, Config, FindingKind, run_dependencies_check};
+use oxiclean_dependencies::{
+    CheckResult, Config, FindingKind, run_catalog_check, run_dependencies_check,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
@@ -192,4 +194,21 @@ fn repo_tooling() {
 #[test]
 fn vite_globs() {
     assert_eq!(dependencies("vite-globs"), ["package.json unused-pkg:8"]);
+}
+
+/// `catalog`: entries of pnpm's default and named catalogs that no
+/// package.json or override refers to.
+#[test]
+fn catalog() {
+    let cfg = Config { common: CommonArgs::with_root(fixture("catalog")) };
+    let result = run_catalog_check(&cfg).expect("fixture analyses");
+    let got: Vec<String> = result
+        .findings
+        .iter()
+        .map(|f| {
+            let FindingKind::UnusedCatalogEntry(e) = &f.kind else { panic!("{f:?}") };
+            format!("{} {}:{}", e.catalog, e.name, e.line)
+        })
+        .collect();
+    assert_eq!(got, ["default lodash:7", "legacy vue:13"]);
 }

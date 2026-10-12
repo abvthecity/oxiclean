@@ -1,0 +1,6 @@
+{
+  "name": "@acme/web",
+  "dependencies": {
+    "react": "catalog:"
+  }
+}

@@ -27,3 +27,18 @@ pub const DEPENDENCIES_STYLE: ReportStyle = ReportStyle {
     max_unit: "",
     ok_message: "No unused dependencies detected.",
 };
+
+/// Name of the unused catalog entries rule in `.oxicleanrc.json` and in
+/// JSON and SARIF output, after knip's `catalog` issue type.
+pub const CATALOG_RULE: &str = "catalog";
+
+/// How unused catalog entry findings are worded in the terminal report.
+pub const CATALOG_STYLE: ReportStyle = ReportStyle {
+    description: "pnpm catalog entries no package.json refers to with catalog:",
+    heading: "Unused catalog entries detected",
+    threshold_unit: "",
+    value_label: |_| "never referenced".to_string(),
+    max_label: "",
+    max_unit: "",
+    ok_message: "No unused catalog entries detected.",
+};

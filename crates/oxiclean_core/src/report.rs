@@ -43,6 +43,29 @@ pub enum FindingKind {
     /// A package a package.json lists that nothing uses. The finding's file
     /// is the package.json.
     UnusedDependency(UnusedDependency),
+    /// A pnpm catalog entry no package.json refers to with `catalog:`. The
+    /// finding's file is pnpm-workspace.yaml.
+    UnusedCatalogEntry(UnusedCatalogEntry),
+}
+
+/// A pnpm catalog entry nothing refers to, for
+/// [`FindingKind::UnusedCatalogEntry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnusedCatalogEntry {
+    /// The package's name.
+    pub name: String,
+    /// The catalog: `default` for `catalog`, else the name under `catalogs`.
+    pub catalog: String,
+    /// 1-based line of the entry in pnpm-workspace.yaml.
+    pub line: u32,
+}
+
+impl UnusedCatalogEntry {
+    #[must_use]
+    pub fn new(name: String, catalog: String, line: u32) -> Self {
+        Self { name, catalog, line }
+    }
 }
 
 /// A package a package.json lists that nothing uses, for
@@ -190,6 +213,7 @@ impl Finding {
             FindingKind::DuplicateExport(dup) => dup.names.first().map_or(0, |n| n.line),
             FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => unused.line,
             FindingKind::UnusedDependency(dep) => dep.line,
+            FindingKind::UnusedCatalogEntry(entry) => entry.line,
             FindingKind::WholeGraph => 0,
         }
     }
@@ -246,6 +270,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::DuplicateExport(dup) => dup.names.first().map_or("", |n| n.name.as_str()),
         FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => &unused.name,
         FindingKind::UnusedDependency(dep) => &dep.name,
+        FindingKind::UnusedCatalogEntry(entry) => &entry.name,
         FindingKind::WholeGraph => "",
     }
 }
@@ -258,6 +283,9 @@ fn label(f: &Finding) -> String {
         }
         FindingKind::UnusedMember(_) => format!("member '{}'", request(f)),
         FindingKind::UnusedDependency(_) => format!("package '{}'", request(f)),
+        FindingKind::UnusedCatalogEntry(entry) => {
+            format!("catalog entry '{}' ({})", entry.name, entry.catalog)
+        }
         _ => format!("import '{}'", request(f)),
     }
 }

@@ -268,6 +268,10 @@ pub struct Rules {
     /// check. A package in both is reported in `devDependencies`. Default
     /// threshold: 1.
     pub dependencies: Option<RuleSetting>,
+    /// Entries of pnpm's `catalog` and `catalogs` in pnpm-workspace.yaml
+    /// that no package.json refers to with `catalog:`, as knip's `catalog`.
+    /// Default threshold: 1.
+    pub catalog: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -284,6 +288,7 @@ impl Rules {
             "unused-enum-members" => self.unused_enum_members.as_ref(),
             "unused-namespace-members" => self.unused_namespace_members.as_ref(),
             "dependencies" => self.dependencies.as_ref(),
+            "catalog" => self.catalog.as_ref(),
             _ => None,
         }
     }
@@ -299,6 +304,7 @@ impl Rules {
             &self.unused_enum_members,
             &self.unused_namespace_members,
             &self.dependencies,
+            &self.catalog,
         ]
         .into_iter()
         .flatten()
