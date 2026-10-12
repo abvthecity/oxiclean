@@ -20,12 +20,12 @@ oxiclean <COMMAND> [OPTIONS]
 
 ## Commands
 
-### `import-bloat`
+### `bloat`
 
 Detects excessive imports that can lead to large bundle sizes.
 
 ```bash
-oxiclean import-bloat --root ./my-project
+oxiclean bloat --root ./my-project
 ```
 
 **Options:**
@@ -36,7 +36,7 @@ oxiclean import-bloat --root ./my-project
 Thresholds, entry files and everything else are set in `.oxicleanrc.json`;
 see the [main README](../../README.md#configuration).
 
-See [crates/oxiclean_import_bloat/README.md](../oxiclean_import_bloat/README.md) for details.
+See [crates/oxiclean_bloat/README.md](../oxiclean_bloat/README.md) for details.
 
 ## Adding New Tools
 
@@ -62,7 +62,7 @@ pub fn run(cfg: Config) -> anyhow::Result<()> {
 
 // In crates/oxiclean/src/main.rs
 enum Commands {
-    ImportBloat(oxiclean_import_bloat::Config),
+    ImportBloat(oxiclean_bloat::Config),
     MyTool(my_tool::Config),
 }
 ```

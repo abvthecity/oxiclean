@@ -1,20 +1,20 @@
-//! Import depth analysis for JavaScript/TypeScript projects.
+//! Import bloat detection for JavaScript/TypeScript projects.
 //!
-//! For every direct import of an entry file, this measures the longest chain
-//! of imports below it. Deep chains slow module evaluation and resolution and
-//! usually point at layering problems. Modules that import each other in a
-//! cycle count as a single level, so results are stable across runs.
+//! For every entry file, this counts how many unique modules each of its
+//! imports pulls in (transitively), and flags imports and entries whose count
+//! reaches a threshold. Large counts usually mean a barrel file or a heavy
+//! dependency is dragged into a bundle.
 //!
 //! # Examples
 //!
 //! ```no_run
 //! use oxiclean_core::{CommonArgs, report};
-//! use oxiclean_import_depth::{Config, REPORT_STYLE, run_import_depth_check};
+//! use oxiclean_bloat::{Config, REPORT_STYLE, run_bloat_check};
 //! use std::path::Path;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let cfg = Config { common: CommonArgs::with_root("/path/to/project") };
-//! let result = run_import_depth_check(&cfg)?;
+//! let result = run_bloat_check(&cfg)?;
 //!
 //! let root = Path::new("/path/to/project");
 //! let ctx = report::ReportContext { root, cwd: root };
@@ -31,6 +31,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, run_import_depth_check};
+pub use checker::{check, run_bloat_check};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, Finding, FindingKind};

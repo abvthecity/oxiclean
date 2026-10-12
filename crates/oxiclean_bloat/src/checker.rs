@@ -10,7 +10,7 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// # Errors
 /// Fails if the project root can't be found, an entry glob is invalid, or no
 /// entry files are found.
-pub fn run_import_bloat_check(cfg: &Config) -> Result<CheckResult> {
+pub fn run_bloat_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import bloat check");
     let analysis = cfg.common.analyze()?;
     let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
@@ -84,10 +84,10 @@ mod tests {
     fn run_with(root: &Path, entry: &str, threshold: usize, dynamic: bool) -> CheckResult {
         let config = format!(
             r#"{{ "entries": ["{entry}"], "includeDynamic": {dynamic},
-                 "rules": {{ "import-bloat": ["error", {{ "threshold": {threshold} }}] }} }}"#
+                 "rules": {{ "bloat": ["error", {{ "threshold": {threshold} }}] }} }}"#
         );
         write(root, ".oxicleanrc.json", &config);
-        run_import_bloat_check(&Config { common: CommonArgs::with_root(root) }).unwrap()
+        run_bloat_check(&Config { common: CommonArgs::with_root(root) }).unwrap()
     }
 
     fn run(root: &Path, entry: &str, threshold: usize) -> CheckResult {

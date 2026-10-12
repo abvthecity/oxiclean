@@ -9,26 +9,26 @@ A Rust monorepo for code quality and analysis tools for JavaScript/TypeScript pr
 cargo install --path crates/oxiclean
 
 # Run import bloat checker
-oxiclean import-bloat --root ./my-project
+oxiclean bloat --root ./my-project
 
 # Run import depth checker
-oxiclean import-depth --root ./my-project
+oxiclean depth --root ./my-project
 
 # Find circular imports
-oxiclean import-cycles --root ./my-project
+oxiclean cycles --root ./my-project
 
 # Get help
 oxiclean --help
-oxiclean import-bloat --help
-oxiclean import-depth --help
-oxiclean import-cycles --help
+oxiclean bloat --help
+oxiclean depth --help
+oxiclean cycles --help
 ```
 
 ## Development
 
 ```bash
 cargo build                                       # build
-cargo run -- import-bloat --root ./my-project     # run the CLI from source
+cargo run -- bloat --root ./my-project     # run the CLI from source
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for tests, linting and benchmarks.
@@ -40,9 +40,9 @@ oxiclean/
 ├── crates/
 │   ├── oxiclean/              # Main CLI application (binary)
 │   ├── oxiclean_core/         # Shared utilities (parser, resolver, etc.)
-│   ├── oxiclean_import_bloat/ # Import bloat detection library
-│   ├── oxiclean_import_cycles/ # Circular import detection library
-│   └── oxiclean_import_depth/ # Import depth analysis library
+│   ├── oxiclean_bloat/        # Import bloat detection library
+│   ├── oxiclean_cycles/       # Circular import detection library
+│   └── oxiclean_depth/        # Import depth analysis library
 └── Cargo.toml                 # Workspace configuration
 ```
 
@@ -58,9 +58,9 @@ including thresholds, entry files and ignore patterns, is set in
 | `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-The default thresholds are 300 modules for `import-bloat` and 20 levels for `import-depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`import-cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -70,7 +70,7 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 
 **Usage:**
 ```bash
-oxiclean import-bloat --root ./my-project
+oxiclean bloat --root ./my-project
 ```
 
 **Example Output:**
@@ -95,7 +95,7 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 
 **Usage:**
 ```bash
-oxiclean import-depth --root ./my-project
+oxiclean depth --root ./my-project
 ```
 
 **Example Output:**
@@ -125,7 +125,7 @@ knip's `cycles` issue type. Type-only imports never count. Dynamic
 
 **Usage:**
 ```bash
-oxiclean import-cycles --root ./my-project
+oxiclean cycles --root ./my-project
 ```
 
 **Example Output:**
@@ -184,10 +184,10 @@ apply settings to some files. Every key is optional.
   "includeNodeModules": false,
   "rules": {
     // "warn" reports without failing the run; "error" fails it
-    "import-bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],
-    "import-depth": "off",
+    "bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],
+    "depth": "off",
     // Only report cycles of 3 or more files
-    "import-cycles": ["warn", { "threshold": 3 }]
+    "cycles": ["warn", { "threshold": 3 }]
   },
   // Later overrides win. `packages` matches workspace package names (globs
   // allowed) and `files` matches paths relative to the root; when both are
@@ -195,11 +195,11 @@ apply settings to some files. Every key is optional.
   "overrides": [
     {
       "packages": ["@acme/legacy-*"],
-      "rules": { "import-bloat": ["warn", { "threshold": 1000 }] }
+      "rules": { "bloat": ["warn", { "threshold": 1000 }] }
     },
     {
       "packages": ["@acme/web"],
-      "rules": { "import-depth": ["error", { "threshold": 12 }] }
+      "rules": { "depth": ["error", { "threshold": 12 }] }
     }
   ]
 }
@@ -227,7 +227,7 @@ error and warning counts, import resolution) and every finding with its
 log, which GitHub code scanning and other tools can show inline on pull requests:
 
 ```yaml
-- run: oxiclean import-bloat --format sarif > oxiclean.sarif || true
+- run: oxiclean bloat --format sarif > oxiclean.sarif || true
 - uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: oxiclean.sarif
@@ -239,16 +239,16 @@ Oxiclean logs diagnostics with [`tracing`](https://docs.rs/tracing) to stderr, s
 
 ```bash
 # Show all debug logs
-RUST_LOG=debug oxiclean import-depth
+RUST_LOG=debug oxiclean depth
 
 # Show only info level
-RUST_LOG=info oxiclean import-bloat
+RUST_LOG=info oxiclean bloat
 
 # Show trace level (very verbose)
-RUST_LOG=trace oxiclean import-depth
+RUST_LOG=trace oxiclean depth
 
 # Filter by module
-RUST_LOG=oxiclean_core::resolver=trace oxiclean import-depth
+RUST_LOG=oxiclean_core::resolver=trace oxiclean depth
 ```
 
 ## TypeScript Path Aliases

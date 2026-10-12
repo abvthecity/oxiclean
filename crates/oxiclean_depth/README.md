@@ -9,17 +9,17 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 cargo install --path crates/oxiclean
 
 # Or run from monorepo
-cargo run -- import-depth --help
+cargo run -- depth --help
 ```
 
 ## Usage
 
 ```bash
 # Analyze current directory (defaults to git root)
-oxiclean import-depth
+oxiclean depth
 
 # Analyze another project
-oxiclean import-depth --root ./my-project
+oxiclean depth --root ./my-project
 ```
 
 ### Options
@@ -34,7 +34,7 @@ in `.oxicleanrc.json`:
 ```json
 {
   "entries": ["src/**/*.tsx"],
-  "rules": { "import-depth": ["error", { "threshold": 20 }] }
+  "rules": { "depth": ["error", { "threshold": 20 }] }
 }
 ```
 
@@ -103,7 +103,7 @@ This is important because the positioning of the `type` keyword affects whether 
 ## Library Usage
 
 ```rust
-use oxiclean_import_depth::{Config, run_import_depth_check, print_warnings_tree};
+use oxiclean_depth::{Config, run_depth_check, print_warnings_tree};
 
 let mut cfg = Config {
     root: Some("./my-project".into()),
@@ -113,7 +113,7 @@ let mut cfg = Config {
 };
 
 cfg.initialize()?;
-let warnings = run_import_depth_check(cfg.clone())?;
+let warnings = run_depth_check(cfg.clone())?;
 
 if !warnings.warnings.is_empty() {
     print_warnings_tree(&mut std::io::stdout(), &warnings.warnings, &cfg, cfg.threshold)?;

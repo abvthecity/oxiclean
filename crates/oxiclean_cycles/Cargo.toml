@@ -1,6 +1,6 @@
 [package]
-name = "oxiclean_import_bloat"
-description = "Finds imports that pull too many modules into a JavaScript/TypeScript bundle"
+name = "oxiclean_cycles"
+description = "Finds circular imports in JavaScript/TypeScript projects"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli
 tracing.workspace = true
 
 [lib]
-name = "oxiclean_import_bloat"
+name = "oxiclean_cycles"
 path = "src/lib.rs"
 
 [dev-dependencies]

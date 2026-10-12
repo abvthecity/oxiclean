@@ -1,0 +1,4 @@
+{
+  "entries": ["src/index.ts"],
+  "rules": { "cycles": ["error", { "ignorePatterns": ["src/a.ts"] }] }
+}
