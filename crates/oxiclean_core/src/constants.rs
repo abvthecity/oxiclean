@@ -28,6 +28,33 @@ pub const JS_TS_EXTENSIONS: &[&str] = &[
 /// Extensions to try when resolving module imports (in priority order)
 pub const RESOLVE_EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
 
+/// Suffixes of TypeScript declaration files, tried after every runtime
+/// file when resolving an import.
+pub const DECLARATION_SUFFIXES: &[&str] = &[".d.ts", ".d.mts", ".d.cts"];
+
+/// Whether `path` is a TypeScript declaration file such as `index.d.ts`.
+#[must_use]
+pub fn is_declaration(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| DECLARATION_SUFFIXES.iter().any(|s| n.ends_with(s)))
+}
+
+/// The declaration file next to a JavaScript file that describes it:
+/// `a.d.ts` for `a.js` or `a.jsx`, `a.d.mts` for `a.mjs`, `a.d.cts` for
+/// `a.cjs`. `None` for other files, or when it doesn't exist.
+#[must_use]
+pub fn declaration_for(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let suffix = match path.extension()?.to_str()? {
+        "js" | "jsx" => "d.ts",
+        "mjs" => "d.mts",
+        "cjs" => "d.cts",
+        _ => return None,
+    };
+    let candidate = path.with_extension(suffix);
+    candidate.is_file().then_some(candidate)
+}
+
 /// Index file names to try when resolving directory imports
 pub const INDEX_FILES: &[&str] = &[
     "index.ts",

@@ -162,7 +162,9 @@ lists every import of the cycle, and SARIF output links to each of them.
 Finds modules that export the same thing under more than one name, like
 knip's `duplicates` issue type: `export const b = a` or `export default a`
 where `a` is already exported. Importers can then reach one value through
-two names. It checks every parsed file outside `node_modules`.
+two names. It checks every parsed file outside `node_modules`, including
+declaration files: those imported for their types, and the `.d.ts` next to
+a `.js` file.
 
 As in knip, these don't count: a name with an `@alias` tag in the comment
 before it, re-exports and imports from the project passed on as the original, renames with

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use oxiclean_core::{
-    Analysis, CheckResult, DuplicateExport, Export, ExportForm, ExportName, Finding, FindingKind,
-    Result, RulePolicy,
+    Analysis, BuildOptions, CheckResult, DuplicateExport, Export, ExportForm, ExportName, Finding,
+    FindingKind, Result, RulePolicy,
 };
 use tracing::info;
 
@@ -15,7 +15,9 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// no entry files are found.
 pub fn run_duplicates_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting duplicate exports check");
-    let analysis = cfg.common.analyze()?;
+    // Declaration files and the files reached only through type imports
+    // export too.
+    let analysis = cfg.common.analyze_with(BuildOptions::default().resolve_passive(true))?;
     let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy))
 }
@@ -39,6 +41,7 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
                 module
                     .edges
                     .iter()
+                    .chain(&module.passive_edges)
                     .any(|e| e.request == request && !graph.module(e.target).in_node_modules())
             };
             let groups = if module.in_node_modules() {

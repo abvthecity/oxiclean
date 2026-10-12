@@ -35,7 +35,7 @@ fn knip_basic_fixture() {
     assert_eq!(duplicates(&fixture("knip-basic")), ["my-module.ts: exportedResult:26, default:30"]);
 }
 
-/// knip's `test/exports/duplicates-alias.test.ts`: `@alias` and
+/// knip's `test/exports/duplicate-exports-alias.test.ts`: `@alias` and
 /// re-exports don't count, and neither does `export { X }; export default X`.
 #[test]
 fn knip_alias_fixture() {
@@ -47,5 +47,16 @@ fn originals_exported_later_and_forwarded_imports() {
     assert_eq!(
         duplicates(&fixture("forms")),
         ["src/alias-first.ts: long:3, short:2, default:4", "src/renames.ts: local:5, copy:6",]
+    );
+}
+
+/// Declaration files are checked too, whether imported for types
+/// (`types.d.ts`) or next to the JavaScript file they describe
+/// (`useThing.d.ts`), as in MUI's `useAutocomplete.d.ts`.
+#[test]
+fn declaration_files() {
+    assert_eq!(
+        duplicates(&fixture("declarations")),
+        ["src/types.d.ts: test:4, default:5", "src/useThing.d.ts: useThing:1, default:3"]
     );
 }

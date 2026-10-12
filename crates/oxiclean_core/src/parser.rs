@@ -11,7 +11,7 @@ use std::{
 };
 use tracing::{debug, trace, warn};
 
-use crate::constants::JS_TS_EXTENSIONS;
+use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
 
@@ -37,8 +37,10 @@ pub fn imports_for(
     if let Some(error) = &parsed.error {
         warn!("{} has syntax errors; imports may be incomplete: {error}", file.display());
     }
-    cache.insert(file_buf, parsed.specs.clone());
-    Ok(parsed.specs)
+    let specs: Vec<Specifier> =
+        parsed.specs.into_iter().filter(|s| s.kind != SpecKind::Type).collect();
+    cache.insert(file_buf, specs.clone());
+    Ok(specs)
 }
 
 /// The imports and exports of one file, plus the first syntax error if the
@@ -47,16 +49,18 @@ pub fn imports_for(
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ParsedImports {
+    /// Every module the file imports or re-exports from, type-only ones
+    /// included as [`SpecKind::Type`].
     pub specs: Vec<Specifier>,
     pub exports: Vec<Export>,
     pub error: Option<String>,
 }
 
-/// Reads and parses `file`, returning every runtime import it makes and
-/// every name it exports.
+/// Reads and parses `file`, returning every import it makes and every name
+/// it exports.
 ///
-/// Unlike [`imports_for`] this does not cache, and it reports syntax errors
-/// instead of silently returning a partial list.
+/// Unlike [`imports_for`] this does not cache, keeps type-only imports, and
+/// reports syntax errors instead of silently returning a partial list.
 ///
 /// # Errors
 /// Fails if the file can't be read.
@@ -73,7 +77,13 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
     let exports = exports::collect(&program, &|offset| collector.line(offset));
-    let specs = collector.specs;
+    let mut specs = collector.specs;
+    // A declaration file only describes types, so its imports load nothing.
+    if is_declaration(file) {
+        for spec in &mut specs {
+            spec.kind = SpecKind::Type;
+        }
+    }
 
     let error = if panicked && errors.is_empty() {
         Some("parser gave up".to_string())
@@ -115,12 +125,12 @@ impl ImportCollector {
 
 impl<'a> Visit<'a> for ImportCollector {
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
-        // Skip type-only imports (import type { Foo } from 'bar')
         if decl.import_kind.is_type() {
+            self.push(&decl.source.value, SpecKind::Type, decl.span);
             return;
         }
-        // Skip `import { type Foo } from 'bar'` when every specifier is a type.
-        // No specifiers means a side-effect import: `import 'polyfill'`.
+        // `import { type Foo } from 'bar'` loads nothing when every specifier
+        // is a type. No specifiers means a side-effect import: `import 'x'`.
         let has_runtime_import = decl.specifiers.as_ref().is_none_or(|specifiers| {
             specifiers.is_empty()
                 || specifiers.iter().any(|spec| match spec {
@@ -128,15 +138,13 @@ impl<'a> Visit<'a> for ImportCollector {
                     _ => true,
                 })
         });
-        if has_runtime_import {
-            self.push(&decl.source.value, SpecKind::Static, decl.span);
-        }
+        let kind = if has_runtime_import { SpecKind::Static } else { SpecKind::Type };
+        self.push(&decl.source.value, kind, decl.span);
     }
 
     fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
-        if !decl.export_kind.is_type() {
-            self.push(&decl.source.value, SpecKind::Static, decl.span);
-        }
+        let kind = if decl.export_kind.is_type() { SpecKind::Type } else { SpecKind::Static };
+        self.push(&decl.source.value, kind, decl.span);
     }
 
     fn visit_export_named_declaration(&mut self, decl: &ExportNamedDeclaration<'a>) {
@@ -144,19 +152,17 @@ impl<'a> Visit<'a> for ImportCollector {
             let has_runtime_export = !decl.export_kind.is_type()
                 && (decl.specifiers.is_empty()
                     || decl.specifiers.iter().any(|s| !s.export_kind.is_type()));
-            if has_runtime_export {
-                self.push(&source.value, SpecKind::Static, decl.span);
-            }
+            let kind = if has_runtime_export { SpecKind::Static } else { SpecKind::Type };
+            self.push(&source.value, kind, decl.span);
         }
         walk::walk_export_named_declaration(self, decl);
     }
 
     fn visit_ts_import_equals_declaration(&mut self, decl: &TSImportEqualsDeclaration<'a>) {
         // import x = require('y')
-        if !decl.import_kind.is_type()
-            && let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
-        {
-            self.push(&ext.expression.value, SpecKind::Static, decl.span);
+        if let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference {
+            let kind = if decl.import_kind.is_type() { SpecKind::Type } else { SpecKind::Static };
+            self.push(&ext.expression.value, kind, decl.span);
         }
     }
 
@@ -345,6 +351,46 @@ mod tests {
             create_test_file(temp_dir.path(), "test.ts", "import type { Foo } from './types';");
         let imports = imports_for(&file, &cache).unwrap();
         assert_eq!(imports.len(), 0);
+    }
+
+    #[test]
+    fn type_only_imports_are_kept_as_type() {
+        let temp_dir = TempDir::new().unwrap();
+        let src = "import type { A } from './a';
+import { type B } from './b';
+import { type C, c } from './c';
+export type { D } from './d';
+export type * from './e';
+import type F = require('./f');";
+        let file = create_test_file(temp_dir.path(), "test.ts", src);
+        let kinds: Vec<(String, SpecKind)> =
+            parse_imports(&file).unwrap().specs.into_iter().map(|s| (s.request, s.kind)).collect();
+        let t = |r: &str, k| (r.to_string(), k);
+        assert_eq!(
+            kinds,
+            [
+                t("./a", SpecKind::Type),
+                t("./b", SpecKind::Type),
+                t("./c", SpecKind::Static),
+                t("./d", SpecKind::Type),
+                t("./e", SpecKind::Type),
+                t("./f", SpecKind::Type),
+            ]
+        );
+    }
+
+    #[test]
+    fn declaration_files_import_only_types() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = create_test_file(
+            temp_dir.path(),
+            "index.d.ts",
+            "import { A } from './a';\nexport * from './b';\nexport declare function f(): A;",
+        );
+        let parsed = parse_imports(&file).unwrap();
+        assert!(parsed.specs.iter().all(|s| s.kind == SpecKind::Type), "{:?}", parsed.specs);
+        assert_eq!(parsed.specs.len(), 2);
+        assert_eq!(parsed.exports.len(), 1);
     }
 
     #[test]

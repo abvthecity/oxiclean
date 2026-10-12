@@ -6,7 +6,7 @@ use std::{
 };
 use tracing::{debug, trace};
 
-use crate::constants::{INDEX_FILES, RESOLVE_EXTENSIONS};
+use crate::constants::{DECLARATION_SUFFIXES, INDEX_FILES, RESOLVE_EXTENSIONS};
 use crate::project::{Project, normalize, split_package_request};
 
 /// Node.js built-in modules, which never contribute to an app's module graph.
@@ -283,7 +283,32 @@ fn resolve_package_target(pkg_dir: &Path, target: &str) -> Option<PathBuf> {
     resolve_file(&normalize(&pkg_dir.join("src").join(stem)))
 }
 
+/// Resolves `p` to a runtime file, or failing that, as TypeScript does, to
+/// a declaration file: `p.d.ts`, `p.d.ts` for `p.js`, or `p/index.d.ts`.
 fn resolve_file(p: &Path) -> Option<PathBuf> {
+    resolve_runtime_file(p).or_else(|| resolve_declaration(p))
+}
+
+fn resolve_declaration(p: &Path) -> Option<PathBuf> {
+    let base = p.display().to_string();
+    // `./a.js` is described by `./a.d.ts`.
+    let stem = [".js", ".jsx", ".mjs", ".cjs"]
+        .iter()
+        .find_map(|ext| base.strip_suffix(ext).map(|stem| (stem, *ext)));
+    let candidates: Vec<PathBuf> = match stem {
+        Some((stem, ".mjs")) => vec![PathBuf::from(format!("{stem}.d.mts"))],
+        Some((stem, ".cjs")) => vec![PathBuf::from(format!("{stem}.d.cts"))],
+        Some((stem, _)) => vec![PathBuf::from(format!("{stem}.d.ts"))],
+        None => DECLARATION_SUFFIXES
+            .iter()
+            .map(|s| PathBuf::from(format!("{base}{s}")))
+            .chain(DECLARATION_SUFFIXES.iter().map(|s| p.join(format!("index{s}"))))
+            .collect(),
+    };
+    candidates.into_iter().find(|c| c.is_file()).and_then(canonical)
+}
+
+fn resolve_runtime_file(p: &Path) -> Option<PathBuf> {
     if let Some(resolved) = resolve_as_file(p) {
         return Some(resolved);
     }
@@ -377,6 +402,36 @@ mod tests {
         assert!(resolved.is_some());
         // Normalize paths for comparison (canonicalize can add /private prefix on macOS)
         assert_eq!(resolved.unwrap().canonicalize().unwrap(), target_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn declaration_files_resolve_after_runtime_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root = temp_dir.path();
+        let from = create_test_file(root, "src/main.ts", "");
+        create_test_file(root, "src/types.d.ts", "");
+        create_test_file(root, "src/lib.js", "");
+        create_test_file(root, "src/lib.d.ts", "");
+        create_test_file(root, "src/esm.d.mts", "");
+        create_test_file(root, "src/decl/index.d.ts", "");
+        create_test_file(root, "src/both.d.ts", "");
+        create_test_file(root, "src/both/index.ts", "");
+        let project = Project::new(root);
+        let got = |request: &str| {
+            resolve(&project, &from, request, &cache)
+                .unwrap()
+                .map(|p| p.strip_prefix(root.canonicalize().unwrap()).unwrap().to_path_buf())
+        };
+        let want = |p: &str| Some(PathBuf::from(p));
+        assert_eq!(got("./types"), want("src/types.d.ts"));
+        assert_eq!(got("./types.js"), want("src/types.d.ts"));
+        assert_eq!(got("./esm.mjs"), want("src/esm.d.mts"));
+        assert_eq!(got("./decl"), want("src/decl/index.d.ts"));
+        // Runtime files come first, a directory's index included.
+        assert_eq!(got("./lib"), want("src/lib.js"));
+        assert_eq!(got("./both"), want("src/both/index.ts"));
+        assert_eq!(got("./missing"), None);
     }
 
     #[test]
