@@ -49,7 +49,9 @@ src/store/index.ts
 - Not type-only imports (`import type`, or `import { type A }` when every
   name is a type): TypeScript erases them, so they can't cause a cycle at
   runtime.
-- Dynamic `import()` only when `includeDynamic` is set, as in knip.
+- Dynamic `import()` only when `includeDynamic` is set. knip has a setting
+  for cycles alone (`cycles.dynamicImports`); `includeDynamic` applies to
+  every check.
 - Not files inside `node_modules`.
 
 ## How cycles are chosen
@@ -63,11 +65,19 @@ cycles block the order, picks the longest of the shortest cycles through each
 file it searches from. The import that closes each reported cycle is then set
 aside and the search repeats until no cycle is left. As a result:
 
-- every circular import runs through the closing import of at least one
-  reported cycle,
+- removing the last import of each reported cycle leaves no cycles,
 - reported cycles are short, so each one is easy to read,
 - the result depends only on the code, not on traversal order: files are
   taken in path order and each cycle starts at its first file by path.
+
+A cycle is reported on its first file by path that the rule applies to, so
+`ignorePatterns` and `overrides` hide a cycle only when they cover every file
+in it. knip's `cycles.allow` list has no equivalent yet.
+
+Searching a tangle costs up to O(V·(V + E)) for V files and E imports, as in
+pnpm. Tangles in real code are small (the largest in the benchmark targets
+has 28 files); a random tangle of 2,000 files and 20,000 imports takes about a
+second.
 
 Each finding also gives the size of the tangle (strongly connected
 component) its cycle belongs to.

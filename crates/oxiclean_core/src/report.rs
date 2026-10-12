@@ -166,7 +166,13 @@ fn details(f: &Finding, ctx: ReportContext<'_>) -> Vec<String> {
     let mut lines: Vec<String> = cycle
         .steps
         .iter()
-        .map(|s| format!("{}:{} imports '{}'", ctx.display(&s.file), s.line, s.request))
+        .map(|s| {
+            let file = ctx.display(&s.file);
+            match s.line {
+                0 => format!("{file} imports '{}'", s.request),
+                line => format!("{file}:{line} imports '{}'", s.request),
+            }
+        })
         .collect();
     if cycle.group_size > cycle.steps.len() {
         lines

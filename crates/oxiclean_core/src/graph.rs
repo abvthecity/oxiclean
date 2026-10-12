@@ -20,7 +20,7 @@ use tracing::{debug, trace, warn};
 
 use crate::{
     constants::JS_TS_EXTENSIONS,
-    sequencer::{Components, sequence, strongly_connected},
+    sequencer::{Components, len_u32, sequence, strongly_connected},
 };
 
 /// Dense index of a module in a [`ModuleGraph`].
@@ -94,9 +94,10 @@ pub struct Cycle {
     /// The modules in import order, starting with the one whose path sorts
     /// first.
     pub modules: Vec<ModuleId>,
-    /// Number of modules that import each other, directly or indirectly,
-    /// together with this cycle's: the size of its strongly connected
-    /// component. A large group means one cycle is part of a wider tangle.
+    /// Number of files outside `node_modules` that import each other,
+    /// directly or indirectly, together with this cycle's: the size of its
+    /// strongly connected component. A large group means one cycle is part
+    /// of a wider tangle.
     pub group_size: usize,
 }
 
@@ -289,8 +290,8 @@ impl ModuleGraph {
     /// each file it searches from. The import that closes each reported cycle
     /// (from its last file back to its first) is then set aside and the
     /// search repeats until no cycle is left. So every circular import runs
-    /// through the closing import of at least one reported cycle, and
-    /// removing those imports would leave the graph without cycles.
+    /// through the closing import of at least one reported cycle: removing
+    /// the last import of each reported cycle leaves no cycles.
     ///
     /// Files are taken in path order, so the result does not depend on how
     /// the graph was built.
@@ -321,8 +322,18 @@ impl ModuleGraph {
         by_path.sort_by(|&a, &b| self.modules[a].path.cmp(&self.modules[b].path));
 
         let mut cycles = Vec::new();
+        // Size of each file's tangle among the files searched, from the first
+        // round, before any import is set aside.
+        let mut tangle_size: Option<Vec<usize>> = None;
         loop {
             let components = strongly_connected(n, |v| deps[v].iter().copied(), |v| !outside[v]);
+            let tangle_size = tangle_size.get_or_insert_with(|| {
+                components
+                    .of
+                    .iter()
+                    .map(|&c| components.sizes.get(c as usize).map_or(0, |&s| s as usize))
+                    .collect()
+            });
             let included: Vec<usize> = by_path
                 .iter()
                 .copied()
@@ -334,7 +345,9 @@ impl ModuleGraph {
                 break;
             }
             let found = sequence(&deps, &included).cycles;
-            debug_assert!(!found.is_empty(), "every component with a cycle yields one");
+            // The sequencer breaks a cycle in every component it is given.
+            // Should that ever fail, stop rather than spin.
+            debug_assert!(!found.is_empty(), "graph sequencer found no cycle to break");
             if found.is_empty() {
                 break;
             }
@@ -350,7 +363,7 @@ impl ModuleGraph {
                 }) {
                     modules.rotate_left(first);
                 }
-                let group_size = self.comp_size[self.comp[modules[0].idx()] as usize] as usize;
+                let group_size = tangle_size[modules[0].idx()];
                 cycles.push(Cycle { modules, group_size });
             }
         }
@@ -455,10 +468,6 @@ impl ModuleGraph {
         self.comp_size = comp_size;
         self.comp_succ = comp_succ;
     }
-}
-
-fn len_u32(n: usize) -> u32 {
-    u32::try_from(n).expect("more than u32::MAX modules")
 }
 
 fn intern(

@@ -4,9 +4,10 @@
 //! Cycles are found with a port of pnpm's graph sequencer
 //! ([`oxiclean_core::sequence`]), which picks short cycles. After each round,
 //! the import that closes each reported cycle is set aside and the search
-//! repeats, so every circular import runs through the closing import of at
-//! least one reported cycle. Type-only imports never count, and dynamic
-//! `import()` counts only when `includeDynamic` is set, as in knip.
+//! repeats, so removing the last import of each reported cycle leaves no
+//! cycles. Type-only imports never count, and dynamic `import()` counts only
+//! when `includeDynamic` is set (which, unlike knip's `cycles.dynamicImports`,
+//! applies to every check).
 //!
 //! # Examples
 //!

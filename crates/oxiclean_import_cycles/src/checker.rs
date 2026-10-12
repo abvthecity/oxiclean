@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use oxiclean_core::{
     Analysis, CheckResult, CycleFinding, CycleStep, Finding, FindingKind, Result, RulePolicy,
 };
@@ -17,13 +19,14 @@ pub fn run_import_cycles_check(cfg: &Config) -> Result<CheckResult> {
     Ok(check(&analysis, &policy))
 }
 
-/// Reports the circular imports in the analysed graph, one finding per cycle,
-/// on the cycle's first file by path. Only runtime imports count: type-only
-/// imports are not edges of the graph, and dynamic `import()` is followed
-/// only when `includeDynamic` is set.
+/// Reports the circular imports in the analysed graph, one finding per cycle.
+/// Only runtime imports count: type-only imports are not edges of the graph,
+/// and dynamic `import()` is followed only when `includeDynamic` is set.
 ///
-/// Cycles come from [`oxiclean_core::ModuleGraph::cycles`]: every circular
-/// import runs through the import that closes at least one reported cycle.
+/// A cycle is reported on its first file by path that the rule applies to,
+/// so `ignorePatterns` and `overrides` hide a cycle only when they cover
+/// every file in it. Cycles come from [`oxiclean_core::ModuleGraph::cycles`]:
+/// removing the last import of each reported cycle leaves no cycles.
 #[must_use]
 pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
     if policy.min_threshold().is_none() {
@@ -31,23 +34,29 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
         return analysis.finish(policy, Vec::new());
     }
     let graph = &analysis.graph;
+    let applies = |path: &Path, len: usize| {
+        let rel = path.strip_prefix(&analysis.root).unwrap_or(path);
+        policy.resolve(rel, analysis.project.package_for(path)).reports(len)
+    };
     let findings: Vec<Finding> = graph
         .cycles()
         .into_iter()
-        .map(|cycle| {
+        .filter_map(|cycle| {
             let n = cycle.modules.len();
+            let first = (0..n).find(|&i| applies(&graph.module(cycle.modules[i]).path, n))?;
             let steps = (0..n)
-                .map(|i| {
+                .map(|k| {
+                    let i = (first + k) % n;
                     let (from, to) = (cycle.modules[i], cycle.modules[(i + 1) % n]);
                     let edge = graph.edge(from, to).expect("a cycle follows graph edges");
                     CycleStep::new(graph.module(from).path.clone(), edge.request.clone(), edge.line)
                 })
                 .collect();
-            Finding::new(
-                graph.module(cycle.modules[0]).path.clone(),
+            Some(Finding::new(
+                graph.module(cycle.modules[first]).path.clone(),
                 FindingKind::Cycle(CycleFinding::new(steps, cycle.group_size)),
                 n,
-            )
+            ))
         })
         .collect();
 

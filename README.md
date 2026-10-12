@@ -118,8 +118,10 @@ src/pages/Dashboard.tsx
 ### Import Cycles Checker
 
 Finds files that import each other, directly or indirectly, at runtime, like
-knip's `cycles` issue type. Type-only imports never count, and dynamic
-`import()` counts only when `includeDynamic` is set.
+knip's `cycles` issue type. Type-only imports never count. Dynamic
+`import()` counts only when `includeDynamic` is set; unlike knip's
+`cycles.dynamicImports`, that setting applies to every check. knip's
+`cycles.allow` has no equivalent yet; use `ignorePatterns` instead.
 
 **Usage:**
 ```bash
@@ -143,9 +145,11 @@ contain many overlapping cycles. Oxiclean uses a port of pnpm's
 [graph-sequencer](https://github.com/pnpm/pnpm/tree/main/pnpm11/deps/graph-sequencer)
 to pick short cycles: for each file it searches from, the longest of the
 shortest cycles through it. The import that closes each reported cycle is
-then set aside and the search repeats, so every circular import runs through
-the closing import of at least one reported cycle. Each cycle is reported on
-its first file by path, and the result is the same on every run. JSON output
+then set aside and the search repeats, so removing the last import of each
+reported cycle leaves no cycles. Each cycle is reported on its first file by
+path that the rule applies to, so `ignorePatterns` and `overrides` hide a
+cycle only when they cover every file in it. The result is the same on every
+run. JSON output
 lists every import of the cycle, and SARIF output links to each of them.
 
 ### Difference Between Tools

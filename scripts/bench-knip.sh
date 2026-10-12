@@ -13,12 +13,22 @@
 # ($OXICLEAN_BENCH_DIR) and are not installed; knip is installed once into
 # $OXICLEAN_BENCH_DIR/.knip. Each tool runs $OXICLEAN_BENCH_RUNS times and the
 # fastest time is kept. Detailed results go to $OXICLEAN_BENCH_DIR/.knip/results.
+# Set OXICLEAN_BENCH_TARGETS to a space-separated list of names to run only those.
+#
+# The cycle counts measure different things: knip reports one cycle per back
+# edge of its depth-first search, oxiclean picks short cycles until removing
+# the last import of each leaves none. `knip_missed` counts knip cycles that
+# none of oxiclean's last imports breaks, and should be 0. `ox_only` counts
+# oxiclean cycles that share no file with any knip cycle.
+#
+# Needs bash 4+, GNU date, jq and Node.js (Linux).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT=$(pwd)
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
+TARGETS=${OXICLEAN_BENCH_TARGETS:-}
 KNIP_VERSION=6.41.0
 KNIP_DIR=$BENCH_DIR/.knip
 OUT_DIR=$KNIP_DIR/results
@@ -53,14 +63,22 @@ CONFIG=$KNIP_DIR/knip.json
 
 ms_now() { date +%s%3N; }
 
-# Runs a command $RUNS times in a directory; prints the fastest time in ms. The
-# output of the last run is written to the file named by $3.
+# Usage: best_time DIR OUT CMD...
+# Runs CMD in DIR $RUNS times and prints the fastest time in ms, or FAIL when
+# a run exits with anything but 0 or 1 (findings) or writes invalid JSON. The
+# output of the last run is written to OUT, and its stderr to OUT.err.
 best_time() {
-  local dir=$1 cmd=$2 out=$3 best= start elapsed
+  local dir=$1 out=$2 best= start elapsed status
+  shift 2
   for _ in $(seq "$RUNS"); do
     start=$(ms_now)
-    (cd "$dir" && eval "$cmd") >"$out" 2>"$out.err" || true
+    status=0
+    (cd "$dir" && "$@") >"$out" 2>"$out.err" || status=$?
     elapsed=$(($(ms_now) - start))
+    if [[ $status -gt 1 ]] || ! jq -e . "$out" >/dev/null 2>&1; then
+      echo "FAIL"
+      return
+    fi
     if [[ -z $best || $elapsed -lt $best ]]; then best=$elapsed; fi
   done
   echo "$best"
@@ -86,6 +104,7 @@ printf '\n%-10s %-13s %10s %10s %7s %7s %12s %9s\n' \
   target check oxiclean knip ox_cyc knip_cyc knip_missed ox_only
 while IFS=$'\t' read -r name _ sha; do
   [[ -z $name || $name == \#* ]] && continue
+  if [[ -n $TARGETS && " $TARGETS " != *" $name "* ]]; then continue; fi
   dir=$BENCH_DIR/$name
   if [[ $(git -C "$dir" rev-parse HEAD 2>/dev/null || true) != "$sha" ]]; then
     echo "Skipping $name: run scripts/bench.sh first to check out ${sha:0:12}" >&2
@@ -97,8 +116,14 @@ while IFS=$'\t' read -r name _ sha; do
     ours=$OUT_DIR/$name.$check.json
     theirs=$OUT_DIR/$name.knip-$type.json
     # No .oxicleanrc.json in the targets, so oxiclean runs with its defaults.
-    ox_ms=$(best_time "$dir" "NO_COLOR=1 '$BIN' $check --root . --format json" "$ours")
-    knip_ms=$(best_time "$dir" "'$KNIP' --config '$CONFIG' --include $type --reporter json --no-progress --no-exit-code --no-config-hints" "$theirs")
+    ox_ms=$(best_time "$dir" "$ours" env NO_COLOR=1 "$BIN" "$check" --root . --format json)
+    knip_ms=$(best_time "$dir" "$theirs" "$KNIP" --config "$CONFIG" --include "$type" \
+      --reporter json --no-progress --no-exit-code --no-config-hints)
+    if [[ $ox_ms == FAIL || $knip_ms == FAIL ]]; then
+      printf '%-10s %-13s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \
+        "$([[ $ox_ms == FAIL ]] && echo "$ours" || echo "$theirs")"
+      continue
+    fi
     read -r oc kc missed only < <(compare_cycles "$ours" "$theirs")
     printf '%-10s %-13s %8sms %8sms %7s %7s %12s %9s\n' \
       "$name" "$check" "$ox_ms" "$knip_ms" "$oc" "$kc" "$missed" "$only"

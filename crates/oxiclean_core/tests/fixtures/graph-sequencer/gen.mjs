@@ -28,4 +28,22 @@ for (let c = 0; c < 400; c++) {
   const { order, cycles } = graphSequencer(graph, included);
   cases.push({ deps, included, order, cycles });
 }
+// Larger graphs whose components need several rounds of cycle breaking, with
+// some nodes listed twice in `included`.
+for (let c = 0; c < 20; c++) {
+  const n = 40 + int(31);
+  const density = 0.02 + rand() * 0.1;
+  const deps = [];
+  for (let i = 0; i < n; i++) {
+    const d = [];
+    for (let j = 0; j < n; j++) if (rand() < density) d.push(j);
+    deps.push(d);
+  }
+  const included = [...Array(n).keys()];
+  for (let k = n - 1; k > 0; k--) { const r = int(k + 1); [included[k], included[r]] = [included[r], included[k]]; }
+  for (let k = 0; k < 3; k++) included.push(included[int(n)]);
+  const graph = new Map(deps.map((d, i) => [i, d]));
+  const { order, cycles } = graphSequencer(graph, included);
+  cases.push({ deps, included, order, cycles });
+}
 process.stdout.write(JSON.stringify(cases));

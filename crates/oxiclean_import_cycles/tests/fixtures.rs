@@ -69,6 +69,17 @@ fn dynamic_imports_count_when_included() {
 }
 
 #[test]
+fn a_cycle_is_reported_on_its_first_file_the_rule_applies_to() {
+    // a.ts is ignored, so the cycle moves to b.ts instead of disappearing.
+    let root = fixture("runtime");
+    let result = run(CommonArgs::with_root(&root).config(root.join("ignore-a.oxicleanrc.json")));
+    assert_eq!(
+        cycles(&result),
+        vec![(vec!["src/b.ts:1 -> ./a".to_string(), "src/a.ts:2 -> ./b".into()], 2)]
+    );
+}
+
+#[test]
 fn every_cycle_in_a_tangle_is_reported() {
     // a <-> b and b <-> c share b: one tangle of three files, two cycles.
     let result = run(CommonArgs::with_root(fixture("tangle")));
