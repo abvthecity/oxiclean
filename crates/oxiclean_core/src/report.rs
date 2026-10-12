@@ -210,12 +210,18 @@ pub struct ReportContext<'a> {
 }
 
 impl ReportContext<'_> {
+    /// `path` as printed: relative to `cwd` when possible, and with `/`
+    /// separators on every platform, as in JSON and SARIF output.
     fn display(&self, path: &Path) -> String {
-        make_relative(path, self.cwd)
+        let shown = make_relative(path, self.cwd)
             .or_else(|| path.strip_prefix(self.root).ok().map(Path::to_path_buf))
-            .unwrap_or_else(|| path.to_path_buf())
-            .to_string_lossy()
-            .into_owned()
+            .unwrap_or_else(|| path.to_path_buf());
+        let shown = shown.to_string_lossy();
+        if std::path::MAIN_SEPARATOR == '\\' {
+            shown.replace('\\', "/")
+        } else {
+            shown.into_owned()
+        }
     }
 }
 
@@ -511,16 +517,12 @@ mod tests {
         let ctx = ReportContext { root: Path::new("/p"), cwd: Path::new("/p") };
         print_findings(&mut out, &fs, &STYLE, 2, ctx).unwrap();
         let out = String::from_utf8(out).unwrap();
-        // Paths are printed with the platform's separator.
-        let rel = |name: &str| ["src", name].iter().collect::<PathBuf>().display().to_string();
-        let b = out.find(&rel("b.ts")).unwrap();
-        let a = out.find(&rel("a.ts")).unwrap();
+        // Paths are printed with `/` on every platform.
+        let b = out.find("src/b.ts").unwrap();
+        let a = out.find("src/a.ts").unwrap();
         assert!(b < a, "{out}");
         assert!(out.contains("Total violations: 2"), "{out}");
         assert!(out.contains("Maximum bloat: 10 modules"), "{out}");
-        assert!(
-            out.contains(&format!("1. import './big' (10 modules) - {}", rel("b.ts"))),
-            "{out}"
-        );
+        assert!(out.contains("1. import './big' (10 modules) - src/b.ts"), "{out}");
     }
 }
