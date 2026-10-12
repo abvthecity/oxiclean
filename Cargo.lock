@@ -658,15 +658,25 @@ dependencies = [
  "anyhow",
  "clap",
  "colored",
+ "oxiclean_bloat",
  "oxiclean_core",
- "oxiclean_import_bloat",
- "oxiclean_import_cycles",
- "oxiclean_import_depth",
+ "oxiclean_cycles",
+ "oxiclean_depth",
  "rayon",
  "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "oxiclean_bloat"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxiclean_core",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -695,7 +705,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxiclean_import_bloat"
+name = "oxiclean_cycles"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -705,17 +715,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxiclean_import_cycles"
-version = "0.1.0"
-dependencies = [
- "clap",
- "oxiclean_core",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "oxiclean_import_depth"
+name = "oxiclean_depth"
 version = "0.1.0"
 dependencies = [
  "clap",

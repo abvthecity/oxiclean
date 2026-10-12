@@ -139,7 +139,7 @@
       "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
       "type": "object",
       "properties": {
-        "import-bloat": {
+        "bloat": {
           "description": "Imports and entries that pull in too many unique modules.\nDefault threshold: 300 modules.",
           "anyOf": [
             {
@@ -150,7 +150,7 @@
             }
           ]
         },
-        "import-cycles": {
+        "cycles": {
           "description": "Files that import each other, directly or indirectly, at runtime.\nType-only imports don't count. Default threshold: 1 file, so every\ncycle is reported.",
           "anyOf": [
             {
@@ -161,7 +161,7 @@
             }
           ]
         },
-        "import-depth": {
+        "depth": {
           "description": "Imports with too long a chain of imports below them.\nDefault threshold: 20 levels.",
           "anyOf": [
             {

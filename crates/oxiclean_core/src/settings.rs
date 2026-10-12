@@ -12,15 +12,15 @@
 //!   "ignorePatterns": ["**/fixtures/**"],
 //!   "entries": ["packages/*/src/**/*.ts"],
 //!   "rules": {
-//!     "import-bloat": ["warn", { "threshold": 400 }],
-//!     "import-depth": "off"
+//!     "bloat": ["warn", { "threshold": 400 }],
+//!     "depth": "off"
 //!   },
 //!   "overrides": [
 //!     {
 //!       // `packages` matches workspace package names and `files` matches
 //!       // paths relative to the root; with both, a file must match both.
 //!       "packages": ["@acme/legacy-*"],
-//!       "rules": { "import-bloat": ["error", { "threshold": 1000 }] }
+//!       "rules": { "bloat": ["error", { "threshold": 1000 }] }
 //!     }
 //!   ]
 //! }
@@ -99,22 +99,19 @@ pub struct ConfigFile {
 /// Every rule oxiclean knows. Each is set to a severity, or to
 /// `[severity, options]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct Rules {
     /// Imports and entries that pull in too many unique modules.
     /// Default threshold: 300 modules.
-    #[serde(rename = "import-bloat")]
-    pub import_bloat: Option<RuleSetting>,
+    pub bloat: Option<RuleSetting>,
     /// Imports with too long a chain of imports below them.
     /// Default threshold: 20 levels.
-    #[serde(rename = "import-depth")]
-    pub import_depth: Option<RuleSetting>,
+    pub depth: Option<RuleSetting>,
     /// Files that import each other, directly or indirectly, at runtime.
     /// Type-only imports don't count. Default threshold: 1 file, so every
     /// cycle is reported.
-    #[serde(rename = "import-cycles")]
-    pub import_cycles: Option<RuleSetting>,
+    pub cycles: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -122,15 +119,15 @@ impl Rules {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&RuleSetting> {
         match name {
-            "import-bloat" => self.import_bloat.as_ref(),
-            "import-depth" => self.import_depth.as_ref(),
-            "import-cycles" => self.import_cycles.as_ref(),
+            "bloat" => self.bloat.as_ref(),
+            "depth" => self.depth.as_ref(),
+            "cycles" => self.cycles.as_ref(),
             _ => None,
         }
     }
 
     fn all(&self) -> impl Iterator<Item = &RuleSetting> {
-        [&self.import_bloat, &self.import_depth, &self.import_cycles].into_iter().flatten()
+        [&self.bloat, &self.depth, &self.cycles].into_iter().flatten()
     }
 }
 
@@ -456,7 +453,7 @@ mod tests {
     #[test]
     fn empty_file_is_the_defaults() {
         assert_eq!(parse("{}").unwrap(), ConfigFile::default());
-        let p = parse("{}").unwrap().policy("import-bloat", 300).unwrap();
+        let p = parse("{}").unwrap().policy("bloat", 300).unwrap();
         assert_eq!(p.resolve(Path::new("src/a.ts"), None).threshold, 300);
         assert_eq!(p.min_threshold(), Some(300));
     }
@@ -467,8 +464,8 @@ mod tests {
         assert!(e.contains(".oxicleanrc.json") && e.contains("treshold"), "{e}");
         let e = parse(r#"{ "rules": { "import-blot": "warn" } }"#).unwrap_err().to_string();
         assert!(e.contains("import-blot"), "{e}");
-        assert!(parse(r#"{ "rules": { "import-bloat": ["warn", { "treshold": 1 }] } }"#).is_err());
-        assert!(parse(r#"{ "rules": { "import-bloat": "maybe" } }"#).is_err());
+        assert!(parse(r#"{ "rules": { "bloat": ["warn", { "treshold": 1 }] } }"#).is_err());
+        assert!(parse(r#"{ "rules": { "bloat": "maybe" } }"#).is_err());
         assert!(parse(r#"{ "overrides": [{ "rules": {} }] }"#).is_err());
         assert!(parse(r#"{ "ignorePatterns": ["a/["] }"#).is_err());
     }
@@ -479,36 +476,36 @@ mod tests {
             r#"{
                 // comments and trailing commas are fine
                 "$schema": "./configuration_schema.json",
-                "rules": { "import-bloat": "allow", "import-depth": ["deny", {}], },
+                "rules": { "bloat": "allow", "depth": ["deny", {}], },
             }"#,
         )
         .unwrap();
-        assert!(!cfg.policy("import-bloat", 1).unwrap().base().enabled);
-        let depth = cfg.policy("import-depth", 1).unwrap().base();
+        assert!(!cfg.policy("bloat", 1).unwrap().base().enabled);
+        let depth = cfg.policy("depth", 1).unwrap().base();
         assert!(depth.enabled && depth.severity == Severity::Error);
     }
 
     const CFG: &str = r#"{
         "ignorePatterns": ["**/fixtures/**"],
         "rules": {
-            "import-bloat": ["warn", { "threshold": 100, "ignorePatterns": ["scripts/**"] }]
+            "bloat": ["warn", { "threshold": 100, "ignorePatterns": ["scripts/**"] }]
         },
         "overrides": [
             {
                 "packages": ["@acme/*"],
-                "rules": { "import-bloat": ["error", { "threshold": 500 }] }
+                "rules": { "bloat": ["error", { "threshold": 500 }] }
             },
             {
                 "packages": ["@acme/legacy"],
                 "files": ["packages/legacy/src/old/**"],
-                "rules": { "import-bloat": "off" }
+                "rules": { "bloat": "off" }
             }
         ]
     }"#;
 
     #[test]
     fn overrides_apply_in_order() {
-        let p = parse(CFG).unwrap().policy("import-bloat", 200).unwrap();
+        let p = parse(CFG).unwrap().policy("bloat", 200).unwrap();
         let r = |path: &str, pkg: Option<&str>| p.resolve(Path::new(path), pkg);
 
         let plain = r("apps/web/src/a.ts", None);
@@ -533,20 +530,20 @@ mod tests {
     fn rule_off_except_in_one_package() {
         let cfg = parse(
             r#"{
-                "rules": { "import-depth": "off" },
+                "rules": { "depth": "off" },
                 "overrides": [
-                    { "packages": ["web"], "rules": { "import-depth": ["error", { "threshold": 4 }] } }
+                    { "packages": ["web"], "rules": { "depth": ["error", { "threshold": 4 }] } }
                 ]
             }"#,
         )
         .unwrap();
-        let p = cfg.policy("import-depth", 10).unwrap();
+        let p = cfg.policy("depth", 10).unwrap();
         assert_eq!(p.min_threshold(), Some(4));
         assert!(!p.resolve(Path::new("a.ts"), None).enabled);
         assert!(p.resolve(Path::new("a.ts"), Some("web")).reports(4));
 
-        let off = parse(r#"{ "rules": { "import-depth": "off" } }"#).unwrap();
-        assert_eq!(off.policy("import-depth", 10).unwrap().min_threshold(), None);
+        let off = parse(r#"{ "rules": { "depth": "off" } }"#).unwrap();
+        assert_eq!(off.policy("depth", 10).unwrap().min_threshold(), None);
     }
 
     /// The committed schema must match the config types. Run with

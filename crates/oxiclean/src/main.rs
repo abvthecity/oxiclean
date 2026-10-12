@@ -29,14 +29,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Check for import bloat in JavaScript/TypeScript projects
-    #[command(name = "import-bloat")]
-    Bloat(oxiclean_import_bloat::Config),
+    #[command(name = "bloat")]
+    Bloat(oxiclean_bloat::Config),
     /// Check for excessive import depth in JavaScript/TypeScript projects
-    #[command(name = "import-depth")]
-    Depth(oxiclean_import_depth::Config),
+    #[command(name = "depth")]
+    Depth(oxiclean_depth::Config),
     /// Check for circular imports in JavaScript/TypeScript projects
-    #[command(name = "import-cycles")]
-    Cycles(oxiclean_import_cycles::Config),
+    #[command(name = "cycles")]
+    Cycles(oxiclean_cycles::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -47,19 +47,19 @@ fn main() -> Result<ExitCode> {
     let start = Instant::now();
     let (result, style, rule) = match &cli.command {
         Commands::Bloat(cfg) => (
-            oxiclean_import_bloat::run_import_bloat_check(cfg)?,
-            oxiclean_import_bloat::REPORT_STYLE,
-            oxiclean_import_bloat::RULE,
+            oxiclean_bloat::run_bloat_check(cfg)?,
+            oxiclean_bloat::REPORT_STYLE,
+            oxiclean_bloat::RULE,
         ),
         Commands::Depth(cfg) => (
-            oxiclean_import_depth::run_import_depth_check(cfg)?,
-            oxiclean_import_depth::REPORT_STYLE,
-            oxiclean_import_depth::RULE,
+            oxiclean_depth::run_depth_check(cfg)?,
+            oxiclean_depth::REPORT_STYLE,
+            oxiclean_depth::RULE,
         ),
         Commands::Cycles(cfg) => (
-            oxiclean_import_cycles::run_import_cycles_check(cfg)?,
-            oxiclean_import_cycles::REPORT_STYLE,
-            oxiclean_import_cycles::RULE,
+            oxiclean_cycles::run_cycles_check(cfg)?,
+            oxiclean_cycles::REPORT_STYLE,
+            oxiclean_cycles::RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

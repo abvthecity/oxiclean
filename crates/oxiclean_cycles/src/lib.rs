@@ -13,12 +13,12 @@
 //!
 //! ```no_run
 //! use oxiclean_core::{CommonArgs, report};
-//! use oxiclean_import_cycles::{Config, REPORT_STYLE, run_import_cycles_check};
+//! use oxiclean_cycles::{Config, REPORT_STYLE, run_cycles_check};
 //! use std::path::Path;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let cfg = Config { common: CommonArgs::with_root("/path/to/project") };
-//! let result = run_import_cycles_check(&cfg)?;
+//! let result = run_cycles_check(&cfg)?;
 //!
 //! let root = Path::new("/path/to/project");
 //! let ctx = report::ReportContext { root, cwd: root };
@@ -35,6 +35,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, run_import_cycles_check};
+pub use checker::{check, run_cycles_check};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, CycleFinding, CycleStep, Finding, FindingKind};

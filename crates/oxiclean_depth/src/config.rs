@@ -3,7 +3,7 @@ use oxiclean_core::{CommonArgs, report::ReportStyle};
 
 /// Options for the import depth check.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "import-depth")]
+#[command(name = "depth")]
 #[command(about = "Check for excessive import depth in JavaScript/TypeScript projects")]
 pub struct Config {
     #[command(flatten)]
@@ -11,7 +11,7 @@ pub struct Config {
 }
 
 /// Name of this rule in `.oxicleanrc.json` and in JSON and SARIF output.
-pub const RULE: &str = "import-depth";
+pub const RULE: &str = "depth";
 
 /// Threshold used when the config file sets none.
 pub const DEFAULT_THRESHOLD: usize = 20;

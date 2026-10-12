@@ -3,7 +3,7 @@ use oxiclean_core::{CommonArgs, report::ReportStyle};
 
 /// Options for the import bloat check.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "import-bloat")]
+#[command(name = "bloat")]
 #[command(about = "Check for import bloat in JavaScript/TypeScript projects")]
 pub struct Config {
     #[command(flatten)]
@@ -11,7 +11,7 @@ pub struct Config {
 }
 
 /// Name of this rule in `.oxicleanrc.json` and in JSON and SARIF output.
-pub const RULE: &str = "import-bloat";
+pub const RULE: &str = "bloat";
 
 /// Threshold used when the config file sets none.
 pub const DEFAULT_THRESHOLD: usize = 300;

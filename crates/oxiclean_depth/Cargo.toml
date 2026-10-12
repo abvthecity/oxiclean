@@ -1,5 +1,5 @@
 [package]
-name = "oxiclean_import_depth"
+name = "oxiclean_depth"
 description = "Finds imports that start overly deep import chains in JavaScript/TypeScript projects"
 version.workspace = true
 edition.workspace = true
@@ -15,7 +15,7 @@ oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli
 tracing.workspace = true
 
 [lib]
-name = "oxiclean_import_depth"
+name = "oxiclean_depth"
 path = "src/lib.rs"
 
 [dev-dependencies]

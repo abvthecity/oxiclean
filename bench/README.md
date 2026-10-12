@@ -38,24 +38,24 @@ unresolved imports.
 
 | Target | Check | Time | Files | Violations | Imports resolved |
 |---|---|---|---|---|---|
-| Next.js | import-bloat | ~1.0s | 2,344 | 164 | 88.6% |
-| Next.js | import-depth | ~1.0s | 2,344 | 202 | 88.6% |
-| Next.js | import-cycles | ~1.0s | 2,344 | 68 | 88.6% |
-| Expo | import-bloat | ~0.7s | 4,656 | 868 | 74.7% |
-| Expo | import-depth | ~0.7s | 4,656 | 1,586 | 74.7% |
-| Expo | import-cycles | ~0.7s | 4,656 | 46 | 74.7% |
-| MUI | import-bloat | ~0.5s | 13,301 | 690 | 68.3% |
-| MUI | import-depth | ~0.5s | 13,301 | 3,788 | 68.3% |
-| MUI | import-cycles | ~0.5s | 13,301 | 4 | 68.3% |
-| Vite | import-bloat | ~40ms | 367 | 0 | 72.6% |
-| Vite | import-depth | ~50ms | 367 | 0 | 72.6% |
-| Vite | import-cycles | ~50ms | 367 | 49 | 72.6% |
-| Playwright | import-bloat | ~50ms | 765 | 75 | 87.5% |
-| Playwright | import-depth | ~55ms | 765 | 53 | 87.5% |
-| Playwright | import-cycles | ~60ms | 765 | 76 | 87.5% |
-| Lit | import-bloat | ~70ms | 754 | 0 | 49.7% |
-| Lit | import-depth | ~70ms | 754 | 0 | 49.7% |
-| Lit | import-cycles | ~60ms | 754 | 20 | 49.7% |
+| Next.js | bloat | ~1.0s | 2,344 | 164 | 88.6% |
+| Next.js | depth | ~1.0s | 2,344 | 202 | 88.6% |
+| Next.js | cycles | ~1.0s | 2,344 | 68 | 88.6% |
+| Expo | bloat | ~0.7s | 4,656 | 868 | 74.7% |
+| Expo | depth | ~0.7s | 4,656 | 1,586 | 74.7% |
+| Expo | cycles | ~0.7s | 4,656 | 46 | 74.7% |
+| MUI | bloat | ~0.5s | 13,301 | 690 | 68.3% |
+| MUI | depth | ~0.5s | 13,301 | 3,788 | 68.3% |
+| MUI | cycles | ~0.5s | 13,301 | 4 | 68.3% |
+| Vite | bloat | ~40ms | 367 | 0 | 72.6% |
+| Vite | depth | ~50ms | 367 | 0 | 72.6% |
+| Vite | cycles | ~50ms | 367 | 49 | 72.6% |
+| Playwright | bloat | ~50ms | 765 | 75 | 87.5% |
+| Playwright | depth | ~55ms | 765 | 53 | 87.5% |
+| Playwright | cycles | ~60ms | 765 | 76 | 87.5% |
+| Lit | bloat | ~70ms | 754 | 0 | 49.7% |
+| Lit | depth | ~70ms | 754 | 0 | 49.7% |
+| Lit | cycles | ~60ms | 754 | 20 | 49.7% |
 
 Results are deterministic, so any change in violations comes from a code change.
 Times vary by about 20% between runs on shared machines; compare against a
@@ -69,7 +69,7 @@ files: oxiclean's default (every non-test JS/TS file in a `src` directory),
 given to knip as `entry` and `project` in every workspace, with all knip
 plugins off. Neither tool installs dependencies.
 
-### Circular imports (`import-cycles` vs knip `cycles`)
+### Circular imports (`cycles` vs knip `cycles`)
 
 | Target | oxiclean | knip | Speed-up | Cycles (oxiclean / knip) | knip cycles oxiclean misses |
 |---|---|---|---|---|---|
@@ -98,16 +98,16 @@ imports breaks.
 
 ## Choosing thresholds
 
-The default thresholds (300 modules for `import-bloat`, 20 levels for
-`import-depth`) come from the distribution of each file's worst value in
+The default thresholds (300 modules for `bloat`, 20 levels for
+`depth`) come from the distribution of each file's worst value in
 these targets, measured with `--format json` and a threshold of 1 in `.oxicleanrc.json`:
 
 | Target | Check | Files | p90 | p95 | p99 | Files flagged at default |
 |---|---|---|---|---|---|---|
-| Next.js | import-bloat | 2,129 | 172 | 309 | 966 | 112 (5.3%) |
-| Expo | import-bloat | 4,319 | 217 | 497 | 585 | 400 (9.3%) |
-| Next.js | import-depth | 1,294 | 18 | 23 | 29 | 104 (8.0%) |
-| Expo | import-depth | 3,112 | 41 | 43 | 50 | 736 (23.7%) |
+| Next.js | bloat | 2,129 | 172 | 309 | 966 | 112 (5.3%) |
+| Expo | bloat | 4,319 | 217 | 497 | 585 | 400 (9.3%) |
+| Next.js | depth | 1,294 | 18 | 23 | 29 | 104 (8.0%) |
+| Expo | depth | 3,112 | 41 | 43 | 50 | 736 (23.7%) |
 
 The old defaults (200 and 10) flagged 9–11% of files for bloat and 22–57% for
 depth, which buried the outliers. Expo's long import chains are concentrated in

@@ -9,17 +9,17 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 cargo install --path crates/oxiclean
 
 # Or run from monorepo
-cargo run -- import-bloat --help
+cargo run -- bloat --help
 ```
 
 ## Usage
 
 ```bash
 # Analyze current directory (defaults to git root)
-oxiclean import-bloat
+oxiclean bloat
 
 # Analyze another project
-oxiclean import-bloat --root ./my-project
+oxiclean bloat --root ./my-project
 ```
 
 ### Options
@@ -34,7 +34,7 @@ in `.oxicleanrc.json`:
 ```json
 {
   "entries": ["src/**/*.tsx"],
-  "rules": { "import-bloat": ["error", { "threshold": 300 }] }
+  "rules": { "bloat": ["error", { "threshold": 300 }] }
 }
 ```
 
@@ -70,7 +70,7 @@ src/pages/Dashboard.tsx (127 modules)
 ## Library Usage
 
 ```rust
-use oxiclean_import_bloat::{Config, run_import_bloat_check, print_warnings_tree};
+use oxiclean_bloat::{Config, run_bloat_check, print_warnings_tree};
 
 let cfg = Config {
     root: Some("./my-project".into()),
@@ -79,7 +79,7 @@ let cfg = Config {
     ..Default::default()
 };
 
-let warnings = run_import_bloat_check(cfg.clone())?;
+let warnings = run_bloat_check(cfg.clone())?;
 print_warnings_tree(&warnings, cfg.threshold);
 ```
 

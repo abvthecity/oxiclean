@@ -8,10 +8,10 @@ each other, directly or indirectly, at runtime. It is the equivalent of knip's
 
 ```bash
 # Analyze current directory (defaults to git root)
-oxiclean import-cycles
+oxiclean cycles
 
 # Analyze another project
-oxiclean import-cycles --root ./my-project
+oxiclean cycles --root ./my-project
 ```
 
 ### Options
@@ -26,7 +26,7 @@ cycle is reported. It, the entry files and ignore patterns are set in
 
 ```json
 {
-  "rules": { "import-cycles": ["warn", { "threshold": 3 }] }
+  "rules": { "cycles": ["warn", { "threshold": 3 }] }
 }
 ```
 
@@ -86,9 +86,9 @@ component) its cycle belongs to.
 
 ```rust,no_run
 use oxiclean_core::CommonArgs;
-use oxiclean_import_cycles::{Config, FindingKind, run_import_cycles_check};
+use oxiclean_cycles::{Config, FindingKind, run_cycles_check};
 
-let result = run_import_cycles_check(&Config { common: CommonArgs::with_root("./my-project") })?;
+let result = run_cycles_check(&Config { common: CommonArgs::with_root("./my-project") })?;
 let cycles: Vec<Vec<String>> = result
     .findings
     .iter()

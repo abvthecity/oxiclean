@@ -4,14 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
-use oxiclean_import_cycles::{CheckResult, Config, FindingKind, run_import_cycles_check};
+use oxiclean_cycles::{CheckResult, Config, FindingKind, run_cycles_check};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
 
 fn run(args: CommonArgs) -> CheckResult {
-    run_import_cycles_check(&Config { common: args }).expect("fixture analyses")
+    run_cycles_check(&Config { common: args }).expect("fixture analyses")
 }
 
 /// Each cycle as `file:line -> request` steps relative to the root, plus the

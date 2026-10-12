@@ -56,8 +56,8 @@ fn cycle_fixture() -> TempDir {
 #[test]
 fn depth_is_the_same_for_a_cycle_from_every_entry() {
     let t = cycle_fixture();
-    configure(t.path(), &rule_config("import-depth", 1, &["src/e*.ts"]));
-    let (code, out) = run(t.path(), &["import-depth"]);
+    configure(t.path(), &rule_config("depth", 1, &["src/e*.ts"]));
+    let (code, out) = run(t.path(), &["depth"]);
     assert_eq!(code, 1, "{out}");
     // Before the fix, './b' was reported as depth 2 from one entry and 5 from another.
     let b_lines: Vec<&str> = out.lines().filter(|l| l.contains("import './b'")).collect();
@@ -69,12 +69,12 @@ fn depth_is_the_same_for_a_cycle_from_every_entry() {
 #[test]
 fn output_is_identical_across_runs() {
     let t = cycle_fixture();
-    configure(t.path(), &rule_config("import-depth", 1, &[]));
+    configure(t.path(), &rule_config("depth", 1, &[]));
     let strip_timing =
         |s: String| s.lines().filter(|l| !l.contains("Finished in")).collect::<Vec<_>>().join("\n");
-    let first = strip_timing(run(t.path(), &["import-depth"]).1);
+    let first = strip_timing(run(t.path(), &["depth"]).1);
     for _ in 0..5 {
-        assert_eq!(strip_timing(run(t.path(), &["import-depth"]).1), first);
+        assert_eq!(strip_timing(run(t.path(), &["depth"]).1), first);
     }
 }
 
@@ -90,9 +90,9 @@ fn bloat_follows_barrel_re_exports() {
         "export * from './m1';\nexport * from './m2';\nexport { v3 } from './m3';\nexport * from './m4';\nexport * from './m5';",
     );
     write(t.path(), "src/main.ts", "import { v1 } from './barrel';");
-    configure(t.path(), &rule_config("import-bloat", 1, &["src/main.ts"]));
+    configure(t.path(), &rule_config("bloat", 1, &["src/main.ts"]));
 
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("import './barrel' (6 modules)"), "{out}");
 }
@@ -102,9 +102,9 @@ fn entries_are_real_globs() {
     let t = TempDir::new().unwrap();
     write(t.path(), "src/pages/home.tsx", "import './nested/card';");
     write(t.path(), "src/pages/nested/card.tsx", "export const c = 1;");
-    configure(t.path(), &rule_config("import-bloat", 1, &["src/pages/*.tsx"]));
+    configure(t.path(), &rule_config("bloat", 1, &["src/pages/*.tsx"]));
 
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("home.tsx (2 modules)"), "{out}");
     assert!(!out.contains("card.tsx ("), "nested file must not match `*`: {out}");
@@ -120,7 +120,7 @@ fn gitignored_dirs_are_skipped_without_git() {
         write(t.path(), &format!("node_modules/pkg/src/f{i}.js"), "export const b = 1;");
     }
 
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("on 1 files"), "{out}");
 }
@@ -132,7 +132,7 @@ fn unparseable_files_are_reported() {
     write(t.path(), "src/broken.ts", "export const = ;");
     configure(t.path(), r#"{ "entries": ["src/main.ts"] }"#);
 
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("1 file(s) could not be parsed"), "{out}");
     assert!(out.contains("broken.ts"), "{out}");
@@ -145,16 +145,16 @@ fn dynamic_imports_are_opt_in() {
     write(t.path(), "src/heavy.ts", "import './dep';");
     write(t.path(), "src/dep.ts", "export const d = 1;");
 
-    configure(t.path(), &rule_config("import-bloat", 2, &["src/main.ts"]));
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    configure(t.path(), &rule_config("bloat", 2, &["src/main.ts"]));
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 0, "{out}");
 
     configure(
         t.path(),
         r#"{ "entries": ["src/main.ts"], "includeDynamic": true,
-             "rules": { "import-bloat": ["error", { "threshold": 2 }] } }"#,
+             "rules": { "bloat": ["error", { "threshold": 2 }] } }"#,
     );
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("import './heavy' (2 modules)"), "{out}");
 }
@@ -162,7 +162,7 @@ fn dynamic_imports_are_opt_in() {
 #[test]
 fn missing_root_is_a_clear_error() {
     let t = TempDir::new().unwrap();
-    let (code, out) = run(&t.path().join("nope"), &["import-depth"]);
+    let (code, out) = run(&t.path().join("nope"), &["depth"]);
     assert_ne!(code, 0);
     assert!(out.contains("is not accessible"), "{out}");
 }
@@ -171,7 +171,7 @@ fn missing_root_is_a_clear_error() {
 fn no_entries_is_a_clear_error() {
     let t = TempDir::new().unwrap();
     write(t.path(), "lib/a.ts", "");
-    let (code, out) = run(t.path(), &["import-depth"]);
+    let (code, out) = run(t.path(), &["depth"]);
     assert_ne!(code, 0);
     assert!(out.contains("no entry files found"), "{out}");
 }
@@ -181,7 +181,7 @@ fn rule_options_are_not_command_line_flags() {
     let t = TempDir::new().unwrap();
     write(t.path(), "src/a.ts", "");
     for flag in ["--threshold", "--entry-glob", "--include-dynamic", "--package"] {
-        let (code, out) = run(t.path(), &["import-bloat", flag, "1"]);
+        let (code, out) = run(t.path(), &["bloat", flag, "1"]);
         assert_eq!(code, 2, "{flag} should be rejected: {out}");
     }
 }
@@ -225,13 +225,13 @@ fn config_file_sets_thresholds_per_package() {
         r#"{
             // Comments are allowed, as in .oxlintrc.json
             "entries": ["**/main.ts"],
-            "rules": { "import-bloat": ["error", { "threshold": 2 }] },
+            "rules": { "bloat": ["error", { "threshold": 2 }] },
             "overrides": [
-                { "packages": ["@acme/legacy"], "rules": { "import-bloat": ["error", { "threshold": 50 }] } },
+                { "packages": ["@acme/legacy"], "rules": { "bloat": ["error", { "threshold": 50 }] } },
             ],
         }"#,
     );
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("threshold: 2 modules"), "{out}");
     assert!(out.contains("web"), "{out}");
@@ -241,8 +241,8 @@ fn config_file_sets_thresholds_per_package() {
 #[test]
 fn config_flag_reads_another_file() {
     let t = workspace_fixture();
-    write(t.path(), "configs/strict.json", &rule_config("import-bloat", 2, &["**/main.ts"]));
-    let (code, out) = run(t.path(), &["import-bloat", "--config", "configs/strict.json"]);
+    write(t.path(), "configs/strict.json", &rule_config("bloat", 2, &["**/main.ts"]));
+    let (code, out) = run(t.path(), &["bloat", "--config", "configs/strict.json"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("threshold: 2 modules"), "{out}");
 }
@@ -250,8 +250,8 @@ fn config_flag_reads_another_file() {
 #[test]
 fn warnings_do_not_fail_the_run() {
     let t = workspace_fixture();
-    configure(t.path(), r#"{ "rules": { "import-depth": ["warn", { "threshold": 1 }] } }"#);
-    let (code, out) = run(t.path(), &["import-depth"]);
+    configure(t.path(), r#"{ "rules": { "depth": ["warn", { "threshold": 1 }] } }"#);
+    let (code, out) = run(t.path(), &["depth"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("[warn]"), "{out}");
     assert!(out.contains("Warnings (don't fail the run): 4"), "{out}");
@@ -264,14 +264,14 @@ fn disabled_rules_and_ignored_files_report_nothing() {
         t.path(),
         r#"{
             "ignorePatterns": ["packages/legacy/**"],
-            "rules": { "import-bloat": "off", "import-depth": ["error", { "threshold": 1 }] }
+            "rules": { "bloat": "off", "depth": ["error", { "threshold": 1 }] }
         }"#,
     );
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_eq!(code, 0, "{out}");
 
     // The ignore patterns also keep legacy's files from being entries.
-    let (_, out) = run(t.path(), &["import-depth"]);
+    let (_, out) = run(t.path(), &["depth"]);
     assert!(out.contains("web") && !out.contains("legacy"), "{out}");
 }
 
@@ -279,7 +279,7 @@ fn disabled_rules_and_ignored_files_report_nothing() {
 fn invalid_config_is_a_clear_error() {
     let t = workspace_fixture();
     configure(t.path(), r#"{ "rules": { "import-blot": "warn" } }"#);
-    let (code, out) = run(t.path(), &["import-bloat"]);
+    let (code, out) = run(t.path(), &["bloat"]);
     assert_ne!(code, 0);
     assert!(out.contains(".oxicleanrc.json") && out.contains("import-blot"), "{out}");
 }
@@ -287,11 +287,11 @@ fn invalid_config_is_a_clear_error() {
 #[test]
 fn json_output() {
     let t = workspace_fixture();
-    configure(t.path(), &rule_config("import-bloat", 2, &["packages/web/**"]));
-    let (code, out) = run_stdout(t.path(), &["import-bloat", "--format", "json"]);
+    configure(t.path(), &rule_config("bloat", 2, &["packages/web/**"]));
+    let (code, out) = run_stdout(t.path(), &["bloat", "--format", "json"]);
     assert_eq!(code, 1, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["rule"], "import-bloat");
+    assert_eq!(v["rule"], "bloat");
     assert_eq!(v["summary"]["errors"], 3);
     let first = &v["findings"][0];
     assert_eq!(first["package"], "@acme/web");
@@ -301,14 +301,14 @@ fn json_output() {
 #[test]
 fn sarif_output() {
     let t = workspace_fixture();
-    configure(t.path(), &rule_config("import-depth", 2, &[]));
-    let (code, out) = run_stdout(t.path(), &["--format", "sarif", "import-depth"]);
+    configure(t.path(), &rule_config("depth", 2, &[]));
+    let (code, out) = run_stdout(t.path(), &["--format", "sarif", "depth"]);
     assert_eq!(code, 1, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["version"], "2.1.0");
     let results = v["runs"][0]["results"].as_array().unwrap();
     assert!(!results.is_empty());
-    assert!(results.iter().all(|r| r["ruleId"] == "import-depth" && r["level"] == "error"));
+    assert!(results.iter().all(|r| r["ruleId"] == "depth" && r["level"] == "error"));
     let loc = &results[0]["locations"][0]["physicalLocation"];
     assert_eq!(loc["region"]["startLine"], 1);
 }
@@ -323,16 +323,16 @@ fn node_modules_are_scanned_only_when_enabled() {
     write(t.path(), "node_modules/dep/b.js", "");
 
     // Off by default: the package is one leaf module.
-    configure(t.path(), &rule_config("import-bloat", 1, &["src/main.ts"]));
-    let (_, out) = run(t.path(), &["import-bloat"]);
+    configure(t.path(), &rule_config("bloat", 1, &["src/main.ts"]));
+    let (_, out) = run(t.path(), &["bloat"]);
     assert!(out.contains("import 'dep' (1 modules)"), "{out}");
 
     configure(
         t.path(),
         r#"{ "entries": ["src/main.ts"], "includeNodeModules": true,
-             "rules": { "import-bloat": ["error", { "threshold": 1 }] } }"#,
+             "rules": { "bloat": ["error", { "threshold": 1 }] } }"#,
     );
-    let (_, out) = run(t.path(), &["import-bloat"]);
+    let (_, out) = run(t.path(), &["bloat"]);
     assert!(out.contains("import 'dep' (3 modules)"), "{out}");
 }
 
@@ -352,8 +352,8 @@ fn installed_workspace_packages_resolve_to_their_sources() {
         r#"{"name":"@acme/legacy","main":"src/main.ts"}"#,
     );
     write(t.path(), "node_modules/@acme/legacy/src/main.ts", "");
-    configure(t.path(), &rule_config("import-bloat", 1, &["packages/web/src/main.ts"]));
-    let (_, out) = run(t.path(), &["import-bloat"]);
+    configure(t.path(), &rule_config("bloat", 1, &["packages/web/src/main.ts"]));
+    let (_, out) = run(t.path(), &["bloat"]);
     assert!(out.contains("import '@acme/legacy' (3 modules)"), "{out}");
 }
 
@@ -376,9 +376,9 @@ fn cycles_fixture() -> TempDir {
 }
 
 #[test]
-fn import_cycles_text_output() {
+fn cycles_text_output() {
     let t = cycles_fixture();
-    let (code, out) = run(t.path(), &["import-cycles"]);
+    let (code, out) = run(t.path(), &["cycles"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("Circular imports detected"), "{out}");
     assert!(out.contains("import './b' (cycle of 3 files)"), "{out}");
@@ -392,9 +392,9 @@ fn import_cycles_text_output() {
 }
 
 #[test]
-fn import_cycles_json_and_sarif_list_every_import() {
+fn cycles_json_and_sarif_list_every_import() {
     let t = cycles_fixture();
-    let (code, out) = run_stdout(t.path(), &["import-cycles", "--format", "json"]);
+    let (code, out) = run_stdout(t.path(), &["cycles", "--format", "json"]);
     assert_eq!(code, 1, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let finding = &v["findings"][0];
@@ -409,9 +409,9 @@ fn import_cycles_json_and_sarif_list_every_import() {
         ["packages/web/src/a.ts", "packages/web/src/b.ts", "packages/web/src/main.ts"]
     );
 
-    let (_, out) = run_stdout(t.path(), &["import-cycles", "--format", "sarif"]);
+    let (_, out) = run_stdout(t.path(), &["cycles", "--format", "sarif"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let result = &v["runs"][0]["results"][0];
-    assert_eq!(result["ruleId"], "import-cycles");
+    assert_eq!(result["ruleId"], "cycles");
     assert_eq!(result["relatedLocations"].as_array().unwrap().len(), 2);
 }

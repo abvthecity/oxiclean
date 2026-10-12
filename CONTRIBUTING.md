@@ -7,7 +7,7 @@ Everything is plain `cargo`. You need Rust 1.89 or newer.
 ```bash
 cargo build
 cargo run -- --help
-cargo run -- import-bloat --root ../some-ts-project
+cargo run -- bloat --root ../some-ts-project
 ```
 
 `cargo run` builds the `oxiclean` CLI from source. Add `--release` when timing

@@ -15,7 +15,7 @@ REPO_ROOT=$(pwd)
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 BASELINE=$REPO_ROOT/bench/baseline.json
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
-CHECKS=(import-bloat import-depth import-cycles)
+CHECKS=(bloat depth cycles)
 
 install=false
 update=false

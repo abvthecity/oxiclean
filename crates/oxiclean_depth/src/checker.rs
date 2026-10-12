@@ -10,7 +10,7 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// # Errors
 /// Fails if the project root can't be found, an entry glob is invalid, or no
 /// entry files are found.
-pub fn run_import_depth_check(cfg: &Config) -> Result<CheckResult> {
+pub fn run_depth_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import depth check");
     let analysis = cfg.common.analyze()?;
     let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
@@ -71,10 +71,10 @@ mod tests {
     /// (request, depth) pairs for the given entry glob, in report order.
     fn depths(root: &Path, entry_glob: &str) -> Vec<(String, usize)> {
         let config = format!(
-            r#"{{ "entries": ["{entry_glob}"], "rules": {{ "import-depth": ["error", {{ "threshold": 1 }}] }} }}"#
+            r#"{{ "entries": ["{entry_glob}"], "rules": {{ "depth": ["error", {{ "threshold": 1 }}] }} }}"#
         );
         write(root, ".oxicleanrc.json", &config);
-        run_import_depth_check(&Config { common: CommonArgs::with_root(root) })
+        run_depth_check(&Config { common: CommonArgs::with_root(root) })
             .unwrap()
             .findings
             .into_iter()

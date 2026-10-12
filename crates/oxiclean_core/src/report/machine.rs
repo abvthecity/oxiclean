@@ -27,7 +27,7 @@ pub enum OutputFormat {
 /// What a machine-readable report says about the rule and the tool.
 #[derive(Debug, Clone, Copy)]
 pub struct ReportMeta<'a> {
-    /// The rule's name, e.g. `import-bloat`.
+    /// The rule's name, e.g. `bloat`.
     pub rule: &'a str,
     pub style: &'a ReportStyle,
     /// Version of the tool, e.g. `env!("CARGO_PKG_VERSION")`.
@@ -277,7 +277,7 @@ mod tests {
     }
 
     fn meta() -> ReportMeta<'static> {
-        ReportMeta { rule: "import-bloat", style: &STYLE, version: "0.1.0", elapsed_ms: 5 }
+        ReportMeta { rule: "bloat", style: &STYLE, version: "0.1.0", elapsed_ms: 5 }
     }
 
     #[test]
@@ -285,7 +285,7 @@ mod tests {
         let mut out = Vec::new();
         write_json(&mut out, meta(), &result()).unwrap();
         let v: Value = serde_json::from_slice(&out).unwrap();
-        assert_eq!(v["rule"], "import-bloat");
+        assert_eq!(v["rule"], "bloat");
         assert_eq!(v["summary"]["errors"], 1);
         assert_eq!(v["summary"]["warnings"], 1);
         let import = &v["findings"][1];
@@ -308,7 +308,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["version"], "2.1.0");
         let run = &v["runs"][0];
-        assert_eq!(run["tool"]["driver"]["rules"][0]["id"], "import-bloat");
+        assert_eq!(run["tool"]["driver"]["rules"][0]["id"], "bloat");
         assert_eq!(run["originalUriBaseIds"]["%SRCROOT%"]["uri"], "file:///repo/");
         let results = run["results"].as_array().unwrap();
         assert_eq!(results[0]["level"], "warning");
