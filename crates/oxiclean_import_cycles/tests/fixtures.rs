@@ -91,3 +91,36 @@ fn every_cycle_in_a_tangle_is_reported() {
         ]
     );
 }
+
+/// knip's own cycle fixture: the same four cycles as
+/// `test/imports/circular-dependencies.test.ts` in knip, and a fifth through
+/// a dynamic `import()` when those count.
+#[test]
+fn knip_circular_dependencies_fixture() {
+    let root = fixture("knip");
+    let files = |result: &CheckResult| -> Vec<String> {
+        cycles(result)
+            .into_iter()
+            .map(|(steps, _)| {
+                let files: Vec<&str> = steps.iter().map(|s| s.split(':').next().unwrap()).collect();
+                files.join(" → ")
+            })
+            .collect()
+    };
+    let knip = [
+        "apricot.ts → banana.ts",
+        "citrus.ts → lemon.ts → lime.ts",
+        "citrus.ts → lemon.ts → orange.ts",
+        "ping.ts → pong.ts",
+    ];
+
+    let result = run(CommonArgs::with_root(&root));
+    assert_eq!(files(&result), knip);
+    // knip points both imports of ping.ts → pong.ts at line 1.
+    assert_eq!(cycles(&result)[3].0, ["ping.ts:1 -> ./pong", "pong.ts:1 -> ./ping"]);
+
+    let result = run(CommonArgs::with_root(&root).config(root.join("dynamic.oxicleanrc.json")));
+    let mut with_dynamic = knip.to_vec();
+    with_dynamic.push("zoodle.ts → zucchini.ts");
+    assert_eq!(files(&result), with_dynamic);
+}

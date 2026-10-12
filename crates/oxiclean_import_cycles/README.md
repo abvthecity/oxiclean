@@ -102,6 +102,12 @@ let cycles: Vec<Vec<String>> = result
 # Ok::<(), oxiclean_core::Error>(())
 ```
 
+## Conformance with knip
+
+`tests/fixtures/knip` is knip's own cycle fixture, copied unchanged with its
+ISC license notice. oxiclean reports the same cycles on it as knip's test
+expects, with and without dynamic imports.
+
 ## License
 
 MIT
