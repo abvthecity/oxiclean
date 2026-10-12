@@ -18,7 +18,10 @@ use std::{
 use rayon::prelude::*;
 use tracing::{debug, trace, warn};
 
-use crate::constants::JS_TS_EXTENSIONS;
+use crate::{
+    constants::JS_TS_EXTENSIONS,
+    sequencer::{Components, sequence, strongly_connected},
+};
 
 /// Dense index of a module in a [`ModuleGraph`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -83,6 +86,20 @@ pub struct ParseFailure {
     pub message: String,
 }
 
+/// A circular import: each module imports the next, and the last imports the
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Cycle {
+    /// The modules in import order, starting with the one whose path sorts
+    /// first.
+    pub modules: Vec<ModuleId>,
+    /// Number of modules that import each other, directly or indirectly,
+    /// together with this cycle's: the size of its strongly connected
+    /// component. A large group means one cycle is part of a wider tangle.
+    pub group_size: usize,
+}
+
 /// Options that control which edges the builder follows.
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
@@ -117,15 +134,14 @@ pub struct ModuleGraph {
     modules: Vec<Module>,
     index: HashMap<PathBuf, ModuleId>,
     failures: Vec<ParseFailure>,
-    /// SCC id of each module.
+    /// SCC id of each module. Ids are in reverse topological order, as
+    /// Tarjan's algorithm emits them: an SCC's id is higher than the id of
+    /// every SCC it can reach.
     comp: Vec<u32>,
     /// Number of modules in each SCC.
     comp_size: Vec<u32>,
     /// Deduplicated edges between distinct SCCs.
     comp_succ: Vec<Vec<u32>>,
-    /// SCC ids in reverse topological order (every SCC appears after all SCCs
-    /// it can reach). This is the order Tarjan's algorithm emits them in.
-    comp_order: Vec<u32>,
 }
 
 /// Returns true for files the parser understands. Anything else that an import
@@ -228,7 +244,6 @@ impl ModuleGraph {
             comp: Vec::new(),
             comp_size: Vec::new(),
             comp_succ: Vec::new(),
-            comp_order: Vec::new(),
         };
         graph.condense();
         graph
@@ -267,6 +282,92 @@ impl ModuleGraph {
         self.comp[a.idx()] == self.comp[b.idx()]
     }
 
+    /// Import cycles between files outside `node_modules`.
+    ///
+    /// Cycles are found by [`sequence`], the port of pnpm's graph sequencer,
+    /// which picks short cycles: the longest of the shortest cycles through
+    /// each file it searches from. The import that closes each reported cycle
+    /// (from its last file back to its first) is then set aside and the
+    /// search repeats until no cycle is left. So every circular import runs
+    /// through the closing import of at least one reported cycle, and
+    /// removing those imports would leave the graph without cycles.
+    ///
+    /// Files are taken in path order, so the result does not depend on how
+    /// the graph was built.
+    #[must_use]
+    pub fn cycles(&self) -> Vec<Cycle> {
+        let n = self.modules.len();
+        // Imports still considered, as targets per module: runtime imports
+        // between files outside node_modules, one per target.
+        let outside: Vec<bool> = self.modules.iter().map(|m| !in_node_modules(&m.path)).collect();
+        let mut deps: Vec<Vec<usize>> = self
+            .modules
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let mut targets: Vec<usize> = Vec::new();
+                if outside[i] {
+                    for t in m.edges.iter().map(|e| e.target.idx()) {
+                        if outside[t] && !targets.contains(&t) {
+                            targets.push(t);
+                        }
+                    }
+                }
+                targets
+            })
+            .collect();
+
+        let mut by_path: Vec<usize> = (0..n).filter(|&i| outside[i]).collect();
+        by_path.sort_by(|&a, &b| self.modules[a].path.cmp(&self.modules[b].path));
+
+        let mut cycles = Vec::new();
+        loop {
+            let components = strongly_connected(n, |v| deps[v].iter().copied(), |v| !outside[v]);
+            let included: Vec<usize> = by_path
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    components.sizes[components.of[i] as usize] > 1 || deps[i].contains(&i)
+                })
+                .collect();
+            if included.is_empty() {
+                break;
+            }
+            let found = sequence(&deps, &included).cycles;
+            debug_assert!(!found.is_empty(), "every component with a cycle yields one");
+            if found.is_empty() {
+                break;
+            }
+            for cycle in found {
+                let last = cycle[cycle.len() - 1];
+                deps[last].retain(|&t| t != cycle[0]);
+                let mut modules: Vec<ModuleId> =
+                    cycle.into_iter().map(|i| ModuleId(len_u32(i))).collect();
+                // Start at the file whose path sorts first. The sequencer
+                // already does so; rotating keeps that a guarantee.
+                if let Some(first) = (0..modules.len()).min_by(|&a, &b| {
+                    self.module(modules[a]).path.cmp(&self.module(modules[b]).path)
+                }) {
+                    modules.rotate_left(first);
+                }
+                let group_size = self.comp_size[self.comp[modules[0].idx()] as usize] as usize;
+                cycles.push(Cycle { modules, group_size });
+            }
+        }
+        cycles.sort_by(|a, b| {
+            let paths =
+                |c: &Cycle| c.modules.iter().map(|&m| &self.module(m).path).collect::<Vec<_>>();
+            paths(a).cmp(&paths(b))
+        });
+        cycles
+    }
+
+    /// The first import in `from` that loads `to`, in source order.
+    #[must_use]
+    pub fn edge(&self, from: ModuleId, to: ModuleId) -> Option<&Edge> {
+        self.module(from).edges.iter().find(|e| e.target == to)
+    }
+
     /// Longest import chain below each module, counted in edges, indexed by
     /// [`ModuleId::index`].
     ///
@@ -276,8 +377,7 @@ impl ModuleGraph {
     pub fn depths(&self) -> Vec<usize> {
         let mut comp_depth = vec![0usize; self.comp_size.len()];
         // Reverse topological order: successors are final before predecessors.
-        for &c in &self.comp_order {
-            let c = c as usize;
+        for c in 0..self.comp_size.len() {
             comp_depth[c] =
                 self.comp_succ[c].iter().map(|&s| comp_depth[s as usize] + 1).max().unwrap_or(0);
         }
@@ -297,7 +397,6 @@ impl ModuleGraph {
         comp_queries.sort_unstable();
         comp_queries.dedup();
 
-        let topo: Vec<u32> = self.comp_order.iter().rev().copied().collect();
         let counts: HashMap<u32, usize> = comp_queries
             .par_chunks(64)
             .flat_map_iter(|chunk| {
@@ -306,15 +405,16 @@ impl ModuleGraph {
                     mask[c as usize] |= 1 << bit;
                 }
                 let mut totals = [0usize; 64];
-                for &c in &topo {
-                    let m = mask[c as usize];
+                // Topological order: an SCC is final before its successors.
+                for c in (0..self.comp_size.len()).rev() {
+                    let m = mask[c];
                     if m == 0 {
                         continue;
                     }
-                    for &s in &self.comp_succ[c as usize] {
+                    for &s in &self.comp_succ[c] {
                         mask[s as usize] |= m;
                     }
-                    let size = self.comp_size[c as usize] as usize;
+                    let size = self.comp_size[c] as usize;
                     let mut bits = m;
                     while bits != 0 {
                         totals[bits.trailing_zeros() as usize] += size;
@@ -330,67 +430,10 @@ impl ModuleGraph {
 
     /// Computes SCCs with an iterative Tarjan's algorithm and the condensed DAG.
     fn condense(&mut self) {
-        const UNVISITED: u32 = u32::MAX;
         let n = self.modules.len();
-        let mut index_of = vec![UNVISITED; n];
-        let mut lowlink = vec![0u32; n];
-        let mut on_stack = vec![false; n];
-        let mut stack: Vec<u32> = Vec::new();
-        let mut comp = vec![UNVISITED; n];
-        let mut comp_size: Vec<u32> = Vec::new();
-        let mut comp_order: Vec<u32> = Vec::new();
-        let mut next_index = 0u32;
-        // (node, next edge to look at)
-        let mut call: Vec<(u32, usize)> = Vec::new();
-
-        for root in 0..n {
-            if index_of[root] != UNVISITED {
-                continue;
-            }
-            call.push((root as u32, 0));
-            while let Some(&mut (v, ref mut edge_pos)) = call.last_mut() {
-                let vi = v as usize;
-                if *edge_pos == 0 && index_of[vi] == UNVISITED {
-                    index_of[vi] = next_index;
-                    lowlink[vi] = next_index;
-                    next_index += 1;
-                    stack.push(v);
-                    on_stack[vi] = true;
-                }
-                let edges = &self.modules[vi].edges;
-                if let Some(edge) = edges.get(*edge_pos) {
-                    *edge_pos += 1;
-                    let w = edge.target.idx();
-                    if index_of[w] == UNVISITED {
-                        call.push((w as u32, 0));
-                    } else if on_stack[w] {
-                        lowlink[vi] = lowlink[vi].min(index_of[w]);
-                    }
-                    continue;
-                }
-                // All edges of v done.
-                call.pop();
-                if lowlink[vi] == index_of[vi] {
-                    let c = comp_size.len() as u32;
-                    let mut size = 0;
-                    loop {
-                        let w = stack.pop().expect("tarjan stack holds v");
-                        on_stack[w as usize] = false;
-                        comp[w as usize] = c;
-                        size += 1;
-                        if w == v {
-                            break;
-                        }
-                    }
-                    comp_size.push(size);
-                    comp_order.push(c);
-                }
-                if let Some(&(parent, _)) = call.last() {
-                    let p = parent as usize;
-                    lowlink[p] = lowlink[p].min(lowlink[vi]);
-                }
-            }
-        }
+        let modules = &self.modules;
+        let Components { of: comp, sizes: comp_size } =
+            strongly_connected(n, |v| modules[v].edges.iter().map(|e| e.target.idx()), |_| false);
 
         let mut comp_succ: Vec<Vec<u32>> = vec![Vec::new(); comp_size.len()];
         for (v, module) in self.modules.iter().enumerate() {
@@ -411,8 +454,11 @@ impl ModuleGraph {
         self.comp = comp;
         self.comp_size = comp_size;
         self.comp_succ = comp_succ;
-        self.comp_order = comp_order;
     }
+}
+
+fn len_u32(n: usize) -> u32 {
+    u32::try_from(n).expect("more than u32::MAX modules")
 }
 
 fn intern(
@@ -420,7 +466,7 @@ fn intern(
     index: &mut HashMap<PathBuf, ModuleId>,
     path: PathBuf,
 ) -> ModuleId {
-    let id = ModuleId(u32::try_from(modules.len()).expect("more than u32::MAX modules"));
+    let id = ModuleId(len_u32(modules.len()));
     index.insert(path.clone(), id);
     modules.push(Module { path, edges: Vec::new() });
     id
@@ -467,6 +513,134 @@ mod tests {
 
     fn count_of(g: &ModuleGraph, name: &str) -> usize {
         g.reachable_counts(&[g.id(Path::new(&format!("{name}.js"))).unwrap()])[0]
+    }
+
+    fn cycle_names(g: &ModuleGraph) -> Vec<(Vec<String>, usize)> {
+        g.cycles()
+            .into_iter()
+            .map(|c| {
+                let names = c
+                    .modules
+                    .iter()
+                    .map(|&m| {
+                        g.module(m).path.to_string_lossy().trim_end_matches(".js").to_string()
+                    })
+                    .collect();
+                (names, c.group_size)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cycles_start_at_the_first_path_and_follow_imports() {
+        // c -> a -> b -> c, plus a self-import and an acyclic tail.
+        let edges: &[(&str, &[&str])] = &[
+            ("e", &["c", "s"]),
+            ("c", &["a"]),
+            ("a", &["b"]),
+            ("b", &["c"]),
+            ("s", &["s", "t"]),
+            ("t", &[]),
+        ];
+        let expected =
+            vec![(vec!["a".to_string(), "b".into(), "c".into()], 3), (vec!["s".into()], 1)];
+        assert_eq!(cycle_names(&graph(edges, &["e"])), expected);
+        // The order modules were discovered in doesn't matter.
+        assert_eq!(cycle_names(&graph(edges, &["b", "s", "e"])), expected);
+    }
+
+    #[test]
+    fn every_cycle_in_a_tangle_is_reported() {
+        // a <-> b and b <-> c share b: one tangle of three files, two cycles.
+        let edges: &[(&str, &[&str])] = &[("a", &["b"]), ("b", &["a", "c"]), ("c", &["b"])];
+        assert_eq!(
+            cycle_names(&graph(edges, &["a"])),
+            vec![(vec!["a".to_string(), "b".into()], 3), (vec!["b".to_string(), "c".into()], 3)]
+        );
+    }
+
+    /// On random graphs, each reported cycle follows real imports, and
+    /// removing the import that closes each one leaves no cycle.
+    #[test]
+    fn closing_imports_break_every_cycle() {
+        let mut seed = 0x2545_f491_u64;
+        let mut rand = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        for _ in 0..300 {
+            let n = 1 + rand(14) as usize;
+            let density = 1 + rand(4);
+            let names: Vec<String> = (0..n).map(|i| format!("m{i}")).collect();
+            let targets: Vec<Vec<&str>> = (0..n)
+                .map(|_| (0..n).filter(|_| rand(10) < density).map(|j| names[j].as_str()).collect())
+                .collect();
+            let edges: Vec<(&str, &[&str])> =
+                names.iter().zip(&targets).map(|(n, t)| (n.as_str(), t.as_slice())).collect();
+            let g = graph(&edges, &names.iter().map(String::as_str).collect::<Vec<_>>());
+
+            let mut adj: Vec<Vec<usize>> = (0..n)
+                .map(|i| {
+                    g.module(ModuleId(len_u32(i))).edges.iter().map(|e| e.target.idx()).collect()
+                })
+                .collect();
+            for cycle in g.cycles() {
+                let m = &cycle.modules;
+                for (i, from) in m.iter().enumerate() {
+                    let to = m[(i + 1) % m.len()];
+                    assert!(g.edge(*from, to).is_some(), "{cycle:?} follows imports");
+                }
+                let (last, first) = (m[m.len() - 1].idx(), m[0].idx());
+                adj[last].retain(|&t| t != first);
+            }
+            let left = strongly_connected(n, |v| adj[v].iter().copied(), |_| false);
+            for (v, targets) in adj.iter().enumerate() {
+                let alone = left.sizes[left.of[v] as usize] == 1;
+                assert!(alone && !targets.contains(&v), "{edges:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn no_cycles_in_a_dag() {
+        let edges: &[(&str, &[&str])] = &[("a", &["b", "c"]), ("b", &["c"]), ("c", &[])];
+        assert!(graph(edges, &["a"]).cycles().is_empty());
+    }
+
+    #[test]
+    fn cycles_inside_node_modules_are_left_out() {
+        let edges: &[(&str, &[&str])] = &[
+            ("a", &["node_modules/x/i"]),
+            ("node_modules/x/i", &["node_modules/x/j"]),
+            ("node_modules/x/j", &["node_modules/x/i"]),
+        ];
+        let g = ModuleGraph::build(
+            &[PathBuf::from("a.js")],
+            |p: &Path| -> Result<ParsedFile, Infallible> {
+                let name = p.to_string_lossy();
+                let name = name.trim_end_matches(".js");
+                let imports = edges
+                    .iter()
+                    .find(|(from, _)| *from == name)
+                    .map(|(_, to)| {
+                        to.iter()
+                            .map(|t| RawImport {
+                                request: (*t).to_string(),
+                                dynamic: false,
+                                line: 1,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(ParsedFile { imports, error: None })
+            },
+            |_, req| Some(PathBuf::from(format!("{req}.js"))),
+            BuildOptions::default().follow_node_modules(true),
+        );
+        assert_eq!(g.len(), 3);
+        assert!(g.cycles().is_empty());
     }
 
     #[test]

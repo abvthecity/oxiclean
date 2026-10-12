@@ -110,6 +110,11 @@ pub struct Rules {
     /// Default threshold: 20 levels.
     #[serde(rename = "import-depth")]
     pub import_depth: Option<RuleSetting>,
+    /// Files that import each other, directly or indirectly, at runtime.
+    /// Type-only imports don't count. Default threshold: 1 file, so every
+    /// cycle is reported.
+    #[serde(rename = "import-cycles")]
+    pub import_cycles: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -119,12 +124,13 @@ impl Rules {
         match name {
             "import-bloat" => self.import_bloat.as_ref(),
             "import-depth" => self.import_depth.as_ref(),
+            "import-cycles" => self.import_cycles.as_ref(),
             _ => None,
         }
     }
 
     fn all(&self) -> impl Iterator<Item = &RuleSetting> {
-        [&self.import_bloat, &self.import_depth].into_iter().flatten()
+        [&self.import_bloat, &self.import_depth, &self.import_cycles].into_iter().flatten()
     }
 }
 

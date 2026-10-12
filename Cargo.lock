@@ -660,6 +660,7 @@ dependencies = [
  "colored",
  "oxiclean_core",
  "oxiclean_import_bloat",
+ "oxiclean_import_cycles",
  "oxiclean_import_depth",
  "rayon",
  "serde_json",
@@ -695,6 +696,16 @@ dependencies = [
 
 [[package]]
 name = "oxiclean_import_bloat"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "oxiclean_core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "oxiclean_import_cycles"
 version = "0.1.0"
 dependencies = [
  "clap",

@@ -36,6 +36,7 @@ UPDATE_SCHEMA=1 cargo test -p oxiclean_core committed_schema
 
 ## Benchmarks
 
-`scripts/bench.sh` runs every checker against pinned Next.js and Expo
-checkouts and compares the results with a recorded baseline. See
-[bench/README.md](bench/README.md).
+`scripts/bench.sh` runs every checker against pinned checkouts of popular
+npm and pnpm monorepos and compares the results with a recorded baseline.
+`scripts/bench-knip.sh` runs oxiclean and [knip](https://knip.dev) side by
+side for the checks both tools have. See [bench/README.md](bench/README.md).

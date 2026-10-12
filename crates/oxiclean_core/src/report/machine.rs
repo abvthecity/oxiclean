@@ -45,14 +45,19 @@ fn rel(path: &Path, root: &Path) -> String {
     p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
-/// One sentence describing `f`.
+/// One sentence describing `f`. Paths in it are relative to `root`.
 #[must_use]
-pub fn message(style: &ReportStyle, f: &Finding) -> String {
+pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
     let value = (style.value_label)(f.value);
     let limit = format!("threshold: {} {}", f.threshold, style.threshold_unit);
     match &f.kind {
         FindingKind::Import { request, .. } => format!("import '{request}' ({value}, {limit})"),
         FindingKind::WholeGraph => format!("this entry's import graph ({value}, {limit})"),
+        FindingKind::Cycle(cycle) => {
+            let mut files: Vec<String> = cycle.steps.iter().map(|s| rel(&s.file, root)).collect();
+            files.extend(files.first().cloned());
+            format!("import cycle {} ({value}, {limit})", files.join(" -> "))
+        }
     }
 }
 
@@ -78,7 +83,7 @@ pub fn write_json<W: Write>(
                 "package": f.package,
                 "value": f.value,
                 "threshold": f.threshold,
-                "message": message(meta.style, f),
+                "message": message(meta.style, f, root),
             });
             match &f.kind {
                 FindingKind::Import { request, resolved, line } => {
@@ -88,6 +93,17 @@ pub fn write_json<W: Write>(
                     v["resolved"] = json!(rel(resolved, root));
                 }
                 FindingKind::WholeGraph => v["kind"] = json!("entry"),
+                FindingKind::Cycle(cycle) => {
+                    v["kind"] = json!("cycle");
+                    v["line"] = json!(f.line());
+                    v["request"] = json!(cycle.steps.first().map(|s| &s.request));
+                    v["group_size"] = json!(cycle.group_size);
+                    v["cycle"] = cycle
+                        .steps
+                        .iter()
+                        .map(|s| json!({ "file": rel(&s.file, root), "line": s.line, "request": s.request }))
+                        .collect();
+                }
             }
             v
         })
@@ -141,16 +157,40 @@ pub fn write_sarif<W: Write>(
             if f.line() > 0 {
                 location["region"] = json!({ "startLine": f.line() });
             }
-            json!({
+            let mut result = json!({
                 "ruleId": meta.rule,
                 "level": match f.severity {
                     Severity::Error => "error",
                     Severity::Warn => "warning",
                 },
-                "message": { "text": message(meta.style, f) },
+                "message": { "text": message(meta.style, f, root) },
                 "locations": [{ "physicalLocation": location }],
                 "properties": { "value": f.value, "threshold": f.threshold },
-            })
+            });
+            if let FindingKind::Cycle(cycle) = &f.kind {
+                // The other imports of the cycle, so code-scanning UIs can
+                // link to each of them.
+                result["relatedLocations"] = cycle
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .map(|(id, s)| {
+                        let mut physical = json!({
+                            "artifactLocation": { "uri": rel(&s.file, root), "uriBaseId": "%SRCROOT%" },
+                        });
+                        if s.line > 0 {
+                            physical["region"] = json!({ "startLine": s.line });
+                        }
+                        json!({
+                            "id": id,
+                            "physicalLocation": physical,
+                            "message": { "text": format!("imports '{}'", s.request) },
+                        })
+                    })
+                    .collect();
+            }
+            result
         })
         .collect();
 

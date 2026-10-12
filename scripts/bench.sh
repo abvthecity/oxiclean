@@ -3,8 +3,8 @@
 # and compare against bench/baseline.json.
 #
 # Usage: scripts/bench.sh [--install] [--update-baseline]
-#   --install          run `pnpm install --frozen-lockfile --ignore-scripts` in each target
-#                      first, so third-party packages resolve too (slower, needs network)
+#   --install          install each target's dependencies first (`pnpm install` or `npm ci`,
+#                      without scripts), so third-party packages resolve too (slower, needs network)
 #   --update-baseline  overwrite bench/baseline.json with this run's results
 #
 # Repos are cached in $OXICLEAN_BENCH_DIR (default: target/bench-repos).
@@ -15,7 +15,7 @@ REPO_ROOT=$(pwd)
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 BASELINE=$REPO_ROOT/bench/baseline.json
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
-CHECKS=(import-bloat import-depth)
+CHECKS=(import-bloat import-depth import-cycles)
 
 install=false
 update=false
@@ -44,7 +44,11 @@ checkout() {
   fi
   if $install; then
     echo "Installing dependencies for $name..." >&2
-    (cd "$dir" && pnpm install --frozen-lockfile --ignore-scripts >&2)
+    if [[ -f $dir/package-lock.json ]]; then
+      (cd "$dir" && npm ci --ignore-scripts >&2)
+    else
+      (cd "$dir" && pnpm install --frozen-lockfile --ignore-scripts >&2)
+    fi
   fi
 }
 
@@ -83,7 +87,7 @@ while IFS=$'\t' read -r name url sha; do
 done < bench/targets.tsv
 
 # Report against the baseline
-printf '\n%-8s %-13s %10s %8s %11s %10s\n' target check time_ms files violations resolved
+printf '\n%-10s %-13s %10s %8s %11s %10s\n' target check time_ms files violations resolved
 jq -r --slurpfile base <(cat "$BASELINE" 2>/dev/null || echo '[]') '
   def pct(r; t): if t == 0 then "-" else ((r * 1000 / t | floor) / 10 | tostring) + "%" end;
   def delta(new; old): if old == null then "" else " (" + (if new >= old then "+" else "" end) + ((new - old) | tostring) + ")" end;
@@ -95,7 +99,7 @@ jq -r --slurpfile base <(cat "$BASELINE" 2>/dev/null || echo '[]') '
      ($r.violations | tostring) + delta($r.violations; $b.violations),
      pct($r.imports_resolved; $r.imports_total)]
   | @tsv' <<<"$results" | while IFS=$'\t' read -r t c ms f v p; do
-    printf '%-8s %-13s %10s %8s %11s %10s\n' "$t" "$c" "$ms" "$f" "$v" "$p"
+    printf '%-10s %-13s %10s %8s %11s %10s\n' "$t" "$c" "$ms" "$f" "$v" "$p"
   done
 
 if $update; then

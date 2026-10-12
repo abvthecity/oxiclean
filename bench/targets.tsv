@@ -1,3 +1,7 @@
 # name	repository	commit
 nextjs	https://github.com/vercel/next.js	d8c1c1b0002db8ccb63b58095f338e8bf423fa99
 expo	https://github.com/expo/expo	fe4a2c8e7875d56283ab314a9b4a0da6b6df159d
+mui	https://github.com/mui/material-ui	41c9cb4030274f3bde585d136949f447674e728b
+vite	https://github.com/vitejs/vite	3b72997d42e7dd2b31898d0e68461e3025e836b6
+playwright	https://github.com/microsoft/playwright	d9f2fd3e2232ace8e317a84eda6cb86e25bcf49c
+lit	https://github.com/lit/lit	01dbc6673cdc211543932afd0ca04e223e567366

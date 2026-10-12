@@ -20,6 +20,7 @@ mod parser;
 mod project;
 pub mod report;
 mod resolver;
+pub mod sequencer;
 pub mod settings;
 mod types;
 
@@ -30,11 +31,12 @@ pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
 pub use error::{Error, Result};
 pub use graph::{
-    BuildOptions, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
+    BuildOptions, Cycle, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
 };
 pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
-pub use report::{CheckResult, Finding, FindingKind};
+pub use report::{CheckResult, CycleFinding, CycleStep, Finding, FindingKind};
 pub use resolver::{ResolutionStats, is_builtin, resolve};
+pub use sequencer::{Sequence, sequence};
 pub use settings::{ConfigFile, RulePolicy, Severity};
 pub use types::{SpecKind, Specifier};
