@@ -52,7 +52,9 @@ pub fn declaration_for(path: &std::path::Path) -> Option<std::path::PathBuf> {
         _ => return None,
     };
     let candidate = path.with_extension(suffix);
-    candidate.is_file().then_some(candidate)
+    // Canonical, like the resolver's paths, so it is one module however it
+    // is reached.
+    candidate.is_file().then(|| candidate.canonicalize().unwrap_or(candidate))
 }
 
 /// Index file names to try when resolving directory imports

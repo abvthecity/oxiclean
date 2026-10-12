@@ -107,14 +107,16 @@ pub struct Module {
     /// The imports the graph follows: eager ones, and lazy `import()` when
     /// [`BuildOptions::follow_dynamic`] is set.
     pub edges: Vec<Edge>,
-    /// The imports that load nothing at runtime, when
-    /// [`BuildOptions::resolve_passive`] is set: type-only imports, imports
-    /// of declaration files (`.d.ts`), and `import()` when it isn't
-    /// followed. They don't count toward bloat, depth or cycles.
+    /// The imports the graph doesn't follow, when
+    /// [`BuildOptions::resolve_passive`] is set: type-only imports and
+    /// imports of declaration files (`.d.ts`), which load nothing at
+    /// runtime, and `import()` when it isn't followed. They don't count
+    /// toward bloat, depth or cycles.
     pub passive_edges: Vec<Edge>,
     /// The declaration file that describes this JavaScript file, such as
     /// `a.d.ts` next to `a.js`, when [`BuildOptions::resolve_passive`] is
-    /// set.
+    /// set. Not looked up for files that aren't parsed, such as those in
+    /// `node_modules` by default.
     pub declaration: Option<ModuleId>,
     /// The names the module exports. Empty for files that aren't parsed:
     /// assets and, by default, files in `node_modules`.

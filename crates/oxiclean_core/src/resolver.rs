@@ -6,7 +6,7 @@ use std::{
 };
 use tracing::{debug, trace};
 
-use crate::constants::{DECLARATION_SUFFIXES, INDEX_FILES, RESOLVE_EXTENSIONS};
+use crate::constants::{DECLARATION_SUFFIXES, INDEX_FILES, RESOLVE_EXTENSIONS, is_declaration};
 use crate::project::{Project, normalize, split_package_request};
 
 /// Node.js built-in modules, which never contribute to an app's module graph.
@@ -115,7 +115,9 @@ pub fn resolve(
         // Relative imports
         trace!("Resolving as relative import: '{}'", request);
         let base = from_file.parent().unwrap_or(root);
-        let result = resolve_file(&normalize(&base.join(request)));
+        let path = normalize(&base.join(request));
+        let result =
+            resolve_file(&path, Mode::Runtime).or_else(|| resolve_file(&path, Mode::Declaration));
         if result.is_some() {
             trace!("Resolved relative import '{}' to {:?}", request, result);
         } else {
@@ -126,7 +128,10 @@ pub fn resolve(
         trace!("Skipping built-in module '{}'", request);
         None
     } else {
-        resolve_bare(project, from_file, request)
+        // As in TypeScript, a declaration file is a fallback: any runtime
+        // file a later step of the lookup finds wins over it.
+        resolve_bare(project, from_file, request, Mode::Runtime)
+            .or_else(|| resolve_bare(project, from_file, request, Mode::Declaration))
     };
 
     cache.insert(key, resolved.clone());
@@ -136,19 +141,28 @@ pub fn resolve(
     Ok(resolved)
 }
 
-fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<PathBuf> {
+/// Which files a lookup accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Files that run: never a declaration file.
+    Runtime,
+    /// Declaration files only, for when no runtime file exists.
+    Declaration,
+}
+
+fn resolve_bare(project: &Project, from_file: &Path, request: &str, mode: Mode) -> Option<PathBuf> {
     let root = project.root.as_path();
 
     // 1. tsconfig `paths` and `baseUrl` from the file's nearest tsconfig.json
     if let Some(tsconfig) = project.tsconfig_for(from_file) {
         for candidate in tsconfig.alias_candidates(request) {
-            if let Some(resolved) = resolve_file(&candidate) {
+            if let Some(resolved) = resolve_file(&candidate, mode) {
                 trace!("Resolved alias '{}' to {:?}", request, resolved);
                 return Some(resolved);
             }
         }
         if let Some(base_url) = &tsconfig.base_url
-            && let Some(resolved) = resolve_file(&normalize(&base_url.join(request)))
+            && let Some(resolved) = resolve_file(&normalize(&base_url.join(request)), mode)
         {
             trace!("Resolved '{}' via baseUrl to {:?}", request, resolved);
             return Some(resolved);
@@ -160,7 +174,7 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
     // resolves to the same source files as an uninstalled one.
     let (name, subpath) = split_package_request(request);
     if let Some(pkg_dir) = project.workspace_package(name)
-        && let Some(resolved) = resolve_in_package(project, pkg_dir, subpath)
+        && let Some(resolved) = resolve_in_package(project, pkg_dir, subpath, mode)
     {
         trace!("Resolved workspace package '{}' to {:?}", request, resolved);
         return Some(resolved);
@@ -172,7 +186,7 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
     while let Some(d) = dir {
         let pkg_dir = normalize(&d.join("node_modules").join(name));
         if pkg_dir.is_dir()
-            && let Some(resolved) = resolve_in_package(project, &pkg_dir, subpath)
+            && let Some(resolved) = resolve_in_package(project, &pkg_dir, subpath, mode)
         {
             trace!("Resolved node_modules package '{}' to {:?}", request, resolved);
             return Some(resolved);
@@ -192,12 +206,17 @@ const EXPORT_CONDITIONS: &[&str] =
     &["source", "import", "module", "require", "node", "react-native", "browser", "default"];
 
 /// Resolve `subpath` ("" for the package root) inside a package directory.
-fn resolve_in_package(project: &Project, pkg_dir: &Path, subpath: &str) -> Option<PathBuf> {
+fn resolve_in_package(
+    project: &Project,
+    pkg_dir: &Path,
+    subpath: &str,
+    mode: Mode,
+) -> Option<PathBuf> {
     let pkg = project.package_json(pkg_dir);
 
     if let Some(exports) = pkg.as_ref().and_then(|p| p.get("exports"))
         && let Some(target) = match_exports(exports, subpath)
-        && let Some(resolved) = resolve_package_target(pkg_dir, &target)
+        && let Some(resolved) = resolve_package_target(pkg_dir, &target, mode)
     {
         return Some(resolved);
     }
@@ -205,16 +224,16 @@ fn resolve_in_package(project: &Project, pkg_dir: &Path, subpath: &str) -> Optio
     if subpath.is_empty() {
         for field in ["source", "module", "main"] {
             if let Some(target) = pkg.as_ref().and_then(|p| p.get(field)).and_then(|v| v.as_str())
-                && let Some(resolved) = resolve_package_target(pkg_dir, target)
+                && let Some(resolved) = resolve_package_target(pkg_dir, target, mode)
             {
                 return Some(resolved);
             }
         }
-        return resolve_package_target(pkg_dir, "src/index")
-            .or_else(|| resolve_package_target(pkg_dir, "index"));
+        return resolve_package_target(pkg_dir, "src/index", mode)
+            .or_else(|| resolve_package_target(pkg_dir, "index", mode));
     }
 
-    resolve_package_target(pkg_dir, subpath)
+    resolve_package_target(pkg_dir, subpath, mode)
 }
 
 /// Find the target for `subpath` in a package.json `exports` field.
@@ -263,9 +282,9 @@ const BUILD_DIRS: &[&str] = &["dist", "build", "lib", "esm", "cjs", "out"];
 
 /// Resolve a path inside a package. If it points into build output that does not
 /// exist (an unbuilt workspace package), fall back to the matching file under `src/`.
-fn resolve_package_target(pkg_dir: &Path, target: &str) -> Option<PathBuf> {
+fn resolve_package_target(pkg_dir: &Path, target: &str, mode: Mode) -> Option<PathBuf> {
     let target = target.trim_start_matches("./");
-    if let Some(resolved) = resolve_file(&normalize(&pkg_dir.join(target))) {
+    if let Some(resolved) = resolve_file(&normalize(&pkg_dir.join(target)), mode) {
         return Some(resolved);
     }
 
@@ -280,13 +299,19 @@ fn resolve_package_target(pkg_dir: &Path, target: &str) -> Option<PathBuf> {
         .iter()
         .find_map(|ext| rest.strip_suffix(ext))
         .unwrap_or(rest);
-    resolve_file(&normalize(&pkg_dir.join("src").join(stem)))
+    resolve_file(&normalize(&pkg_dir.join("src").join(stem)), mode)
 }
 
-/// Resolves `p` to a runtime file, or failing that, as TypeScript does, to
-/// a declaration file: `p.d.ts`, `p.d.ts` for `p.js`, or `p/index.d.ts`.
-fn resolve_file(p: &Path) -> Option<PathBuf> {
-    resolve_runtime_file(p).or_else(|| resolve_declaration(p))
+/// Resolves `p` to a runtime file, or with [`Mode::Declaration`] to a
+/// declaration file, as TypeScript does: `p` itself, `p.d.ts` (or `.d.mts`,
+/// `.d.cts`), `a.d.ts` for `a.js` (`a.d.mts` for `a.mjs`, `a.d.cts` for
+/// `a.cjs`), or `p/index.d.ts`.
+fn resolve_file(p: &Path, mode: Mode) -> Option<PathBuf> {
+    let found = resolve_runtime_file(p);
+    match mode {
+        Mode::Runtime => found.filter(|f| !is_declaration(f)),
+        Mode::Declaration => found.filter(|f| is_declaration(f)).or_else(|| resolve_declaration(p)),
+    }
 }
 
 fn resolve_declaration(p: &Path) -> Option<PathBuf> {
@@ -609,6 +634,40 @@ mod tests {
         assert_eq!(resolved.unwrap(), main.canonicalize().unwrap());
         let resolved = resolve(&project, &from_file, "@scope/pkg/features/a", &cache).unwrap();
         assert_eq!(resolved.unwrap(), feat.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn declaration_files_lose_to_runtime_files_found_later() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root_buf = temp_dir.path().canonicalize().unwrap();
+        let root = root_buf.as_path();
+        // A local `.d.ts` shim for a package, mapped by tsconfig `paths`.
+        create_test_file(
+            root,
+            "tsconfig.json",
+            r#"{"compilerOptions":{"paths":{"*":["types/*"]}}}"#,
+        );
+        create_test_file(root, "types/heavy/index.d.ts", "");
+        create_test_file(root, "types/shim-only/index.d.ts", "");
+        let heavy = create_test_file(root, "node_modules/heavy/index.js", "");
+        // A workspace package whose types are built but not its JavaScript.
+        create_test_file(root, "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+        create_test_file(
+            root,
+            "packages/pkg/package.json",
+            r#"{"name":"pkg","main":"./dist/index.js"}"#,
+        );
+        create_test_file(root, "packages/pkg/dist/index.d.ts", "");
+        let pkg_src = create_test_file(root, "packages/pkg/src/index.ts", "");
+        let from = create_test_file(root, "src/main.ts", "");
+
+        let project = Project::load(root);
+        let got = |request: &str| resolve(&project, &from, request, &cache).unwrap();
+        assert_eq!(got("heavy"), Some(heavy));
+        assert_eq!(got("pkg"), Some(pkg_src));
+        // With no runtime file anywhere, the declaration file is used.
+        assert_eq!(got("shim-only"), Some(root.join("types/shim-only/index.d.ts")));
     }
 
     #[test]
