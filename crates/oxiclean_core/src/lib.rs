@@ -18,7 +18,7 @@ mod types;
 
 // Re-export public API
 pub use collector::{CollectorConfig, collect_entries};
-pub use config::find_git_root;
+pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
 pub use parser::imports_for;
 pub use project::{Project, TsConfig, split_package_request};
