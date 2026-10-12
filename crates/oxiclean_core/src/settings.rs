@@ -279,6 +279,9 @@ pub struct Rules {
     /// `node_modules`, reported on the package.json that lists them.
     /// Default threshold: 100 modules.
     pub heavy_dependencies: Option<RuleSetting>,
+    /// Packages `package-lock.json` or `pnpm-lock.yaml` installs at more
+    /// than one version. Default threshold: 2 versions.
+    pub duplicate_versions: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -298,6 +301,7 @@ impl Rules {
             "catalog" => self.catalog.as_ref(),
             "barrels" => self.barrels.as_ref(),
             "heavy-dependencies" => self.heavy_dependencies.as_ref(),
+            "duplicate-versions" => self.duplicate_versions.as_ref(),
             _ => None,
         }
     }
@@ -316,6 +320,7 @@ impl Rules {
             &self.catalog,
             &self.barrels,
             &self.heavy_dependencies,
+            &self.duplicate_versions,
         ]
         .into_iter()
         .flatten()

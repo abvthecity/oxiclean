@@ -40,6 +40,9 @@ oxiclean catalog --root ./my-project
 # Find installed packages whose import pulls in too many modules
 oxiclean heavy-dependencies --root ./my-project
 
+# Find packages the lockfile installs at more than one version
+oxiclean duplicate-versions --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -86,7 +89,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -330,6 +333,28 @@ oxiclean heavy-dependencies --root ./my-project
 
 package.json
 └──  package 'date-fns', imported by 12 files (pulls in 302 modules)
+```
+
+### Duplicate Package Versions Checker
+
+Finds the packages `package-lock.json` (v2 and v3) or `pnpm-lock.yaml` (v6
+and v9) installs at more than one version, at or above `threshold`
+versions (default 2). Each finding lists the versions, lowest first, and
+points at the package's first entry in the lockfile. pnpm's peer variants
+of one version count once.
+
+**Usage:**
+```bash
+oxiclean duplicate-versions --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Duplicate package versions detected (threshold: 2 versions)
+
+pnpm-lock.yaml
+├──  package 'semver' (5.7.2, 6.3.1, 7.7.2, 7.7.4) (4 versions)
+└──  package 'minimatch' (3.1.5, 9.0.9) (2 versions)
 ```
 
 ### Unused Catalog Entries Checker

@@ -138,3 +138,12 @@ package whose entry is a single bundled file counts as one module.
 package.json
 └──  package 'date-fns', imported by 12 files (pulls in 302 modules)
 ```
+
+## Duplicate package versions
+
+`oxiclean duplicate-versions` reads the root's `package-lock.json` (v2 and
+v3: each `node_modules/...` entry, links to workspace packages left out)
+and `pnpm-lock.yaml` (v6 and v9: the keys of `packages`, peer suffixes
+dropped, in the last document, as pnpm 10 and later put their own install
+in a first one), and reports each package installed at two or more
+versions, with the versions and the line of its first entry.

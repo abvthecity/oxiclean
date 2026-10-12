@@ -53,6 +53,29 @@ pub enum FindingKind {
     /// is the package.json that lists it; the value is the number of
     /// modules importing it pulls in.
     HeavyDependency(HeavyDependency),
+    /// A package installed at more than one version. The finding's file is
+    /// the lockfile; the value is the number of versions.
+    DuplicateVersions(DuplicateVersions),
+}
+
+/// The versions of a package a lockfile installs, for
+/// [`FindingKind::DuplicateVersions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DuplicateVersions {
+    /// The package's name.
+    pub name: String,
+    /// Each version, lowest first.
+    pub versions: Vec<String>,
+    /// 1-based line of the package's first entry in the lockfile.
+    pub line: u32,
+}
+
+impl DuplicateVersions {
+    #[must_use]
+    pub fn new(name: String, versions: Vec<String>, line: u32) -> Self {
+        Self { name, versions, line }
+    }
 }
 
 /// A package that pulls in many modules, for
@@ -259,6 +282,7 @@ impl Finding {
             FindingKind::UnusedDependency(dep) => dep.line,
             FindingKind::UnusedCatalogEntry(entry) => entry.line,
             FindingKind::HeavyDependency(dep) => dep.line,
+            FindingKind::DuplicateVersions(dup) => dup.line,
             FindingKind::Barrel(_) | FindingKind::WholeGraph => 0,
         }
     }
@@ -317,6 +341,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::UnusedDependency(dep) => &dep.name,
         FindingKind::UnusedCatalogEntry(entry) => &entry.name,
         FindingKind::HeavyDependency(dep) => &dep.name,
+        FindingKind::DuplicateVersions(dup) => &dup.name,
         FindingKind::Barrel(_) | FindingKind::WholeGraph => "",
     }
 }
@@ -338,6 +363,9 @@ fn label(f: &Finding) -> String {
         ),
         FindingKind::HeavyDependency(dep) => {
             format!("package '{}', imported by {} files", dep.name, dep.importers)
+        }
+        FindingKind::DuplicateVersions(dup) => {
+            format!("package '{}' ({})", dup.name, dup.versions.join(", "))
         }
         _ => format!("import '{}'", request(f)),
     }
