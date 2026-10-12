@@ -151,12 +151,6 @@ pub fn write_sarif<W: Write>(
         .findings
         .iter()
         .map(|f| {
-            let mut location = json!({
-                "artifactLocation": { "uri": rel(&f.file, root), "uriBaseId": "%SRCROOT%" },
-            });
-            if f.line() > 0 {
-                location["region"] = json!({ "startLine": f.line() });
-            }
             let mut result = json!({
                 "ruleId": meta.rule,
                 "level": match f.severity {
@@ -164,7 +158,10 @@ pub fn write_sarif<W: Write>(
                     Severity::Warn => "warning",
                 },
                 "message": { "text": message(meta.style, f, root) },
-                "locations": [{ "physicalLocation": location }],
+                // GitHub code scanning needs a region; a finding about the
+                // whole file points at its first line.
+                "locations": [{ "physicalLocation": physical_location(&f.file, f.line().max(1), root) }],
+                "partialFingerprints": { FINGERPRINT_KEY: fingerprint(meta.rule, f, root) },
                 "properties": { "value": f.value, "threshold": f.threshold },
             });
             if let FindingKind::Cycle(cycle) = &f.kind {
@@ -176,15 +173,9 @@ pub fn write_sarif<W: Write>(
                     .enumerate()
                     .skip(1)
                     .map(|(id, s)| {
-                        let mut physical = json!({
-                            "artifactLocation": { "uri": rel(&s.file, root), "uriBaseId": "%SRCROOT%" },
-                        });
-                        if s.line > 0 {
-                            physical["region"] = json!({ "startLine": s.line });
-                        }
                         json!({
                             "id": id,
-                            "physicalLocation": physical,
+                            "physicalLocation": physical_location(&s.file, s.line.max(1), root),
                             "message": { "text": format!("imports '{}'", s.request) },
                         })
                     })
@@ -212,6 +203,10 @@ pub fn write_sarif<W: Write>(
                     "helpUri": format!("{INFORMATION_URI}#tools"),
                 }],
             }},
+            // Code scanning keeps one set of alerts per tool and category, so
+            // each rule gets its own category or its uploads replace each
+            // other's.
+            "automationDetails": { "id": format!("oxiclean/{}/", meta.rule) },
             "originalUriBaseIds": { "%SRCROOT%": { "uri": root_uri } },
             "results": results,
         }],
@@ -220,13 +215,58 @@ pub fn write_sarif<W: Write>(
     writeln!(writer)
 }
 
+/// Key of the fingerprint in `partialFingerprints`. Bump the version when
+/// [`fingerprint`] changes, so code scanning doesn't match old alerts to new
+/// ones.
+const FINGERPRINT_KEY: &str = "oxiclean/v1";
+
+/// A SARIF `physicalLocation` for `line` of `file`, relative to `%SRCROOT%`.
+fn physical_location(file: &Path, line: u32, root: &Path) -> Value {
+    json!({
+        // A `:` in the first segment would read as a URI scheme.
+        "artifactLocation": {
+            "uri": percent_encode(&rel(file, root)).replace(':', "%3A"),
+            "uriBaseId": "%SRCROOT%",
+        },
+        "region": { "startLine": line },
+    })
+}
+
+/// Identifies a finding across commits so code scanning tracks it as one
+/// alert. It leaves out line numbers, which move when unrelated code above
+/// changes, and the measured value, which changes as the graph grows.
+fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
+    let mut key = format!("{rule}\0{}\0", rel(&f.file, root));
+    match &f.kind {
+        FindingKind::Import { request, .. } => key.push_str(request),
+        FindingKind::WholeGraph => key.push_str("<entry>"),
+        FindingKind::Cycle(cycle) => {
+            for step in &cycle.steps {
+                key.push_str(&rel(&step.file, root));
+                key.push('\0');
+            }
+        }
+    }
+    // FNV-1a: stable across Rust versions and platforms, unlike `DefaultHasher`.
+    let hash = key
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    format!("{hash:016x}")
+}
+
 /// A `file://` URI for an absolute path, percent-encoding what URIs reserve.
 fn url_path(path: &Path) -> String {
     let s = path.to_string_lossy().replace('\\', "/");
     // Windows verbatim paths (`\\?\C:\...`) become `C:/...`.
     let s = s.strip_prefix("//?/").unwrap_or(&s);
-    let mut out = String::from(if s.starts_with('/') { "file://" } else { "file:///" });
-    for b in s.bytes() {
+    let prefix = if s.starts_with('/') { "file://" } else { "file:///" };
+    format!("{prefix}{}", percent_encode(s))
+}
+
+/// `path` with every byte outside the URI path characters percent-encoded.
+fn percent_encode(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
         if b.is_ascii_alphanumeric() || b"/-._~:@".contains(&b) {
             out.push(b as char);
         } else {
@@ -312,7 +352,7 @@ mod tests {
         assert_eq!(run["originalUriBaseIds"]["%SRCROOT%"]["uri"], "file:///repo/");
         let results = run["results"].as_array().unwrap();
         assert_eq!(results[0]["level"], "warning");
-        assert!(results[0]["locations"][0]["physicalLocation"]["region"].is_null());
+        assert_eq!(results[0]["locations"][0]["physicalLocation"]["region"]["startLine"], 1);
         assert_eq!(results[1]["level"], "error");
         let loc = &results[1]["locations"][0]["physicalLocation"];
         assert_eq!(loc["artifactLocation"]["uri"], "pkg/src/a.ts");

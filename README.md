@@ -233,6 +233,11 @@ log, which GitHub code scanning and other tools can show inline on pull requests
     sarif_file: oxiclean.sarif
 ```
 
+Each rule's log has its own code-scanning category (`oxiclean/<rule>/`), so
+uploading several rules for one commit keeps every rule's alerts. Results
+carry `partialFingerprints` that ignore line numbers, so an alert stays the
+same alert when code above it moves.
+
 ## Debugging & Logging
 
 Oxiclean logs diagnostics with [`tracing`](https://docs.rs/tracing) to stderr, so stdout carries only the report. Enable logging via the `RUST_LOG` environment variable (errors only by default):

@@ -23,6 +23,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Validates SARIF output against the vendored schema; no network access needed.
+jsonschema = { version = "0.58", default-features = false }
 serde_json.workspace = true
 tempfile = "3.10"
 
