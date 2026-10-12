@@ -133,6 +133,10 @@ apply settings to some files. Every key is optional.
   "entries": ["packages/*/src/**/*.{ts,tsx}"],
   // Also follow dynamic import() calls
   "includeDynamic": false,
+  // Also scan installed packages: parse files in node_modules and follow
+  // their imports. Off by default, so each imported package file counts as
+  // one module.
+  "includeNodeModules": false,
   "rules": {
     // "warn" reports without failing the run; "error" fails it
     "import-bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],

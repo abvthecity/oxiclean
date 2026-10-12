@@ -105,7 +105,9 @@ impl CommonArgs {
             |from: &Path, request: &str| {
                 resolve(&project, from, request, &resolve_cache).ok().flatten()
             },
-            BuildOptions::default().follow_dynamic(config.include_dynamic),
+            BuildOptions::default()
+                .follow_dynamic(config.include_dynamic)
+                .follow_node_modules(config.include_node_modules),
         );
 
         let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();

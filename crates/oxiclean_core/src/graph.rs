@@ -91,12 +91,22 @@ pub struct BuildOptions {
     /// lazy import is loaded as a separate chunk, so it is the remedy for
     /// bloat rather than a cause of it.
     pub follow_dynamic: bool,
+    /// Parse files inside `node_modules` and follow their imports. Off by
+    /// default: an installed package is then one leaf module, which keeps
+    /// runs fast and findings about the project's own code.
+    pub follow_node_modules: bool,
 }
 
 impl BuildOptions {
     #[must_use]
     pub fn follow_dynamic(mut self, yes: bool) -> Self {
         self.follow_dynamic = yes;
+        self
+    }
+
+    #[must_use]
+    pub fn follow_node_modules(mut self, yes: bool) -> Self {
+        self.follow_node_modules = yes;
         self
     }
 }
@@ -120,6 +130,10 @@ pub struct ModuleGraph {
 
 /// Returns true for files the parser understands. Anything else that an import
 /// resolves to (CSS, JSON, images, ...) is kept as a leaf module.
+fn in_node_modules(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "node_modules")
+}
+
 fn is_parseable(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|ext| JS_TS_EXTENSIONS.contains(&ext))
 }
@@ -157,7 +171,7 @@ impl ModuleGraph {
                 .par_iter()
                 .map(|&id| {
                     let path = &modules[id.idx()].path;
-                    if !is_parseable(path) {
+                    if !is_parseable(path) || (!opts.follow_node_modules && in_node_modules(path)) {
                         return (id, Vec::new(), None);
                     }
                     let parsed = match parse(path) {

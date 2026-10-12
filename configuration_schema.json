@@ -33,6 +33,11 @@
       "type": "boolean",
       "default": false
     },
+    "includeNodeModules": {
+      "description": "Also scan installed packages: parse files inside `node_modules` and\nfollow their imports, so a dependency counts every module it loads.\nOff by default, which counts each imported package file as a single\nmodule and keeps runs fast.",
+      "type": "boolean",
+      "default": false
+    },
     "overrides": {
       "description": "Settings for some workspace packages or files. Later overrides win.",
       "type": "array",

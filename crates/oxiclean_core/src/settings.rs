@@ -82,6 +82,11 @@ pub struct ConfigFile {
     /// Also follow dynamic `import()` calls. They are skipped by default
     /// because lazily loaded modules are split into separate chunks.
     pub include_dynamic: bool,
+    /// Also scan installed packages: parse files inside `node_modules` and
+    /// follow their imports, so a dependency counts every module it loads.
+    /// Off by default, which counts each imported package file as a single
+    /// module and keeps runs fast.
+    pub include_node_modules: bool,
     /// Globs of files, relative to the root, that are never entries and never
     /// reported.
     pub ignore_patterns: Vec<String>,

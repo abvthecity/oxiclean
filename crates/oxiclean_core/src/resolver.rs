@@ -155,9 +155,19 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
         }
     }
 
-    // 2. Installed packages, walking up from the importing file
-    trace!("Resolving as node_modules package: '{}'", request);
+    // 2. Workspace packages, resolved to their sources. This comes before
+    // node_modules so an installed workspace (a symlink in node_modules) still
+    // resolves to the same source files as an uninstalled one.
     let (name, subpath) = split_package_request(request);
+    if let Some(pkg_dir) = project.workspace_package(name)
+        && let Some(resolved) = resolve_in_package(project, pkg_dir, subpath)
+    {
+        trace!("Resolved workspace package '{}' to {:?}", request, resolved);
+        return Some(resolved);
+    }
+
+    // 3. Installed packages, walking up from the importing file
+    trace!("Resolving as node_modules package: '{}'", request);
     let mut dir = from_file.parent();
     while let Some(d) = dir {
         let pkg_dir = normalize(&d.join("node_modules").join(name));
@@ -171,14 +181,6 @@ fn resolve_bare(project: &Project, from_file: &Path, request: &str) -> Option<Pa
             break;
         }
         dir = d.parent();
-    }
-
-    // 3. Workspace packages, resolved to their sources (works without an install)
-    if let Some(pkg_dir) = project.workspace_package(name)
-        && let Some(resolved) = resolve_in_package(project, pkg_dir, subpath)
-    {
-        trace!("Resolved workspace package '{}' to {:?}", request, resolved);
-        return Some(resolved);
     }
 
     trace!("Failed to resolve node_modules package '{}'", request);

@@ -312,3 +312,47 @@ fn sarif_output() {
     let loc = &results[0]["locations"][0]["physicalLocation"];
     assert_eq!(loc["region"]["startLine"], 1);
 }
+
+#[test]
+fn node_modules_are_scanned_only_when_enabled() {
+    let t = TempDir::new().unwrap();
+    write(t.path(), "src/main.ts", "import 'dep';");
+    write(t.path(), "node_modules/dep/package.json", r#"{"name":"dep","main":"index.js"}"#);
+    write(t.path(), "node_modules/dep/index.js", "require('./a'); require('./b');");
+    write(t.path(), "node_modules/dep/a.js", "");
+    write(t.path(), "node_modules/dep/b.js", "");
+
+    // Off by default: the package is one leaf module.
+    configure(t.path(), &rule_config("import-bloat", 1, &["src/main.ts"]));
+    let (_, out) = run(t.path(), &["import-bloat"]);
+    assert!(out.contains("import 'dep' (1 modules)"), "{out}");
+
+    configure(
+        t.path(),
+        r#"{ "entries": ["src/main.ts"], "includeNodeModules": true,
+             "rules": { "import-bloat": ["error", { "threshold": 1 }] } }"#,
+    );
+    let (_, out) = run(t.path(), &["import-bloat"]);
+    assert!(out.contains("import 'dep' (3 modules)"), "{out}");
+}
+
+#[test]
+fn installed_workspace_packages_resolve_to_their_sources() {
+    let t = workspace_fixture();
+    write(t.path(), "packages/web/src/main.ts", "import '@acme/legacy';");
+    write(
+        t.path(),
+        "packages/legacy/package.json",
+        r#"{"name":"@acme/legacy","main":"src/main.ts"}"#,
+    );
+    // What an install leaves behind: a copy (or symlink) under node_modules.
+    write(
+        t.path(),
+        "node_modules/@acme/legacy/package.json",
+        r#"{"name":"@acme/legacy","main":"src/main.ts"}"#,
+    );
+    write(t.path(), "node_modules/@acme/legacy/src/main.ts", "");
+    configure(t.path(), &rule_config("import-bloat", 1, &["packages/web/src/main.ts"]));
+    let (_, out) = run(t.path(), &["import-bloat"]);
+    assert!(out.contains("import '@acme/legacy' (3 modules)"), "{out}");
+}
