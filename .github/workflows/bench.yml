@@ -1,0 +1,93 @@
+name: Bench
+
+# Runs scripts/bench.sh against the monorepos pinned in bench/targets.tsv.
+# Manual only (Actions > Bench > Run workflow). The knip comparison
+# (scripts/bench-knip.sh) takes over 30 minutes here, so run it locally.
+on:
+  workflow_dispatch:
+    inputs:
+      install:
+        description: Install each target's dependencies first (slower)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: 0
+  OXICLEAN_BENCH_DIR: ${{ github.workspace }}/target/bench-repos
+
+jobs:
+  bench:
+    name: Bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Set up Node.js
+        if: inputs.install
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        if: inputs.install
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      # The pinned checkouts only change when bench/targets.tsv does.
+      # Installed node_modules are left out: they are several GB across the
+      # six targets.
+      - name: Restore bench repos
+        id: repos
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target/bench-repos
+            !target/bench-repos/*/node_modules
+          key: bench-repos-${{ hashFiles('bench/targets.tsv') }}
+
+      - name: Run bench
+        shell: bash
+        run: scripts/bench.sh ${{ inputs.install && '--install' || '' }} | tee bench.txt
+
+      - name: Save bench repos
+        if: always() && steps.repos.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/bench-repos
+            !target/bench-repos/*/node_modules
+          key: ${{ steps.repos.outputs.cache-primary-key }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## oxiclean vs. baseline"
+            echo '```'
+            cat bench.txt 2>/dev/null || echo "bench did not finish"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench.txt
+          if-no-files-found: ignore
