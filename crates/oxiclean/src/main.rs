@@ -29,9 +29,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Check for import bloat in JavaScript/TypeScript projects
-    ImportBloat(oxiclean_import_bloat::Config),
+    #[command(name = "import-bloat")]
+    Bloat(oxiclean_import_bloat::Config),
     /// Check for excessive import depth in JavaScript/TypeScript projects
-    ImportDepth(oxiclean_import_depth::Config),
+    #[command(name = "import-depth")]
+    Depth(oxiclean_import_depth::Config),
+    /// Check for circular imports in JavaScript/TypeScript projects
+    #[command(name = "import-cycles")]
+    Cycles(oxiclean_import_cycles::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -41,15 +46,20 @@ fn main() -> Result<ExitCode> {
 
     let start = Instant::now();
     let (result, style, rule) = match &cli.command {
-        Commands::ImportBloat(cfg) => (
+        Commands::Bloat(cfg) => (
             oxiclean_import_bloat::run_import_bloat_check(cfg)?,
             oxiclean_import_bloat::REPORT_STYLE,
             oxiclean_import_bloat::RULE,
         ),
-        Commands::ImportDepth(cfg) => (
+        Commands::Depth(cfg) => (
             oxiclean_import_depth::run_import_depth_check(cfg)?,
             oxiclean_import_depth::REPORT_STYLE,
             oxiclean_import_depth::RULE,
+        ),
+        Commands::Cycles(cfg) => (
+            oxiclean_import_cycles::run_import_cycles_check(cfg)?,
+            oxiclean_import_cycles::REPORT_STYLE,
+            oxiclean_import_cycles::RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

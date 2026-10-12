@@ -356,3 +356,62 @@ fn installed_workspace_packages_resolve_to_their_sources() {
     let (_, out) = run(t.path(), &["import-bloat"]);
     assert!(out.contains("import '@acme/legacy' (3 modules)"), "{out}");
 }
+
+/// Two files that import each other in a workspace package, plus one that
+/// only imports a type back.
+fn cycles_fixture() -> TempDir {
+    let t = workspace_fixture();
+    write(
+        t.path(),
+        "packages/web/src/b.ts",
+        "import { main } from './main';\nexport const b = main;",
+    );
+    write(t.path(), "packages/web/src/main.ts", "import './a';\nexport const main = 1;");
+    write(
+        t.path(),
+        "packages/legacy/src/b.ts",
+        "import type { A } from './a';\nexport const b = 1;",
+    );
+    t
+}
+
+#[test]
+fn import_cycles_text_output() {
+    let t = cycles_fixture();
+    let (code, out) = run(t.path(), &["import-cycles"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Circular imports detected"), "{out}");
+    assert!(out.contains("import './b' (cycle of 3 files)"), "{out}");
+    for step in
+        ["src/a.ts:1 imports './b'", "src/b.ts:1 imports './main'", "src/main.ts:1 imports './a'"]
+    {
+        assert!(out.contains(step), "{step} in {out}");
+    }
+    assert!(out.contains("Total violations: 1"), "{out}");
+    assert!(!out.contains("legacy"), "type-only imports don't make cycles: {out}");
+}
+
+#[test]
+fn import_cycles_json_and_sarif_list_every_import() {
+    let t = cycles_fixture();
+    let (code, out) = run_stdout(t.path(), &["import-cycles", "--format", "json"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let finding = &v["findings"][0];
+    assert_eq!(finding["kind"], "cycle");
+    assert_eq!(finding["package"], "@acme/web");
+    assert_eq!(finding["value"], 3);
+    assert_eq!(finding["group_size"], 3);
+    let files: Vec<&str> =
+        finding["cycle"].as_array().unwrap().iter().map(|s| s["file"].as_str().unwrap()).collect();
+    assert_eq!(
+        files,
+        ["packages/web/src/a.ts", "packages/web/src/b.ts", "packages/web/src/main.ts"]
+    );
+
+    let (_, out) = run_stdout(t.path(), &["import-cycles", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let result = &v["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "import-cycles");
+    assert_eq!(result["relatedLocations"].as_array().unwrap().len(), 2);
+}

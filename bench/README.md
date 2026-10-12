@@ -8,8 +8,23 @@ regressions in runtime, findings, or import resolution.
 ```bash
 scripts/bench.sh                      # compare against the baseline
 scripts/bench.sh --update-baseline    # record a new baseline
-scripts/bench.sh --install            # pnpm install each target first (needs network)
+scripts/bench.sh --install            # install each target first: pnpm install or npm ci (needs network)
+scripts/bench-knip.sh                 # compare with knip on the checks both tools have
 ```
+
+## Targets
+
+Popular npm and pnpm monorepos with many dependencies. None of them uses
+knip (no knip config and no `knip` in the root `package.json`).
+
+| Target | Package manager | Repository |
+|---|---|---|
+| Next.js | pnpm | vercel/next.js |
+| Expo | pnpm | expo/expo |
+| MUI | pnpm | mui/material-ui |
+| Vite | pnpm | vitejs/vite |
+| Playwright | npm | microsoft/playwright |
+| Lit | npm | lit/lit |
 
 Repos are cached in `target/bench-repos` (override with `OXICLEAN_BENCH_DIR`).
 Each check runs 3 times and the fastest time is kept (`OXICLEAN_BENCH_RUNS`).
@@ -23,12 +38,63 @@ unresolved imports.
 
 | Target | Check | Time | Files | Violations | Imports resolved |
 |---|---|---|---|---|---|
-| Next.js | import-bloat | ~0.8s | 2,344 | 164 | 88.6% |
-| Next.js | import-depth | ~0.8s | 2,344 | 202 | 88.6% |
-| Expo | import-bloat | ~0.5s | 4,656 | 868 | 74.7% |
-| Expo | import-depth | ~0.5s | 4,656 | 1,586 | 74.7% |
+| Next.js | import-bloat | ~1.0s | 2,344 | 164 | 88.6% |
+| Next.js | import-depth | ~1.0s | 2,344 | 202 | 88.6% |
+| Next.js | import-cycles | ~1.0s | 2,344 | 68 | 88.6% |
+| Expo | import-bloat | ~0.7s | 4,656 | 868 | 74.7% |
+| Expo | import-depth | ~0.7s | 4,656 | 1,586 | 74.7% |
+| Expo | import-cycles | ~0.7s | 4,656 | 46 | 74.7% |
+| MUI | import-bloat | ~0.5s | 13,301 | 690 | 68.3% |
+| MUI | import-depth | ~0.5s | 13,301 | 3,788 | 68.3% |
+| MUI | import-cycles | ~0.5s | 13,301 | 4 | 68.3% |
+| Vite | import-bloat | ~40ms | 367 | 0 | 72.6% |
+| Vite | import-depth | ~50ms | 367 | 0 | 72.6% |
+| Vite | import-cycles | ~50ms | 367 | 49 | 72.6% |
+| Playwright | import-bloat | ~50ms | 765 | 75 | 87.5% |
+| Playwright | import-depth | ~55ms | 765 | 53 | 87.5% |
+| Playwright | import-cycles | ~60ms | 765 | 76 | 87.5% |
+| Lit | import-bloat | ~70ms | 754 | 0 | 49.7% |
+| Lit | import-depth | ~70ms | 754 | 0 | 49.7% |
+| Lit | import-cycles | ~60ms | 754 | 20 | 49.7% |
 
 Results are deterministic, so any change in violations comes from a code change.
+Times vary by about 20% between runs on shared machines; compare against a
+baseline recorded on the same machine.
+
+## Comparison with knip
+
+`scripts/bench-knip.sh` runs oxiclean's release build and
+[knip](https://knip.dev) 6.41.0 on the same targets, with the same entry
+files: oxiclean's default (every non-test JS/TS file in a `src` directory),
+given to knip as `entry` and `project` in every workspace, with all knip
+plugins off. Neither tool installs dependencies.
+
+### Circular imports (`import-cycles` vs knip `cycles`)
+
+| Target | oxiclean | knip | Speed-up | Cycles (oxiclean / knip) | knip cycles oxiclean misses |
+|---|---|---|---|---|---|
+| Next.js | 0.94s | 307s | 326× | 68 / 44 | 0 |
+| Expo | 0.75s | 180s | 240× | 46 / 51 | 0 |
+| MUI | 0.51s | 105s | 208× | 4 / 6 | 0 |
+| Vite | 55ms | 3.0s | 54× | 49 / 65 | 1 (knip false positive) |
+| Playwright | 68ms | 2.1s | 31× | 76 / 71 | 0 |
+| Lit | 74ms | 2.5s | 34× | 20 / 17 | 0 |
+
+The cycle counts measure different things. knip reports one cycle per back
+edge of its depth-first search, so a tangle yields as many cycles as the
+search happens to close. oxiclean picks short cycles until removing the last
+import of each leaves no cycles. The last column checks that oxiclean covers
+everything knip finds: it counts knip cycles that none of oxiclean's last
+imports breaks.
+
+- **Vite's one miss is knip's mistake:** `playground/resolve/sharp-dir-nested/index.cjs`
+  requires `./#/index.cjs`, a file in a directory named `#`. knip treats `#`
+  as a URL fragment, resolves the import to the file itself, and reports a
+  self-import.
+- **Next.js has 4 cycles only oxiclean reports.** They run through
+  `packages/next/src/compiled/babel`, whose files import the package's own
+  `next/dist/compiled/...` paths. oxiclean resolves those to the sources,
+  which are copied unchanged into `dist`; knip does not follow them.
 
 ## Choosing thresholds
 

@@ -14,10 +14,14 @@ oxiclean import-bloat --root ./my-project
 # Run import depth checker
 oxiclean import-depth --root ./my-project
 
+# Find circular imports
+oxiclean import-cycles --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean import-bloat --help
 oxiclean import-depth --help
+oxiclean import-cycles --help
 ```
 
 ## Development
@@ -37,6 +41,7 @@ oxiclean/
 │   ├── oxiclean/              # Main CLI application (binary)
 │   ├── oxiclean_core/         # Shared utilities (parser, resolver, etc.)
 │   ├── oxiclean_import_bloat/ # Import bloat detection library
+│   ├── oxiclean_import_cycles/ # Circular import detection library
 │   └── oxiclean_import_depth/ # Import depth analysis library
 └── Cargo.toml                 # Workspace configuration
 ```
@@ -55,7 +60,9 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `import-bloat` and 20 levels for `import-depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-Both exit with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
+`import-cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1.
+
+Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
 ### Import Bloat Checker
 
@@ -104,16 +111,54 @@ src/pages/Dashboard.tsx
 - Computes the longest import chain on the module graph. Modules that import each other in a cycle count as one level, so results are the same on every run
 - Correctly handles TypeScript type imports:
   - `import type { Foo }` - Ignored (type-only)
-  - `import { type Foo }` - Counted (runtime with type specifier)
+  - `import { type Foo }` - Ignored when every imported name is a type
 - Resolves Node.js modules and TypeScript path mappings
 - Handles very deep chains without recursion
+
+### Import Cycles Checker
+
+Finds files that import each other, directly or indirectly, at runtime, like
+knip's `cycles` issue type. Type-only imports never count. Dynamic
+`import()` counts only when `includeDynamic` is set; unlike knip's
+`cycles.dynamicImports`, that setting applies to every check. knip's
+`cycles.allow` has no equivalent yet; use `ignorePatterns` instead.
+
+**Usage:**
+```bash
+oxiclean import-cycles --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Circular imports detected (threshold: 1 files)
+
+src/store/index.ts
+└──  import './slices' (cycle of 3 files)
+        src/store/index.ts:4 imports './slices'
+        src/store/slices.ts:2 imports './user'
+        src/store/user.ts:1 imports './index'
+        part of a tangle of 7 files that import each other
+```
+
+**How cycles are chosen:** a tangle of files that import each other can
+contain many overlapping cycles. Oxiclean uses a port of pnpm's
+[graph-sequencer](https://github.com/pnpm/pnpm/tree/main/pnpm11/deps/graph-sequencer)
+to pick short cycles: for each file it searches from, the longest of the
+shortest cycles through it. The import that closes each reported cycle is
+then set aside and the search repeats, so removing the last import of each
+reported cycle leaves no cycles. Each cycle is reported on its first file by
+path that the rule applies to, so `ignorePatterns` and `overrides` hide a
+cycle only when they cover every file in it. The result is the same on every
+run. JSON output
+lists every import of the cycle, and SARIF output links to each of them.
 
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
 - **Import Depth**: Counts longest import chain (depth) - indicates module resolution complexity
+- **Import Cycles**: Lists files that import each other - order-dependent initialisation bugs and code that can't be split
 
-Both metrics provide complementary insights into code complexity.
+These metrics provide complementary insights into code complexity.
 
 ## Configuration
 
@@ -140,7 +185,9 @@ apply settings to some files. Every key is optional.
   "rules": {
     // "warn" reports without failing the run; "error" fails it
     "import-bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],
-    "import-depth": "off"
+    "import-depth": "off",
+    // Only report cycles of 3 or more files
+    "import-cycles": ["warn", { "threshold": 3 }]
   },
   // Later overrides win. `packages` matches workspace package names (globs
   // allowed) and `files` matches paths relative to the root; when both are

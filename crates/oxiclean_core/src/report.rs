@@ -29,6 +29,48 @@ pub enum FindingKind {
     },
     /// The file's whole import graph.
     WholeGraph,
+    /// A circular import that starts in the file.
+    Cycle(CycleFinding),
+}
+
+/// The imports of a circular import, for [`FindingKind::Cycle`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CycleFinding {
+    /// One import per file, in order: the first file's import of the second,
+    /// ..., and the last file's import of the first. The first step is in the
+    /// finding's file.
+    pub steps: Vec<CycleStep>,
+    /// Number of files that import each other, directly or indirectly,
+    /// together with this cycle's. Larger than the cycle when it is part of a
+    /// wider tangle.
+    pub group_size: usize,
+}
+
+impl CycleFinding {
+    #[must_use]
+    pub fn new(steps: Vec<CycleStep>, group_size: usize) -> Self {
+        Self { steps, group_size }
+    }
+}
+
+/// One import of a circular import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CycleStep {
+    /// The importing file.
+    pub file: PathBuf,
+    /// The specifier as written, e.g. `./utils`.
+    pub request: String,
+    /// 1-based line of the import, or 0 when unknown.
+    pub line: u32,
+}
+
+impl CycleStep {
+    #[must_use]
+    pub fn new(file: PathBuf, request: String, line: u32) -> Self {
+        Self { file, request, line }
+    }
 }
 
 /// One threshold violation reported by a checker.
@@ -58,8 +100,9 @@ impl Finding {
     /// 1-based line the finding points at, or 0 for the whole file.
     #[must_use]
     pub fn line(&self) -> u32 {
-        match self.kind {
-            FindingKind::Import { line, .. } => line,
+        match &self.kind {
+            FindingKind::Import { line, .. } => *line,
+            FindingKind::Cycle(cycle) => cycle.steps.first().map_or(0, |s| s.line),
             FindingKind::WholeGraph => 0,
         }
     }
@@ -103,15 +146,39 @@ pub fn sort_findings(findings: &mut [Finding]) {
     });
 }
 
+/// Whether `f` is listed under its file rather than being about the whole
+/// file.
 fn is_import(f: &Finding) -> bool {
-    matches!(f.kind, FindingKind::Import { .. })
+    !matches!(f.kind, FindingKind::WholeGraph)
 }
 
 fn request(f: &Finding) -> &str {
     match &f.kind {
         FindingKind::Import { request, .. } => request,
+        FindingKind::Cycle(cycle) => cycle.steps.first().map_or("", |s| s.request.as_str()),
         FindingKind::WholeGraph => "",
     }
+}
+
+/// Lines printed under a finding: the files of a cycle.
+fn details(f: &Finding, ctx: ReportContext<'_>) -> Vec<String> {
+    let FindingKind::Cycle(cycle) = &f.kind else { return Vec::new() };
+    let mut lines: Vec<String> = cycle
+        .steps
+        .iter()
+        .map(|s| {
+            let file = ctx.display(&s.file);
+            match s.line {
+                0 => format!("{file} imports '{}'", s.request),
+                line => format!("{file}:{line} imports '{}'", s.request),
+            }
+        })
+        .collect();
+    if cycle.group_size > cycle.steps.len() {
+        lines
+            .push(format!("part of a tangle of {} files that import each other", cycle.group_size));
+    }
+    lines
 }
 
 /// Wording that differs between checkers.
@@ -213,6 +280,10 @@ pub fn print_findings<W: Write>(
                 (style.value_label)(f.value).red(),
                 warn_tag(f)
             )?;
+            let indent = if idx == last { "   " } else { "│  " };
+            for line in details(f, ctx) {
+                writeln!(writer, "{}     {}", indent.dimmed(), line.dimmed())?;
+            }
         }
         writeln!(writer)?;
     }
