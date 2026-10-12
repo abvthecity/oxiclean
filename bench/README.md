@@ -33,36 +33,50 @@ Each check runs 3 times and the fastest time is kept (`OXICLEAN_BENCH_RUNS`).
 
 Recorded without installing dependencies (`installed: false`) on a 4-core
 Linux machine. `duplicates` also analyses declaration files and
-files reached only through type imports, so it sees more files. Imports between workspace packages resolve to their sources;
+files reached only through type imports, so it sees more files. `unused-exports` and `unused-types` start from package entry points
+and read declaration files too; MUI's tsconfig aliases make its built icon
+modules entries, so they see twice as many files there. Imports between workspace packages resolve to their sources;
 third-party packages such as `react` do not, which accounts for most of the
 unresolved imports.
 
 | Target | Check | Time | Files | Violations | Imports resolved |
 |---|---|---|---|---|---|
-| Next.js | bloat | ~1.0s | 2,344 | 164 | 88.6% |
-| Next.js | depth | ~1.0s | 2,344 | 202 | 88.6% |
-| Next.js | cycles | ~1.0s | 2,344 | 68 | 88.6% |
-| Next.js | duplicates | ~1.0s | 2,382 | 10 | 89.4% |
-| Expo | bloat | ~0.7s | 4,656 | 868 | 74.7% |
-| Expo | depth | ~0.7s | 4,656 | 1,586 | 74.7% |
-| Expo | cycles | ~0.7s | 4,656 | 46 | 74.7% |
-| Expo | duplicates | ~0.8s | 4,681 | 18 | 75.4% |
-| MUI | bloat | ~0.5s | 13,301 | 690 | 68.3% |
-| MUI | depth | ~0.5s | 13,301 | 3,788 | 68.3% |
-| MUI | cycles | ~0.5s | 13,301 | 4 | 68.3% |
-| MUI | duplicates | ~0.5s | 13,583 | 3 | 69.0% |
-| Vite | bloat | ~40ms | 367 | 0 | 72.6% |
-| Vite | depth | ~50ms | 367 | 0 | 72.6% |
-| Vite | cycles | ~50ms | 367 | 49 | 72.6% |
-| Vite | duplicates | ~50ms | 369 | 1 | 69.1% |
-| Playwright | bloat | ~50ms | 765 | 75 | 87.5% |
-| Playwright | depth | ~55ms | 765 | 53 | 87.5% |
-| Playwright | cycles | ~60ms | 765 | 76 | 87.5% |
-| Playwright | duplicates | ~80ms | 804 | 6 | 90.5% |
-| Lit | bloat | ~70ms | 754 | 0 | 49.7% |
-| Lit | depth | ~70ms | 754 | 0 | 49.7% |
-| Lit | cycles | ~60ms | 754 | 20 | 49.7% |
-| Lit | duplicates | ~70ms | 757 | 2 | 50.9% |
+| Next.js | bloat | ~1.2s | 2,344 | 164 | 88.7% |
+| Next.js | depth | ~1.1s | 2,344 | 202 | 88.7% |
+| Next.js | cycles | ~1.2s | 2,344 | 68 | 88.7% |
+| Next.js | duplicates | ~1.3s | 2,415 | 10 | 88.5% |
+| Next.js | unused-exports | ~1.3s | 4,372 | 629 | 86.9% |
+| Next.js | unused-types | ~1.2s | 4,372 | 305 | 86.9% |
+| Expo | bloat | ~1.0s | 4,656 | 868 | 74.7% |
+| Expo | depth | ~0.9s | 4,656 | 1,586 | 74.7% |
+| Expo | cycles | ~0.8s | 4,656 | 46 | 74.7% |
+| Expo | duplicates | ~1.0s | 4,686 | 18 | 75.4% |
+| Expo | unused-exports | ~1.1s | 5,875 | 522 | 74.8% |
+| Expo | unused-types | ~1.1s | 5,875 | 265 | 74.8% |
+| MUI | bloat | ~0.7s | 13,301 | 690 | 68.3% |
+| MUI | depth | ~0.8s | 13,301 | 3,788 | 68.3% |
+| MUI | cycles | ~0.7s | 13,301 | 4 | 68.3% |
+| MUI | duplicates | ~1.0s | 13,583 | 3 | 69.0% |
+| MUI | unused-exports | ~1.8s | 26,873 | 15 | 62.3% |
+| MUI | unused-types | ~1.4s | 26,873 | 8 | 62.3% |
+| Vite | bloat | ~60ms | 383 | 0 | 72.9% |
+| Vite | depth | ~50ms | 383 | 0 | 72.9% |
+| Vite | cycles | ~50ms | 383 | 49 | 72.9% |
+| Vite | duplicates | ~60ms | 385 | 1 | 69.3% |
+| Vite | unused-exports | ~0.1s | 1,042 | 79 | 65.8% |
+| Vite | unused-types | ~0.1s | 1,042 | 28 | 65.8% |
+| Playwright | bloat | ~60ms | 765 | 75 | 87.6% |
+| Playwright | depth | ~70ms | 765 | 53 | 87.6% |
+| Playwright | cycles | ~60ms | 765 | 76 | 87.6% |
+| Playwright | duplicates | ~90ms | 804 | 6 | 90.5% |
+| Playwright | unused-exports | ~0.1s | 1,446 | 110 | 89.9% |
+| Playwright | unused-types | ~0.1s | 1,446 | 221 | 89.9% |
+| Lit | bloat | ~80ms | 753 | 0 | 55.2% |
+| Lit | depth | ~90ms | 753 | 0 | 55.2% |
+| Lit | cycles | ~90ms | 753 | 20 | 55.2% |
+| Lit | duplicates | ~0.1s | 757 | 2 | 56.0% |
+| Lit | unused-exports | ~80ms | 477 | 47 | 69.5% |
+| Lit | unused-types | ~90ms | 477 | 18 | 69.5% |
 
 Results are deterministic, so any change in violations comes from a code change.
 Times vary by about 20% between runs on shared machines; compare against a
@@ -141,8 +155,8 @@ with knip's plugins off.
 | Next.js | types | 1.1s | 552s | ~490× | 305 / 305 | 27 | 27 |
 | Expo | exports | 1.1s | 274s | ~250× | 522 / 805 | 311 | 28 |
 | Expo | types | 1.1s | 285s | ~250× | 265 / 456 | 205 | 14 |
-| MUI | exports | 0.8s | 117s | ~145× | 15 / 27 | 17 | 5 |
-| MUI | types | 0.7s | 114s | ~160× | 8 / 35 | 29 | 2 |
+| MUI | exports | 1.8s | 117s | ~65× | 15 / 27 | 17 | 5 |
+| MUI | types | 1.4s | 114s | ~80× | 8 / 35 | 29 | 2 |
 | Vite | exports | 91ms | 3.7s | ~40× | 79 / 142 | 63 | 0 |
 | Vite | types | 95ms | 3.7s | ~40× | 28 / 235 | 207 | 0 |
 | Playwright | exports | 134ms | 3.2s | ~24× | 110 / 280 | 171 | 1 |
