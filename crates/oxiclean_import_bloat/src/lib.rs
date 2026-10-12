@@ -16,7 +16,7 @@
 //!     root: Some(std::path::PathBuf::from("/path/to/project")),
 //!     threshold: 200,
 //!     entry_glob: None,
-//!     tsconfig_paths: Default::default(),
+//!     project: Default::default(),
 //! };
 //!
 //! let result = run_import_bloat_check(cfg.clone())?;

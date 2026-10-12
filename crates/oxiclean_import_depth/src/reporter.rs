@@ -164,7 +164,7 @@ pub fn print_warnings_tree<W: Write>(
 
         // Sort warnings within this file by depth (descending)
         let mut sorted_file_warnings: Vec<_> = file_warnings.iter().collect();
-        sorted_file_warnings.sort_by(|a, b| b.depth.cmp(&a.depth));
+        sorted_file_warnings.sort_by_key(|w| std::cmp::Reverse(w.depth));
 
         for (idx, warning) in sorted_file_warnings.iter().enumerate() {
             let is_last = idx == sorted_file_warnings.len() - 1;
@@ -208,7 +208,7 @@ fn print_summary<W: Write>(writer: &mut W, warnings: &[Warning], cfg: &Config) -
 
     // Get top 5 offenders (sorted by depth, descending)
     let mut top_offenders: Vec<_> = warnings.iter().collect();
-    top_offenders.sort_by(|a, b| b.depth.cmp(&a.depth));
+    top_offenders.sort_by_key(|w| std::cmp::Reverse(w.depth));
     top_offenders.truncate(5);
 
     writeln!(writer, "{}", "─".repeat(60).dimmed())?;

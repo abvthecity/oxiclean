@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use log::{debug, info};
-use std::{collections::HashMap, path::PathBuf};
+use oxiclean_core::Project;
+use std::{path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "import-bloat")]
@@ -19,8 +20,9 @@ pub struct Config {
     #[arg(long)]
     pub entry_glob: Option<String>,
 
+    /// Resolution context, populated by `initialize()`
     #[clap(skip)]
-    pub tsconfig_paths: HashMap<String, Vec<String>>,
+    pub project: Arc<Project>,
 }
 
 impl Config {
@@ -36,10 +38,10 @@ impl Config {
         };
         info!("Using root directory: {}", root.display());
 
-        // Read tsconfig paths
-        debug!("Reading tsconfig paths");
-        self.tsconfig_paths = oxiclean_core::read_tsconfig_paths(&root);
-        debug!("Found {} tsconfig path aliases", self.tsconfig_paths.len());
+        // Discover tsconfig files and workspace packages
+        debug!("Loading project context");
+        self.project = Arc::new(Project::load(&root));
+        debug!("Found {} workspace packages", self.project.workspace_package_count());
 
         self.root = Some(root);
         Ok(())

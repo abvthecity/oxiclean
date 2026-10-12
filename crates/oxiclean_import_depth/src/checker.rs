@@ -4,7 +4,7 @@ use log::{debug, info, trace, warn};
 use rayon::prelude::*;
 use std::{path::PathBuf, sync::Arc, thread};
 
-use oxiclean_core::{CollectorConfig, collect_entries};
+use oxiclean_core::{CollectorConfig, ResolutionStats, collect_entries};
 
 use crate::{
     config::Config,
@@ -15,16 +15,12 @@ use crate::{
 pub fn run_import_depth_check(mut cfg: Config) -> Result<CheckResult> {
     info!("Starting import depth check");
 
-    // Initialize config (resolve root, load tsconfig paths)
+    // Initialize config (resolve root, load the project context)
     cfg.initialize()?;
     let root = cfg.root()?.clone();
 
     debug!("Collecting entry files with glob: {:?}", cfg.entry_glob);
-    let collector_cfg = CollectorConfig {
-        root: root.clone(),
-        entry_glob: cfg.entry_glob.clone(),
-        tsconfig_paths: cfg.tsconfig_paths.clone(),
-    };
+    let collector_cfg = CollectorConfig { root: root.clone(), entry_glob: cfg.entry_glob.clone() };
 
     let entries = collect_entries(&collector_cfg)?;
     if entries.is_empty() {
@@ -74,8 +70,7 @@ pub fn run_import_depth_check(mut cfg: Config) -> Result<CheckResult> {
             // Compute depths for each direct import from this entry
             trace!("Analyzing direct imports from entry");
             let import_depths = match compute_import_depths(
-                &root,
-                &cfg.tsconfig_paths,
+                &cfg.project,
                 entry,
                 &import_cache,
                 &resolve_cache,
@@ -121,5 +116,9 @@ pub fn run_import_depth_check(mut cfg: Config) -> Result<CheckResult> {
         depth_cache.len()
     );
 
-    Ok(CheckResult { warnings, files_analyzed: import_cache.len() })
+    Ok(CheckResult {
+        warnings,
+        files_analyzed: import_cache.len(),
+        resolution: ResolutionStats::from_cache(&resolve_cache),
+    })
 }

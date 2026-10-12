@@ -92,9 +92,9 @@ docs:
 docs-all:
     cargo doc --workspace --open
 
-# Run benchmarks (if any)
-bench:
-    cargo bench --workspace
+# Run checkers against pinned real-world monorepos (see bench/README.md)
+bench *ARGS:
+    scripts/bench.sh {{ARGS}}
 
 # Watch for changes and run tests (requires cargo-watch)
 watch:

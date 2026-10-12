@@ -17,7 +17,7 @@
 //!     root: Some(std::path::PathBuf::from("/path/to/project")),
 //!     threshold: 10,
 //!     entry_glob: None,
-//!     tsconfig_paths: Default::default(),
+//!     project: Default::default(),
 //! };
 //!
 //! let result = run_import_depth_check(cfg.clone())?;

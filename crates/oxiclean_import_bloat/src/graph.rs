@@ -1,17 +1,12 @@
 use anyhow::Result;
 use dashmap::DashMap;
 use log::{debug, trace};
-use std::{
-    collections::HashMap,
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashSet, path::PathBuf};
 
-use oxiclean_core::{Specifier, imports_for, resolve};
+use oxiclean_core::{Project, Specifier, imports_for, resolve};
 
 pub(crate) fn reachable_modules(
-    root: &Path,
-    tsconfig_paths: &HashMap<String, Vec<String>>,
+    project: &Project,
     start: &PathBuf,
     import_cache: &DashMap<PathBuf, Vec<Specifier>>,
     resolve_cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
@@ -35,8 +30,8 @@ pub(crate) fn reachable_modules(
         let specs = imports_for(&cur, import_cache).unwrap_or_default();
         trace!("Module has {} imports", specs.len());
 
-        for s in specs {
-            if let Some(next) = resolve(root, tsconfig_paths, &cur, &s.request, resolve_cache)?
+        for s in specs.iter().filter(|s| s.is_static()) {
+            if let Some(next) = resolve(project, &cur, &s.request, resolve_cache)?
                 && !visited.contains(&next)
             {
                 trace!("Adding to stack: {}", next.display());
@@ -54,6 +49,7 @@ pub(crate) fn reachable_modules(
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn create_test_file(dir: &Path, path: &str, content: &str) -> PathBuf {
@@ -79,8 +75,7 @@ mod tests {
         let reachable_cache = DashMap::new();
 
         let reachable = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -114,8 +109,7 @@ mod tests {
         let reachable_cache = DashMap::new();
 
         let reachable = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -149,8 +143,7 @@ mod tests {
         let reachable_cache = DashMap::new();
 
         let reachable = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -184,8 +177,7 @@ mod tests {
 
         // First call
         let reachable1 = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -195,8 +187,7 @@ mod tests {
 
         // Second call should use cache
         let reachable2 = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -220,8 +211,7 @@ mod tests {
         let reachable_cache = DashMap::new();
 
         let reachable = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
@@ -249,8 +239,7 @@ mod tests {
         let reachable_cache = DashMap::new();
 
         let reachable = reachable_modules(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &entry,
             &import_cache,
             &resolve_cache,
