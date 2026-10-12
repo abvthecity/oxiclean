@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, Result};
+use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, Result, RulePolicy};
 use tracing::info;
 
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 
 /// Runs the import depth check described by `cfg`.
 ///
@@ -11,16 +11,22 @@ use crate::config::Config;
 /// Fails if the project root can't be found, an entry glob is invalid, or no
 /// entry files are found.
 pub fn run_import_depth_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting import depth check (threshold {})", cfg.threshold);
+    info!("Starting import depth check");
     let analysis = cfg.common.analyze()?;
-    Ok(check(&analysis, cfg.threshold))
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, cfg.threshold)?;
+    Ok(check(&analysis, &policy))
 }
 
-/// Flags each direct import of an entry whose depth reaches `threshold`. The
+/// Flags each direct import of an entry whose depth reaches its file's
+/// threshold under `policy`. The
 /// depth of an import is one (the import itself) plus the longest chain below
 /// the imported module.
 #[must_use]
-pub fn check(analysis: &Analysis, threshold: usize) -> CheckResult {
+pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
+    let Some(threshold) = policy.min_threshold() else {
+        info!("{} is disabled", RULE);
+        return analysis.finish(policy, Vec::new());
+    };
     let graph = &analysis.graph;
     let depths = graph.depths();
 
@@ -32,20 +38,21 @@ pub fn check(analysis: &Analysis, threshold: usize) -> CheckResult {
             let target = graph.module(edge.target);
             let depth = 1 + depths[edge.target.index()];
             if seen.insert(edge.target) && depth >= threshold {
-                findings.push(Finding {
-                    file: module.path.clone(),
-                    kind: FindingKind::Import {
+                findings.push(Finding::new(
+                    module.path.clone(),
+                    FindingKind::Import {
                         request: edge.request.clone(),
                         resolved: target.path.clone(),
+                        line: edge.line,
                     },
-                    value: depth,
-                });
+                    depth,
+                ));
             }
         }
     }
 
     info!("Import depth check complete. Found {} findings", findings.len());
-    analysis.finish(findings)
+    analysis.finish(policy, findings)
 }
 
 #[cfg(test)]
@@ -63,8 +70,10 @@ mod tests {
 
     /// (request, depth) pairs for the given entry glob, in report order.
     fn depths(root: &Path, entry_glob: &str) -> Vec<(String, usize)> {
-        let cfg =
-            Config { common: CommonArgs::with_root(root).entry_glob(entry_glob), threshold: 1 };
+        let cfg = Config {
+            common: CommonArgs::with_root(root).entry_glob(entry_glob),
+            threshold: Some(1),
+        };
         run_import_depth_check(&cfg)
             .unwrap()
             .findings

@@ -4,11 +4,11 @@
     "commit": "d8c1c1b0002db8ccb63b58095f338e8bf423fa99",
     "check": "import-bloat",
     "installed": false,
-    "elapsed_ms": 1378,
-    "files": 2340,
-    "violations": 360,
-    "imports_resolved": 5577,
-    "imports_total": 6281,
+    "elapsed_ms": 823,
+    "files": 2344,
+    "violations": 164,
+    "imports_resolved": 5612,
+    "imports_total": 6329,
     "builtins": 858
   },
   {
@@ -16,11 +16,11 @@
     "commit": "d8c1c1b0002db8ccb63b58095f338e8bf423fa99",
     "check": "import-depth",
     "installed": false,
-    "elapsed_ms": 1339,
-    "files": 2340,
-    "violations": 552,
-    "imports_resolved": 5577,
-    "imports_total": 6281,
+    "elapsed_ms": 848,
+    "files": 2344,
+    "violations": 202,
+    "imports_resolved": 5612,
+    "imports_total": 6329,
     "builtins": 858
   },
   {
@@ -28,11 +28,11 @@
     "commit": "fe4a2c8e7875d56283ab314a9b4a0da6b6df159d",
     "check": "import-bloat",
     "installed": false,
-    "elapsed_ms": 827,
+    "elapsed_ms": 548,
     "files": 4656,
-    "violations": 968,
-    "imports_resolved": 10266,
-    "imports_total": 13725,
+    "violations": 868,
+    "imports_resolved": 10277,
+    "imports_total": 13742,
     "builtins": 1197
   },
   {
@@ -40,11 +40,11 @@
     "commit": "fe4a2c8e7875d56283ab314a9b4a0da6b6df159d",
     "check": "import-depth",
     "installed": false,
-    "elapsed_ms": 814,
+    "elapsed_ms": 521,
     "files": 4656,
-    "violations": 3834,
-    "imports_resolved": 10266,
-    "imports_total": 13725,
+    "violations": 1586,
+    "imports_resolved": 10277,
+    "imports_total": 13742,
     "builtins": 1197
   }
 ]

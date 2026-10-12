@@ -46,6 +46,8 @@ pub struct RawImport {
     pub request: String,
     /// Whether this is a lazy `import()` rather than an eager import.
     pub dynamic: bool,
+    /// 1-based line of the import, or 0 when unknown.
+    pub line: u32,
 }
 
 /// What the builder learns from parsing one file.
@@ -62,6 +64,8 @@ pub struct ParsedFile {
 pub struct Edge {
     pub target: ModuleId,
     pub request: String,
+    /// 1-based line of the import in the importing file, or 0 when unknown.
+    pub line: u32,
 }
 
 /// A module (file) in the graph.
@@ -148,7 +152,7 @@ impl ModuleGraph {
             trace!("Graph frontier: {} modules", frontier.len());
             // Parse and resolve the whole frontier in parallel. Only this step
             // touches the file system; interning below is sequential and cheap.
-            type Expanded = (ModuleId, Vec<(String, PathBuf)>, Option<String>);
+            type Expanded = (ModuleId, Vec<(String, u32, PathBuf)>, Option<String>);
             let expanded: Vec<Expanded> = frontier
                 .par_iter()
                 .map(|&id| {
@@ -169,7 +173,7 @@ impl ModuleGraph {
                             if target.is_none() {
                                 trace!("Unresolved '{}' from {}", imp.request, path.display());
                             }
-                            target.map(|t| (imp.request, t))
+                            target.map(|t| (imp.request, imp.line, t))
                         })
                         .collect();
                     (id, resolved, parsed.error)
@@ -179,7 +183,7 @@ impl ModuleGraph {
             let mut next = Vec::new();
             for (id, resolved, error) in expanded {
                 let mut edges = Vec::with_capacity(resolved.len());
-                for (request, target_path) in resolved {
+                for (request, line, target_path) in resolved {
                     let target = match index.get(&target_path) {
                         Some(&t) => t,
                         None => {
@@ -188,7 +192,7 @@ impl ModuleGraph {
                             t
                         }
                     };
-                    edges.push(Edge { target, request });
+                    edges.push(Edge { target, request, line });
                 }
                 modules[id.idx()].edges = edges;
                 if let Some(message) = error {
@@ -428,7 +432,11 @@ mod tests {
                     .get(p)
                     .map(|to| {
                         to.iter()
-                            .map(|t| RawImport { request: (*t).to_string(), dynamic: false })
+                            .map(|t| RawImport {
+                                request: (*t).to_string(),
+                                dynamic: false,
+                                line: 0,
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -515,7 +523,7 @@ mod tests {
     fn dynamic_edges_skipped_unless_requested() {
         let parse = |p: &Path| -> Result<ParsedFile, Infallible> {
             let imports = if p == Path::new("a.js") {
-                vec![RawImport { request: "b".into(), dynamic: true }]
+                vec![RawImport { request: "b".into(), dynamic: true, line: 0 }]
             } else {
                 vec![]
             };
@@ -542,7 +550,7 @@ mod tests {
             |p: &Path| match p.to_str() {
                 Some("a.js") => Err("unreadable"),
                 Some("b.js") => Ok(ParsedFile {
-                    imports: vec![RawImport { request: "c".into(), dynamic: false }],
+                    imports: vec![RawImport { request: "c".into(), dynamic: false, line: 0 }],
                     error: Some("syntax error".into()),
                 }),
                 _ => Ok(ParsedFile::default()),

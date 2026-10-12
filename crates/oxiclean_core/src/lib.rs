@@ -6,6 +6,7 @@
 //! - Resolving module paths (relative, tsconfig paths, node_modules, workspace packages)
 //! - Collecting entry files from a project
 //! - Building the module graph and analysing it ([`ModuleGraph`])
+//! - Reading `oxiclean.toml` ([`settings`])
 //! - Reporting findings ([`report`])
 
 mod analysis;
@@ -19,6 +20,7 @@ mod parser;
 mod project;
 pub mod report;
 mod resolver;
+pub mod settings;
 mod types;
 
 // Re-export public API
@@ -34,4 +36,5 @@ pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{CheckResult, Finding, FindingKind};
 pub use resolver::{ResolutionStats, is_builtin, resolve};
+pub use settings::{ConfigFile, RulePolicy, Severity};
 pub use types::{SpecKind, Specifier};
