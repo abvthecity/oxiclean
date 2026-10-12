@@ -320,6 +320,17 @@
       "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
       "type": "object",
       "properties": {
+        "barrels": {
+          "description": "Barrel files, modules that mostly re-export others, that pull in\ntoo many modules when imported. Default threshold: 25 modules.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "bloat": {
           "description": "Imports and entries that pull in too many unique modules.\nDefault threshold: 300 modules.",
           "anyOf": [

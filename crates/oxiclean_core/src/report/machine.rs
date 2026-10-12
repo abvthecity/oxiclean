@@ -75,6 +75,10 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
             "'{}' is in the {} catalog but no package.json refers to it",
             entry.name, entry.catalog
         ),
+        FindingKind::Barrel(barrel) => format!(
+            "barrel file re-exporting {} modules: importing it pulls in {value} ({limit})",
+            barrel.reexports
+        ),
     }
 }
 
@@ -153,6 +157,11 @@ pub fn write_json<W: Write>(
                     v["line"] = json!(entry.line);
                     v["name"] = json!(entry.name);
                     v["catalog"] = json!(entry.catalog);
+                }
+                FindingKind::Barrel(barrel) => {
+                    v["kind"] = json!("barrel");
+                    v["reexports"] = json!(barrel.reexports);
+                    v["importers"] = json!(barrel.importers);
                 }
             }
             v
@@ -235,7 +244,8 @@ pub fn write_sarif<W: Write>(
                 | FindingKind::UnusedExport(_)
                 | FindingKind::UnusedMember(_)
                 | FindingKind::UnusedDependency(_)
-                | FindingKind::UnusedCatalogEntry(_) => Vec::new(),
+                | FindingKind::UnusedCatalogEntry(_)
+                | FindingKind::Barrel(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -309,6 +319,7 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
     match &f.kind {
         FindingKind::Import { request, .. } => key.push_str(request),
         FindingKind::WholeGraph => key.push_str("<entry>"),
+        FindingKind::Barrel(_) => key.push_str("<barrel>"),
         FindingKind::Cycle(cycle) => {
             for step in &cycle.steps {
                 key.push_str(&rel(&step.file, root));
