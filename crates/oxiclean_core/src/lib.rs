@@ -31,7 +31,7 @@ mod types;
 mod uses;
 
 // Re-export public API
-pub use analysis::{Analysis, CommonArgs};
+pub use analysis::{Analysis, CommonArgs, Workspace};
 pub use collector::{CollectorConfig, collect_entries};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
@@ -47,7 +47,7 @@ pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     CheckResult, CycleFinding, CycleStep, DuplicateExport, ExportName, Finding, FindingKind,
-    UnusedDependency, UnusedExport,
+    UnusedCatalogEntry, UnusedDependency, UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};

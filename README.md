@@ -31,6 +31,9 @@ oxiclean unused-namespace-members --root ./my-project
 # Find package.json dependencies and devDependencies that nothing imports or runs
 oxiclean dependencies --root ./my-project
 
+# Find pnpm catalog entries that no package.json refers to
+oxiclean catalog --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -79,7 +82,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` and `dependencies` report every unused export, member or package and have no threshold.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -274,6 +277,18 @@ counts as a use.
 **Usage:**
 ```bash
 oxiclean dependencies --root ./my-project
+```
+
+### Unused Catalog Entries Checker
+
+Find the entries of pnpm's `catalog` and `catalogs` in `pnpm-workspace.yaml`
+that no `package.json` in the workspace refers to with `catalog:` or
+`catalog:<name>`, and no `overrides` entry uses, like knip's `catalog`.
+Findings point at the entry's line in `pnpm-workspace.yaml`.
+
+**Usage:**
+```bash
+oxiclean catalog --root ./my-project
 ```
 
 ### Difference Between Tools

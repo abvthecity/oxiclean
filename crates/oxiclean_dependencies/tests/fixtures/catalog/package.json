@@ -1,0 +1,7 @@
+{
+  "name": "catalog-root",
+  "private": true,
+  "devDependencies": {
+    "typescript": "catalog:default"
+  }
+}

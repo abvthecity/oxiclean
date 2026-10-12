@@ -101,3 +101,21 @@ Where oxiclean differs from knip:
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports
   the import as unlisted in the workspace package.
+
+## Unused catalog entries
+
+`oxiclean catalog` reports the entries of pnpm's `catalog` (the default
+catalog) and `catalogs` in `pnpm-workspace.yaml` that nothing refers to,
+as knip's `catalog` issue type. An entry is used when the root's or a
+workspace package's `package.json` lists the package with `catalog:` or
+`catalog:default` (the default catalog) or `catalog:<name>`, in any
+dependency field, or when an `overrides` entry in `pnpm-workspace.yaml` or
+the root `package.json` (`pnpm.overrides`) sets it to one.
+
+```
+⚠ Unused catalog entries detected
+
+pnpm-workspace.yaml
+├──  catalog entry 'lodash' (default) (never referenced)
+└──  catalog entry 'vue' (legacy) (never referenced)
+```

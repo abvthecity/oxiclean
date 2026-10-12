@@ -84,7 +84,14 @@ impl CommonArgs {
         self.analyze_from(extra, DefaultEntries::PackageEntryPoints)
     }
 
-    fn analyze_from(&self, extra: BuildOptions, defaults: DefaultEntries) -> Result<Analysis> {
+    /// Resolves the root and reads the config file and the project's
+    /// package.json and tsconfig files, without building the module graph,
+    /// for checks of the project's manifests.
+    ///
+    /// # Errors
+    /// Fails if the root can't be found or read, or the config file is
+    /// invalid.
+    pub fn workspace(&self) -> Result<Workspace> {
         let root = match &self.root {
             Some(r) => {
                 r.canonicalize().map_err(|source| Error::Root { path: r.clone(), source })?
@@ -100,6 +107,11 @@ impl CommonArgs {
 
         let project = Project::load(&root);
         debug!("Found {} workspace packages", project.workspace_package_count());
+        Ok(Workspace { root, project, config, config_path })
+    }
+
+    fn analyze_from(&self, extra: BuildOptions, defaults: DefaultEntries) -> Result<Analysis> {
+        let Workspace { root, project, config, config_path } = self.workspace()?;
         let plugins = Plugins::detect(&project, &config.plugins);
         debug!("Plugins: {:?}", plugins);
 
@@ -231,24 +243,8 @@ impl Analysis {
     /// this analysis.
     #[must_use]
     pub fn finish(&self, policy: &RulePolicy, findings: Vec<Finding>) -> CheckResult {
-        let mut findings: Vec<Finding> = findings
-            .into_iter()
-            .filter_map(|mut f| {
-                let package = self.project.package_for(&f.file);
-                let rel = f.file.strip_prefix(&self.root).unwrap_or(&f.file);
-                let rule = policy.resolve(rel, package);
-                if !rule.reports(f.value) {
-                    return None;
-                }
-                f.threshold = rule.threshold;
-                f.severity = rule.severity;
-                f.package = package.map(str::to_string);
-                Some(f)
-            })
-            .collect();
-        sort_findings(&mut findings);
         CheckResult {
-            findings,
+            findings: apply_policy(&self.root, &self.project, policy, findings),
             root: self.root.clone(),
             files_analyzed: self.graph.len(),
             parse_failures: self.graph.failures().to_vec(),
@@ -256,4 +252,75 @@ impl Analysis {
             threshold: policy.base().threshold,
         }
     }
+}
+
+/// The root, config and project of a check that needs no module graph,
+/// from [`CommonArgs::workspace`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Workspace {
+    /// Canonical project root.
+    pub root: PathBuf,
+    /// tsconfig and workspace information.
+    pub project: Project,
+    /// The config file's settings, or the defaults when there is none.
+    pub config: ConfigFile,
+    /// Where the config file was read from.
+    pub config_path: Option<PathBuf>,
+}
+
+impl Workspace {
+    /// The config file's settings for `rule`.
+    ///
+    /// # Errors
+    /// Fails if the config file has an invalid glob.
+    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold)
+    }
+
+    /// As [`Analysis::finish`], for a check of `files_analyzed` files.
+    #[must_use]
+    pub fn finish(
+        &self,
+        policy: &RulePolicy,
+        findings: Vec<Finding>,
+        files_analyzed: usize,
+    ) -> CheckResult {
+        CheckResult {
+            findings: apply_policy(&self.root, &self.project, policy, findings),
+            root: self.root.clone(),
+            files_analyzed,
+            parse_failures: Vec::new(),
+            resolution: ResolutionStats::default(),
+            threshold: policy.base().threshold,
+        }
+    }
+}
+
+/// `findings` without those `policy` disables, ignores or that fall below
+/// their file's threshold, each with its file's severity and package,
+/// sorted.
+fn apply_policy(
+    root: &Path,
+    project: &Project,
+    policy: &RulePolicy,
+    findings: Vec<Finding>,
+) -> Vec<Finding> {
+    let mut findings: Vec<Finding> = findings
+        .into_iter()
+        .filter_map(|mut f| {
+            let package = project.package_for(&f.file);
+            let rel = f.file.strip_prefix(root).unwrap_or(&f.file);
+            let rule = policy.resolve(rel, package);
+            if !rule.reports(f.value) {
+                return None;
+            }
+            f.threshold = rule.threshold;
+            f.severity = rule.severity;
+            f.package = package.map(str::to_string);
+            Some(f)
+        })
+        .collect();
+    sort_findings(&mut findings);
+    findings
 }

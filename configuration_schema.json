@@ -331,6 +331,17 @@
             }
           ]
         },
+        "catalog": {
+          "description": "Entries of pnpm's `catalog` and `catalogs` in pnpm-workspace.yaml\nthat no package.json refers to with `catalog:`, as knip's `catalog`.\nDefault threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cycles": {
           "description": "Files that import each other, directly or indirectly, at runtime.\nType-only imports don't count. Default threshold: 1 file, so every\ncycle is reported.",
           "anyOf": [

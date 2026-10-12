@@ -1,0 +1,16 @@
+packages:
+  - packages/*
+
+catalog:
+  react: ^19.0.0
+  typescript: ^5.6.0
+  lodash: ^4.17.21 # nothing refers to it
+  semver: ^7.6.0
+
+catalogs:
+  legacy:
+    react: ^18.3.0
+    'vue': ^2.7.0
+
+overrides:
+  'foo>semver': 'catalog:'

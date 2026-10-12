@@ -7,6 +7,9 @@
 //! `dependencies`, `devDependencies` or both (the default). See
 //! [`unused_dependencies`] for what counts as a use.
 //!
+//! The `catalog` rule ([`run_catalog_check`]) reports pnpm catalog entries
+//! no package.json refers to, as knip's `catalog`.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -33,10 +36,16 @@
 //! # }
 //! ```
 
+mod catalog;
 mod checker;
 mod config;
 mod scripts;
 
+pub use catalog::{run_catalog_check, unused_catalog_entries};
 pub use checker::{Unused, check, run_dependencies_check, unused_dependencies};
-pub use config::{Config, DEFAULT_THRESHOLD, DEPENDENCIES_RULE, DEPENDENCIES_STYLE};
-pub use oxiclean_core::{CheckResult, DependencyField, Finding, FindingKind, UnusedDependency};
+pub use config::{
+    CATALOG_RULE, CATALOG_STYLE, Config, DEFAULT_THRESHOLD, DEPENDENCIES_RULE, DEPENDENCIES_STYLE,
+};
+pub use oxiclean_core::{
+    CheckResult, DependencyField, Finding, FindingKind, UnusedCatalogEntry, UnusedDependency,
+};

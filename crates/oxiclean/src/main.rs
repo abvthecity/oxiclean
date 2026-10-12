@@ -55,6 +55,9 @@ enum Commands {
     /// Check for packages a package.json lists that nothing imports or runs
     #[command(name = "dependencies")]
     Dependencies(oxiclean_dependencies::Config),
+    /// Check for pnpm catalog entries no package.json refers to
+    #[command(name = "catalog")]
+    Catalog(oxiclean_dependencies::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -108,6 +111,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_dependencies::run_dependencies_check(cfg)?,
             oxiclean_dependencies::DEPENDENCIES_STYLE,
             oxiclean_dependencies::DEPENDENCIES_RULE,
+        ),
+        Commands::Catalog(cfg) => (
+            oxiclean_dependencies::run_catalog_check(cfg)?,
+            oxiclean_dependencies::CATALOG_STYLE,
+            oxiclean_dependencies::CATALOG_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();
