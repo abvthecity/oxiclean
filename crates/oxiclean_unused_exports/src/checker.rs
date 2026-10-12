@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
 use oxiclean_core::{
-    Analysis, BuildOptions, CheckResult, Export, ExportForm, ExportKind, Finding, FindingKind,
-    ModuleGraph, ModuleId, Result, RulePolicy, UnusedExport, Used,
+    Analysis, BuildOptions, CheckResult, Export, ExportForm, ExportKind, ExportMember, Finding,
+    FindingKind, Module, ModuleGraph, ModuleId, Result, RulePolicy, UnusedExport, Used,
 };
 use tracing::info;
 
-use crate::config::{Config, DEFAULT_THRESHOLD, UNUSED_EXPORTS_RULE, UNUSED_TYPES_RULE};
+use crate::config::{
+    Config, DEFAULT_THRESHOLD, UNUSED_ENUM_MEMBERS_RULE, UNUSED_EXPORTS_RULE,
+    UNUSED_NAMESPACE_MEMBERS_RULE, UNUSED_TYPES_RULE,
+};
 
 /// Tags that keep an export out of the report, as in knip.
 const IGNORE_TAGS: [&str; 3] = ["public", "beta", "alias"];
@@ -18,6 +21,10 @@ pub enum Unused {
     Exports,
     /// Types, interfaces and enums: knip's `types`. See [`Export::is_type`].
     Types,
+    /// Keys of used enums: knip's `enumMembers`.
+    EnumMembers,
+    /// What used namespaces export: knip's `namespaceMembers`.
+    NamespaceMembers,
 }
 
 impl Unused {
@@ -27,6 +34,8 @@ impl Unused {
         match self {
             Self::Exports => UNUSED_EXPORTS_RULE,
             Self::Types => UNUSED_TYPES_RULE,
+            Self::EnumMembers => UNUSED_ENUM_MEMBERS_RULE,
+            Self::NamespaceMembers => UNUSED_NAMESPACE_MEMBERS_RULE,
         }
     }
 }
@@ -48,13 +57,31 @@ pub fn run_unused_types_check(cfg: &Config) -> Result<CheckResult> {
     run(cfg, Unused::Types)
 }
 
+/// Runs the unused enum members check described by `cfg`.
+///
+/// # Errors
+/// As for [`run_unused_exports_check`].
+pub fn run_unused_enum_members_check(cfg: &Config) -> Result<CheckResult> {
+    run(cfg, Unused::EnumMembers)
+}
+
+/// Runs the unused namespace members check described by `cfg`.
+///
+/// # Errors
+/// As for [`run_unused_exports_check`].
+pub fn run_unused_namespace_members_check(cfg: &Config) -> Result<CheckResult> {
+    run(cfg, Unused::NamespaceMembers)
+}
+
 fn run(cfg: &Config, which: Unused) -> Result<CheckResult> {
     info!("Starting {} check", which.rule());
     // Type-only and lazy imports use exports too, so they are resolved as
     // well, and the files only they reach are analysed. Files no entry
     // reaches are not analysed at all: they are unused files, not files
     // with unused exports.
-    let options = BuildOptions::default().resolve_passive(true).read_exports(true);
+    let members = matches!(which, Unused::EnumMembers | Unused::NamespaceMembers);
+    let options =
+        BuildOptions::default().resolve_passive(true).read_exports(true).read_members(members);
     let analysis = cfg.common.analyze_package_entries(options)?;
     let policy = analysis.policy(which.rule(), DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy, which))
@@ -71,14 +98,28 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy, which: Unused) -> CheckRe
         return analysis.finish(policy, Vec::new());
     }
     let graph = &analysis.graph;
-    let findings: Vec<Finding> = unused_exports(graph, &analysis.entries)
-        .into_iter()
-        .filter(|(_, e)| e.is_type() == (which == Unused::Types))
-        .map(|(id, e)| {
-            let unused = UnusedExport::new(e.name.clone(), e.line, e.kind);
-            Finding::new(graph.module(id).path.clone(), FindingKind::UnusedExport(unused), 1)
-        })
-        .collect();
+    let usage = ExportUsage::new(graph, &analysis.entries);
+    let findings: Vec<Finding> = match which {
+        Unused::Exports | Unused::Types => usage
+            .unused_exports()
+            .into_iter()
+            .filter(|(_, e)| e.is_type() == (which == Unused::Types))
+            .map(|(id, e)| {
+                let unused = UnusedExport::new(e.name.clone(), e.line, e.kind);
+                Finding::new(graph.module(id).path.clone(), FindingKind::UnusedExport(unused), 1)
+            })
+            .collect(),
+        Unused::EnumMembers | Unused::NamespaceMembers => usage
+            .unused_members()
+            .into_iter()
+            .filter(|(_, e, _)| (e.kind == ExportKind::Enum) == (which == Unused::EnumMembers))
+            .map(|(id, e, m)| {
+                let name = format!("{}.{}", e.name, m.name());
+                let unused = UnusedExport::new(name, m.line, m.kind);
+                Finding::new(graph.module(id).path.clone(), FindingKind::UnusedMember(unused), 1)
+            })
+            .collect(),
+    };
     info!("{} check complete. Found {} unused", which.rule(), findings.len());
     analysis.finish(policy, findings)
 }
@@ -105,53 +146,138 @@ pub fn unused_exports<'g>(
     graph: &'g ModuleGraph,
     entries: &[ModuleId],
 ) -> Vec<(ModuleId, &'g Export)> {
-    let mut usage = Tracker::new(graph);
-    for &entry in entries {
-        usage.queue.push(Task::All(entry));
-    }
-    for (from, module) in graph.iter() {
-        for u in &module.uses.usages {
-            let Some(target) = usage.target(from, &u.request) else { continue };
-            let task = match &u.used {
-                Used::Name(name) => Task::Name(target, name),
-                Used::Member { name, member } => Task::Member(target, name, member),
-                Used::Loader if usage.index(target).by_name.contains_key("default") => {
-                    Task::Name(target, "default")
-                }
-                // A loader of a module without a default export, `Used::All`,
-                // and anything `Used` may add later use every export.
-                _ => Task::All(target),
-            };
-            usage.queue.push(task);
-        }
-    }
-    usage.run();
+    ExportUsage::new(graph, entries).unused_exports()
+}
 
-    let entry_set: HashSet<ModuleId> = entries.iter().copied().collect();
-    let mut unused = Vec::new();
-    for (id, module) in graph.iter() {
-        let i = id.index();
-        if entry_set.contains(&id) || module.in_node_modules() || usage.all[i] {
-            continue;
+/// The members of used enums and namespaces nothing uses, in module order,
+/// as knip's `enumMembers` and `namespaceMembers` find them, with the
+/// export each belongs to:
+///
+/// - Only exports something uses are checked: an unused export is reported
+///   as such, not its members. Neither are exports of entry files, or of
+///   modules used as a whole, nor exports tagged `@public`, `@beta` or
+///   `@alias`.
+/// - `E.a`, `E['a']` and `N.a.b`, in values and types, use that member and
+///   the members it is in. A member used in its own file is used.
+/// - Every member is used when the export is read as a whole: `E[key]`,
+///   `Object.keys(E)`, `const e = E`, the type `E`, `typeof E`, or a
+///   re-export from an entry file. Passing `E` around uses none.
+/// - Members tagged `@public`, `@beta` or `@alias` are never reported.
+#[must_use]
+pub fn unused_members<'g>(
+    graph: &'g ModuleGraph,
+    entries: &[ModuleId],
+) -> Vec<(ModuleId, &'g Export, &'g ExportMember)> {
+    ExportUsage::new(graph, entries).unused_members()
+}
+
+/// Which exports and members of a graph are used, from its entries.
+#[derive(Debug)]
+pub struct ExportUsage<'g> {
+    tracker: Tracker<'g>,
+    entries: HashSet<ModuleId>,
+}
+
+impl<'g> ExportUsage<'g> {
+    /// Follows every use in `graph`, starting from `entries`.
+    #[must_use]
+    pub fn new(graph: &'g ModuleGraph, entries: &[ModuleId]) -> Self {
+        let mut usage = Tracker::new(graph);
+        for &entry in entries {
+            usage.queue.push(Task::All(entry));
         }
-        // A value and a type may share a name; each is reported once.
-        let mut reported: HashSet<(&str, bool)> = HashSet::new();
-        for e in &module.exports {
-            // `export * as ns from './x'` is not an export of its own in knip.
-            let whole_namespace = e.form == ExportForm::ReExport
-                && e.forwarded.as_ref().is_some_and(|f| f.name.is_none());
-            if usage.names[i].contains(e.name.as_str())
-                || usage.partly[i].contains(e.name.as_str())
-                || whole_namespace
-                || IGNORE_TAGS.iter().any(|t| e.has_tag(t))
-                || !reported.insert((&e.name, e.is_type()))
-            {
-                continue;
+        for (from, module) in graph.iter() {
+            for u in &module.uses.usages {
+                let Some(target) = usage.target(from, &u.request) else { continue };
+                let task = match &u.used {
+                    Used::Name(name) => Task::Name(target, name),
+                    Used::Member { name, member } => Task::Member(target, name, member),
+                    Used::Whole(name) => Task::Whole(target, name),
+                    Used::Loader if usage.index(target).by_name.contains_key("default") => {
+                        Task::Name(target, "default")
+                    }
+                    // A loader of a module without a default export,
+                    // `Used::All`, and anything `Used` may add later use
+                    // every export.
+                    _ => Task::All(target),
+                };
+                usage.queue.push(task);
             }
-            unused.push((id, e));
         }
+        usage.run();
+        Self { tracker: usage, entries: entries.iter().copied().collect() }
     }
-    unused
+
+    /// Modules whose exports may be reported: not entries, not in
+    /// `node_modules`, and not used as a whole.
+    fn checked(&self) -> impl Iterator<Item = (ModuleId, &'g Module)> + '_ {
+        self.tracker.graph.iter().filter(|&(id, module)| {
+            !self.entries.contains(&id)
+                && !module.in_node_modules()
+                && !self.tracker.all[id.index()]
+        })
+    }
+
+    /// See [`unused_exports`].
+    #[must_use]
+    pub fn unused_exports(&self) -> Vec<(ModuleId, &'g Export)> {
+        let usage = &self.tracker;
+        let mut unused = Vec::new();
+        for (id, module) in self.checked() {
+            // A value and a type may share a name; each is reported once.
+            let mut reported: HashSet<(&str, bool)> = HashSet::new();
+            for e in &module.exports {
+                // `export * as ns from './x'` is not an export of its own in knip.
+                let whole_namespace = e.form == ExportForm::ReExport
+                    && e.forwarded.as_ref().is_some_and(|f| f.name.is_none());
+                if usage.is_used(id, &e.name)
+                    || whole_namespace
+                    || IGNORE_TAGS.iter().any(|t| e.has_tag(t))
+                    || !reported.insert((&e.name, e.is_type()))
+                {
+                    continue;
+                }
+                unused.push((id, e));
+            }
+        }
+        unused
+    }
+
+    /// See [`unused_members`].
+    #[must_use]
+    pub fn unused_members(&self) -> Vec<(ModuleId, &'g Export, &'g ExportMember)> {
+        let usage = &self.tracker;
+        // The member paths used on each export, and every path that contains
+        // one: reading `a.b` reads `a` too.
+        let mut paths: HashSet<(ModuleId, &str, &[String])> = HashSet::new();
+        for &(m, name, member) in &usage.members {
+            for end in 1..=member.len() {
+                paths.insert((m, name, &member[..end]));
+            }
+        }
+        let mut unused = Vec::new();
+        for (id, module) in self.checked() {
+            for e in &module.exports {
+                if e.members.is_empty()
+                    || !usage.is_used(id, &e.name)
+                    || usage.whole.contains(&(id, e.name.as_str()))
+                    || IGNORE_TAGS.iter().any(|t| e.has_tag(t))
+                {
+                    continue;
+                }
+                for m in &e.members {
+                    if m.used_in_file
+                        || IGNORE_TAGS.iter().any(|t| m.has_tag(t))
+                        || paths.contains(&(id, e.name.as_str(), m.path.as_slice()))
+                    {
+                        continue;
+                    }
+                    unused.push((id, e, m));
+                }
+            }
+        }
+        unused
+    }
 }
 
 /// Whether using `e` uses the export it passes on: re-exports, and
@@ -166,7 +292,10 @@ enum Task<'g> {
     Name(ModuleId, &'g str),
     /// A member of the module's export of that name is used: `x.a` on an
     /// imported `x`.
-    Member(ModuleId, &'g str, &'g str),
+    Member(ModuleId, &'g str, &'g [String]),
+    /// The module's export of that name and every one of its members are
+    /// used.
+    Whole(ModuleId, &'g str),
     /// Every export of the module is used.
     All(ModuleId),
     /// Every export of the module but `default` is used, through
@@ -175,6 +304,7 @@ enum Task<'g> {
 }
 
 /// What the worklist has found used so far.
+#[derive(Debug)]
 struct Tracker<'g> {
     graph: &'g ModuleGraph,
     /// Each module's imports, by request, to the module they load. Built on
@@ -187,13 +317,16 @@ struct Tracker<'g> {
     names: Vec<HashSet<&'g str>>,
     /// Exports used only through members, by module.
     partly: Vec<HashSet<&'g str>>,
-    members: HashSet<(ModuleId, &'g str, &'g str)>,
+    /// Member paths used on each export.
+    members: HashSet<(ModuleId, &'g str, &'g [String])>,
+    /// Exports whose every member is used.
+    whole: HashSet<(ModuleId, &'g str)>,
     queue: Vec<Task<'g>>,
 }
 
 /// A module's exports, indexed so that generated files with thousands of
 /// exports don't make each lookup a scan.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ExportIndex<'g> {
     by_name: HashMap<&'g str, Vec<&'g Export>>,
     /// Names of the module's exports by the local binding they export,
@@ -213,6 +346,7 @@ impl<'g> Tracker<'g> {
             names: vec![HashSet::new(); n],
             partly: vec![HashSet::new(); n],
             members: HashSet::new(),
+            whole: HashSet::new(),
             queue: Vec::new(),
         }
     }
@@ -257,6 +391,7 @@ impl<'g> Tracker<'g> {
             match task {
                 Task::Name(m, name) => self.use_name(m, name),
                 Task::Member(m, name, member) => self.use_member(m, name, member),
+                Task::Whole(m, name) => self.use_whole(m, name),
                 Task::All(m) => self.use_all(m),
                 Task::Star(m) => self.use_star(m),
             }
@@ -275,7 +410,7 @@ impl<'g> Tracker<'g> {
         }
         let own = self.named(m, name);
         for &e in &own {
-            self.export_used(m, e);
+            self.export_used(m, e, false);
         }
         let own = !own.is_empty();
         // `export *` passes on what the module doesn't export itself.
@@ -290,12 +425,17 @@ impl<'g> Tracker<'g> {
 
     /// Like [`Self::use_name`], but a namespace the export passes on is used
     /// only for `member`.
-    fn use_member(&mut self, m: ModuleId, name: &'g str, member: &'g str) {
+    fn use_member(&mut self, m: ModuleId, name: &'g str, member: &'g [String]) {
         let i = m.index();
-        if self.all[i] || self.names[i].contains(name) || !self.members.insert((m, name, member)) {
+        if self.all[i] || !self.members.insert((m, name, member)) {
             return;
         }
-        self.partly[i].insert(name);
+        // An export already used by name still passes the path on, to the
+        // members of what it re-exports.
+        let by_name = self.names[i].contains(name);
+        if !by_name {
+            self.partly[i].insert(name);
+        }
         let module = self.graph.module(m);
         if let Some(d) = module.declaration {
             self.queue.push(Task::Member(d, name, member));
@@ -305,19 +445,57 @@ impl<'g> Tracker<'g> {
             match &e.forwarded {
                 Some(f) if passes_on(e) => {
                     if let Some(t) = self.target(m, &f.from) {
-                        self.queue.push(match &f.name {
-                            None => Task::Name(t, member),
-                            Some(n) => Task::Member(t, n, member),
-                        });
+                        let task = match (&f.name, member.split_first()) {
+                            // `x.a.b` on a namespace `x` of `./t` reads
+                            // member `b` of `a` there.
+                            (None, Some((first, []))) => Task::Name(t, first),
+                            (None, Some((first, rest))) => Task::Member(t, first, rest),
+                            (None, None) => continue,
+                            (Some(n), _) => Task::Member(t, n, member),
+                        };
+                        self.queue.push(task);
                     }
                 }
-                _ => self.signature_used(m, e),
+                _ if !by_name => self.signature_used(m, e),
+                _ => {}
             }
         }
         if own.is_empty() && name != "default" {
             for request in &module.uses.reexport_all {
                 if let Some(t) = self.target(m, request) {
                     self.queue.push(Task::Member(t, name, member));
+                }
+            }
+        }
+    }
+
+    /// Like [`Self::use_name`], and every member of the export is used,
+    /// along with what it passes on.
+    fn use_whole(&mut self, m: ModuleId, name: &'g str) {
+        if self.all[m.index()] || !self.whole.insert((m, name)) {
+            return;
+        }
+        self.queue.push(Task::Name(m, name));
+        let module = self.graph.module(m);
+        if let Some(d) = module.declaration {
+            self.queue.push(Task::Whole(d, name));
+        }
+        let own = self.named(m, name);
+        for &e in &own {
+            if passes_on(e)
+                && let Some(f) = &e.forwarded
+                && let Some(t) = self.target(m, &f.from)
+            {
+                self.queue.push(match &f.name {
+                    Some(n) => Task::Whole(t, n),
+                    None => Task::All(t),
+                });
+            }
+        }
+        if own.is_empty() && name != "default" {
+            for request in &module.uses.reexport_all {
+                if let Some(t) = self.target(m, request) {
+                    self.queue.push(Task::Whole(t, name));
                 }
             }
         }
@@ -334,7 +512,7 @@ impl<'g> Tracker<'g> {
         }
         for e in &module.exports {
             self.names[i].insert(&e.name);
-            self.export_used(m, e);
+            self.export_used(m, e, true);
         }
         self.reexport_all(m);
     }
@@ -347,9 +525,10 @@ impl<'g> Tracker<'g> {
         if let Some(d) = self.graph.module(m).declaration {
             self.queue.push(Task::Star(d));
         }
+        // What a module used as a whole passes on is used as a whole.
         for e in &self.graph.module(m).exports {
             if e.name != "default" {
-                self.queue.push(Task::Name(m, &e.name));
+                self.queue.push(Task::Whole(m, &e.name));
             }
         }
         self.reexport_all(m);
@@ -364,18 +543,26 @@ impl<'g> Tracker<'g> {
     }
 
     /// Follows what a used export `e` of `m` uses in turn: the export it
-    /// passes on, and the declarations its signature refers to.
-    fn export_used(&mut self, m: ModuleId, e: &'g Export) {
+    /// passes on, as a whole when `whole`, and the declarations its
+    /// signature refers to.
+    fn export_used(&mut self, m: ModuleId, e: &'g Export, whole: bool) {
         if passes_on(e)
             && let Some(f) = &e.forwarded
             && let Some(t) = self.target(m, &f.from)
         {
             self.queue.push(match &f.name {
+                Some(name) if whole => Task::Whole(t, name),
                 Some(name) => Task::Name(t, name),
                 None => Task::All(t),
             });
         }
         self.signature_used(m, e);
+    }
+
+    /// Whether the export `name` of `m` is used, by name or through members.
+    fn is_used(&self, m: ModuleId, name: &str) -> bool {
+        let i = m.index();
+        self.all[i] || self.names[i].contains(name) || self.partly[i].contains(name)
     }
 
     /// Uses the declarations a used export's signature refers to.

@@ -18,6 +18,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_span::GetSpan;
 use oxc_syntax::scope::ScopeFlags;
 
+use crate::members::ExportMember;
+
 /// What kind of symbol an export is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -34,11 +36,13 @@ pub enum ExportKind {
     Interface,
     /// `export namespace N {}`, `export module N {}` or `export * as N`.
     Namespace,
+    /// A key of an enum, as an [`crate::ExportMember`].
+    EnumMember,
 }
 
 impl ExportKind {
     /// Lower-case name, as in JSON output: `value`, `function`, `class`,
-    /// `enum`, `type`, `interface` or `namespace`.
+    /// `enum`, `type`, `interface`, `namespace` or `enum member`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -49,6 +53,7 @@ impl ExportKind {
             Self::Type => "type",
             Self::Interface => "interface",
             Self::Namespace => "namespace",
+            Self::EnumMember => "enum member",
         }
     }
 }
@@ -104,6 +109,10 @@ pub struct Export {
     /// Tags of the block comment right before the export's statement, without
     /// the `@`, e.g. `public` or `alias`.
     pub tags: Vec<String>,
+    /// The keys of an exported enum, or what an exported namespace exports.
+    /// When an enum and a namespace of the same name merge, the enum's
+    /// export has the members of both.
+    pub members: Vec<ExportMember>,
 }
 
 /// Another module's export that an [`Export`] passes on.
@@ -201,6 +210,7 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
             signature_refs: Vec::new(),
             line: line(at),
             tags: tags.clone(),
+            members: Vec::new(),
         };
 
         match stmt {
@@ -730,7 +740,7 @@ fn top_level_bindings<'a>(stmt: &'a Statement<'_>, bindings: &mut HashMap<&'a st
 /// Tags of the block comment right before `start`, as knip reads them: the
 /// nearest `/* ... */` or `/** ... */` comment, separated from `start` only
 /// by whitespace and `//` comments.
-fn comment_tags(program: &Program<'_>, start: u32) -> Vec<String> {
+pub(crate) fn comment_tags(program: &Program<'_>, start: u32) -> Vec<String> {
     let source = program.source_text;
     let mut cursor = start as usize;
     let end = program.comments.partition_point(|c| c.span.end <= start);

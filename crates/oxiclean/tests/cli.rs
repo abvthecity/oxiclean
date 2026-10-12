@@ -490,3 +490,41 @@ fn unused_exports_and_types_in_every_format() {
     assert_eq!(result["message"]["text"], "value 'unusedHelper' is exported but never imported");
     assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 2);
 }
+
+#[test]
+fn unused_members_in_every_format() {
+    let t = TempDir::new().unwrap();
+    write(t.path(), "package.json", r#"{"name":"app","main":"src/index.ts"}"#);
+    write(
+        t.path(),
+        "src/index.ts",
+        "import { Color, Api } from './lib';\nconsole.log(Color.Red, Api.get);",
+    );
+    write(
+        t.path(),
+        "src/lib.ts",
+        "export enum Color {\n  Red,\n  Blue,\n}\nexport namespace Api {\n  export const get = 1;\n  export function put() {}\n}",
+    );
+
+    let (code, out) = run(t.path(), &["unused-enum-members"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("member 'Color.Blue' (never used)"), "{out}");
+    assert!(!out.contains("Red") && !out.contains("Api"), "{out}");
+
+    let (_, out) = run_stdout(t.path(), &["unused-namespace-members", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
+    let finding = &v["findings"][0];
+    assert_eq!(finding["kind"], "unused-member");
+    assert_eq!(finding["file"], "src/lib.ts");
+    assert_eq!(finding["name"], "Api.put");
+    assert_eq!(finding["symbol"], "function");
+    assert_eq!(finding["line"], 7);
+
+    let (_, out) = run_stdout(t.path(), &["unused-enum-members", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let result = &v["runs"][0]["results"][0];
+    assert_eq!(result["ruleId"], "unused-enum-members");
+    assert_eq!(result["message"]["text"], "enum member 'Color.Blue' is never used");
+    assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 3);
+}

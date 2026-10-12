@@ -77,8 +77,8 @@ pub struct ConfigFile {
     /// "apps/*/src/pages/**/*.tsx"). `*` stays within one directory and `**`
     /// crosses directories; a pattern without glob characters matches any path
     /// containing it. When empty, every JS/TS file inside a `src` directory is
-    /// an entry; unused-exports and unused-types start from each package's
-    /// entry points instead (package.json `main`, `exports`, `bin` and
+    /// an entry; the unused export and member checks start from each
+    /// package's entry points instead (package.json `main`, `exports`, `bin` and
     /// `scripts`, `index` files, tests and declaration files).
     pub entries: Vec<String>,
     /// Also follow dynamic `import()` calls. They are skipped by default
@@ -125,6 +125,13 @@ pub struct Rules {
     /// Exported types, interfaces and enums that no other file imports, as
     /// knip's `types`. The same exceptions apply. Default threshold: 1.
     pub unused_types: Option<RuleSetting>,
+    /// Members of used enums that nothing uses, as knip's `enumMembers`.
+    /// Members tagged `@public`, `@beta` or `@alias` don't count. Default
+    /// threshold: 1.
+    pub unused_enum_members: Option<RuleSetting>,
+    /// What used namespaces export that nothing uses, as knip's
+    /// `namespaceMembers`. The same exceptions apply. Default threshold: 1.
+    pub unused_namespace_members: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -138,6 +145,8 @@ impl Rules {
             "duplicates" => self.duplicates.as_ref(),
             "unused-exports" => self.unused_exports.as_ref(),
             "unused-types" => self.unused_types.as_ref(),
+            "unused-enum-members" => self.unused_enum_members.as_ref(),
+            "unused-namespace-members" => self.unused_namespace_members.as_ref(),
             _ => None,
         }
     }
@@ -150,6 +159,8 @@ impl Rules {
             &self.duplicates,
             &self.unused_exports,
             &self.unused_types,
+            &self.unused_enum_members,
+            &self.unused_namespace_members,
         ]
         .into_iter()
         .flatten()

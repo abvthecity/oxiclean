@@ -1,14 +1,20 @@
 These fixtures are copied unchanged from knip's `packages/knip/fixtures` at
 [webpro-nl/knip@13d7f21e8ec5](https://github.com/webpro-nl/knip/tree/13d7f21e8ec5b30d8fe6d8377c9012b9db96f871/packages/knip/fixtures),
-so the unused exports and types oxiclean reports can be checked against
+so the unused exports, types and members oxiclean reports can be checked against
 knip's tests:
 
 | Fixture | knip fixture and test |
 |---|---|
+| `knip-enum-members` | `types/enum-members` |
+| `knip-enum-members-element-access` | `types/enum-members-element-access` |
+| `knip-enum-members-element-access-resolution` | `types/enum-members-element-access-resolution` |
+| `knip-enum-members-element-access-string-key` | `types/enum-members-element-access-string-key` |
+| `knip-enum-members-enumerated` | `types/enum-members-enumerated` |
 | `knip-exports-basic` | `exports/basic` |
 | `knip-loaders` | `imports/loaders` |
 | `knip-module-augmentation` | `types/declare-module-augmentation` |
 | `knip-re-exports-deep` | `re-exports/deep` |
+| `knip-ts-namespace` | `namespaces/ts-namespace` |
 | `knip-type-visibility` | `types/type-visibility` |
 
 Only `knip-re-exports-deep/.oxicleanrc.json` is new; it sets the entry that

@@ -24,6 +24,10 @@ oxiclean duplicates --root ./my-project
 oxiclean unused-exports --root ./my-project
 oxiclean unused-types --root ./my-project
 
+# Find members of used enums and namespaces that nothing uses
+oxiclean unused-enum-members --root ./my-project
+oxiclean unused-namespace-members --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -71,7 +75,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports` and `unused-types` report every unused export and have no threshold.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members` and `unused-namespace-members` report every unused export or member and have no threshold.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -224,6 +228,30 @@ src/button.ts
 └──  export 'unusedHelper' (never imported)
 ```
 
+### Unused Enum and Namespace Members Checkers
+
+Find the members of exported enums and TypeScript namespaces that nothing
+uses, like knip's `enumMembers` and `namespaceMembers`. Only exports that
+something uses are checked; an export nothing uses is reported by
+`unused-exports` or `unused-types` instead. `E.a`, `E['a']` and `N.a.b`
+use a member, in values and types and in the member's own file, while
+`E[key]`, `Object.keys(E)` and the type `E` use them all. Members tagged
+`@public` are never reported.
+
+```ts
+// src/color.ts
+export enum Color {
+  Red,  // used: src/index.ts reads Color.Red
+  Blue, // reported by unused-enum-members
+}
+```
+
+**Usage:**
+```bash
+oxiclean unused-enum-members --root ./my-project
+oxiclean unused-namespace-members --root ./my-project
+```
+
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
@@ -231,6 +259,7 @@ src/button.ts
 - **Import Cycles**: Lists files that import each other - order-dependent initialisation bugs and code that can't be split
 - **Duplicate Exports**: Lists exports with a second name - two ways to import one thing
 - **Unused Exports and Types**: Lists exports nothing imports - dead code and API surface to remove
+- **Unused Enum and Namespace Members**: Lists members of used enums and namespaces that nothing reads - dead cases and helpers
 
 These metrics provide complementary insights into code complexity.
 
@@ -248,8 +277,8 @@ apply settings to some files. Every key is optional.
   // Files that are never entries and never reported, relative to the root
   "ignorePatterns": ["**/fixtures/**", "apps/playground/**"],
   // Entry files. Without this, every JS/TS file inside a `src` directory is
-  // an entry, except for unused-exports and unused-types, which start from
-  // each package's entry points. `*` stays within one directory and `**`
+  // an entry, except for the unused export and member checks, which start
+  // from each package's entry points. `*` stays within one directory and `**`
   // crosses directories.
   "entries": ["packages/*/src/**/*.{ts,tsx}"],
   // Also follow dynamic import() calls

@@ -37,9 +37,13 @@ pub enum FindingKind {
     DuplicateExport(DuplicateExport),
     /// An export nothing imports.
     UnusedExport(UnusedExport),
+    /// A member of a used enum or namespace that nothing uses. The name is
+    /// the export and the member's path, as `Fruits.Tropical.mango`.
+    UnusedMember(UnusedExport),
 }
 
-/// An export nothing imports, for [`FindingKind::UnusedExport`].
+/// An export nothing imports, for [`FindingKind::UnusedExport`], or a
+/// member nothing uses, for [`FindingKind::UnusedMember`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct UnusedExport {
@@ -161,7 +165,7 @@ impl Finding {
             FindingKind::Import { line, .. } => *line,
             FindingKind::Cycle(cycle) => cycle.steps.first().map_or(0, |s| s.line),
             FindingKind::DuplicateExport(dup) => dup.names.first().map_or(0, |n| n.line),
-            FindingKind::UnusedExport(unused) => unused.line,
+            FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => unused.line,
             FindingKind::WholeGraph => 0,
         }
     }
@@ -216,7 +220,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::Import { request, .. } => request,
         FindingKind::Cycle(cycle) => cycle.steps.first().map_or("", |s| s.request.as_str()),
         FindingKind::DuplicateExport(dup) => dup.names.first().map_or("", |n| n.name.as_str()),
-        FindingKind::UnusedExport(unused) => &unused.name,
+        FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => &unused.name,
         FindingKind::WholeGraph => "",
     }
 }
@@ -227,6 +231,7 @@ fn label(f: &Finding) -> String {
         FindingKind::DuplicateExport(_) | FindingKind::UnusedExport(_) => {
             format!("export '{}'", request(f))
         }
+        FindingKind::UnusedMember(_) => format!("member '{}'", request(f)),
         _ => format!("import '{}'", request(f)),
     }
 }

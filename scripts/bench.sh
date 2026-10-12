@@ -15,7 +15,8 @@ REPO_ROOT=$(pwd)
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 BASELINE=$REPO_ROOT/bench/baseline.json
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
-CHECKS=(bloat depth cycles duplicates unused-exports unused-types)
+CHECKS=(bloat depth cycles duplicates unused-exports unused-types unused-enum-members
+  unused-namespace-members)
 
 install=false
 update=false

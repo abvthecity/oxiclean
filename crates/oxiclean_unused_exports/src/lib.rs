@@ -3,6 +3,9 @@
 //! Reports exports that no other file imports, like knip's `exports` and
 //! `types` issue types: `unused-exports` covers values, functions, classes
 //! and namespaces, and `unused-types` covers types, interfaces and enums.
+//! `unused-enum-members` and `unused-namespace-members` report the members
+//! of used enums and namespaces that nothing uses, like knip's
+//! `enumMembers` and `namespaceMembers`.
 //! Exports of entry files are the project's interface and are never
 //! reported, and neither are exports tagged `@public` (or `@beta`, or
 //! `@alias`) in their JSDoc.
@@ -35,10 +38,12 @@ mod checker;
 mod config;
 
 pub use checker::{
-    Unused, check, run_unused_exports_check, run_unused_types_check, unused_exports,
+    ExportUsage, Unused, check, run_unused_enum_members_check, run_unused_exports_check,
+    run_unused_namespace_members_check, run_unused_types_check, unused_exports, unused_members,
 };
 pub use config::{
-    Config, DEFAULT_THRESHOLD, UNUSED_EXPORTS_RULE, UNUSED_EXPORTS_STYLE, UNUSED_TYPES_RULE,
-    UNUSED_TYPES_STYLE,
+    Config, DEFAULT_THRESHOLD, UNUSED_ENUM_MEMBERS_RULE, UNUSED_ENUM_MEMBERS_STYLE,
+    UNUSED_EXPORTS_RULE, UNUSED_EXPORTS_STYLE, UNUSED_NAMESPACE_MEMBERS_RULE,
+    UNUSED_NAMESPACE_MEMBERS_STYLE, UNUSED_TYPES_RULE, UNUSED_TYPES_STYLE,
 };
 pub use oxiclean_core::{CheckResult, Finding, FindingKind, UnusedExport};

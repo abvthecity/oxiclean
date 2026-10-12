@@ -13,6 +13,7 @@ use tracing::{debug, trace, warn};
 
 use crate::constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
+use crate::members;
 use crate::types::{SpecKind, Specifier};
 use crate::uses::{self, ModuleUses};
 
@@ -75,13 +76,18 @@ pub struct ParsedImports {
 /// # Errors
 /// Fails if the file can't be read.
 pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
-    parse_file(file, true)
+    parse_file(file, true, true)
 }
 
 /// [`parse_imports`], leaving [`ParsedImports::exports`] and
-/// [`ParsedImports::uses`] empty unless `with_exports`: checks that only
+/// [`ParsedImports::uses`] empty unless `with_exports`, and
+/// [`Export::members`] empty unless `with_members` too: checks that only
 /// follow imports skip the extra walks over the AST.
-pub(crate) fn parse_file(file: &Path, with_exports: bool) -> Result<ParsedImports> {
+pub(crate) fn parse_file(
+    file: &Path,
+    with_exports: bool,
+    with_members: bool,
+) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
@@ -103,7 +109,14 @@ pub(crate) fn parse_file(file: &Path, with_exports: bool) -> Result<ParsedImport
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
     let (exports, uses) = if with_exports {
-        (exports::collect(&program, &|offset| collector.line(offset)), uses::collect(&program))
+        let line = |offset| collector.line(offset);
+        let mut exports = exports::collect(&program, &line);
+        // Scopes are resolved on the arena's copy of the program.
+        let program = &*allocator.alloc(program);
+        if with_members {
+            members::collect(program, &line, &mut exports);
+        }
+        (exports, uses::collect(program))
     } else {
         (Vec::new(), ModuleUses::default())
     };

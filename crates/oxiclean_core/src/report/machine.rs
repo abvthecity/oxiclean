@@ -65,6 +65,9 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
         FindingKind::UnusedExport(unused) => {
             format!("{} '{}' is exported but never imported", unused.kind.as_str(), unused.name)
         }
+        FindingKind::UnusedMember(unused) => {
+            format!("{} '{}' is never used", unused.kind.as_str(), unused.name)
+        }
     }
 }
 
@@ -119,6 +122,12 @@ pub fn write_json<W: Write>(
                         .iter()
                         .map(|n| json!({ "name": n.name, "line": n.line }))
                         .collect();
+                }
+                FindingKind::UnusedMember(unused) => {
+                    v["kind"] = json!("unused-member");
+                    v["line"] = json!(unused.line);
+                    v["name"] = json!(unused.name);
+                    v["symbol"] = json!(unused.kind.as_str());
                 }
                 FindingKind::UnusedExport(unused) => {
                     v["kind"] = json!("unused-export");
@@ -204,7 +213,8 @@ pub fn write_sarif<W: Write>(
                     .collect(),
                 FindingKind::Import { .. }
                 | FindingKind::WholeGraph
-                | FindingKind::UnusedExport(_) => Vec::new(),
+                | FindingKind::UnusedExport(_)
+                | FindingKind::UnusedMember(_) => Vec::new(),
             };
             if !related.is_empty() {
                 result["relatedLocations"] = related
@@ -290,7 +300,9 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
                 key.push('\0');
             }
         }
-        FindingKind::UnusedExport(unused) => key.push_str(&unused.name),
+        FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => {
+            key.push_str(&unused.name);
+        }
     }
     // FNV-1a: stable across Rust versions and platforms, unlike `DefaultHasher`.
     let hash = key
