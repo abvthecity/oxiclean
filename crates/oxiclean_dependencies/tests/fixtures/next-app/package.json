@@ -1,0 +1,14 @@
+{
+  "name": "next-app",
+  "private": true,
+  "scripts": {
+    "build": "next build"
+  },
+  "dependencies": {
+    "next": "^15.0.0",
+    "only-in-middleware": "^1.0.0",
+    "only-in-route": "^1.0.0",
+    "react": "^19.0.0",
+    "unused-pkg": "^1.0.0"
+  }
+}

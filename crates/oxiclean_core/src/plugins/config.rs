@@ -5,7 +5,12 @@
 //! first argument, and a top-level `const` becomes its value. Anything else,
 //! such as `require('x')`, is `null`, as its import already counts.
 
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
+};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -226,7 +231,7 @@ const SOURCE_EXTENSIONS: &[&str] =
 #[derive(Debug, Default)]
 pub(super) struct Named {
     pub packages: Vec<String>,
-    pub files: Vec<std::path::PathBuf>,
+    pub files: Vec<PathBuf>,
 }
 
 impl Named {
@@ -236,7 +241,7 @@ impl Named {
             let base = dir.join(&name);
             let found = SOURCE_EXTENSIONS
                 .iter()
-                .map(|ext| std::path::PathBuf::from(format!("{}{ext}", base.display())))
+                .map(|ext| PathBuf::from(format!("{}{ext}", base.display())))
                 .find(|p| p.is_file());
             self.files.extend(found.map(|p| p.canonicalize().unwrap_or(p)));
         } else if !name.is_empty() {
@@ -249,6 +254,39 @@ impl Named {
             self.add(dir, name);
         }
     }
+}
+
+/// Whether the package.json in `dir` lists `package` in any dependency
+/// field. Cached, as route plugins ask once per file.
+pub(super) fn lists_package(dir: &Path, package: &str) -> bool {
+    static CACHE: LazyLock<Mutex<HashMap<(PathBuf, String), bool>>> = LazyLock::new(Mutex::default);
+    let key = (dir.to_path_buf(), package.to_string());
+    if let Some(&hit) = CACHE.lock().ok().as_ref().and_then(|c| c.get(&key)) {
+        return hit;
+    }
+    let listed = fs::read_to_string(dir.join("package.json"))
+        .ok()
+        .and_then(|s| parse_jsonc(s.trim_start_matches('\u{feff}')))
+        .is_some_and(|pkg| {
+            ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+                .iter()
+                .any(|f| pkg.get(f).and_then(|d| d.get(package)).is_some())
+        });
+    if let Ok(mut c) = CACHE.lock() {
+        c.insert(key, listed);
+    }
+    listed
+}
+
+/// The package directory that owns a routes directory such as `app`: its
+/// parent, or the parent of a `src` parent, whichever has a package.json.
+pub(super) fn routes_owner(routes: &Path) -> Option<&Path> {
+    let parent = routes.parent()?;
+    if parent.join("package.json").is_file() {
+        return Some(parent);
+    }
+    let grand = parent.parent()?;
+    (parent.file_name()? == "src" && grand.join("package.json").is_file()).then_some(grand)
 }
 
 /// Whether `name` is a path rather than a package.

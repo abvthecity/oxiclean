@@ -145,6 +145,14 @@
           ],
           "default": null
         },
+        "expo": {
+          "description": "Expo: config plugins in `app.json` and `app.config.*`, a `main` such\nas `expo-router/entry`, and Expo Router's routes in `app`, which are\nentries. On when a package.json lists `expo`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
         "html": {
           "description": "HTML pages: `<script>` blocks and `<script src>`; pages that load the\nproject's scripts are entries. Always on by default.",
           "type": [
@@ -163,6 +171,14 @@
         },
         "mdx": {
           "description": "MDX files: their `import` and `export` lines. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "next": {
+          "description": "Next.js pages, App Router files (`page`, `layout`, `route` and the\nlike), middleware and instrumentation are entries. On when a\npackage.json lists `next`.",
           "type": [
             "boolean",
             "null"

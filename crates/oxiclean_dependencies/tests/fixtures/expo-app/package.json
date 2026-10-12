@@ -1,0 +1,15 @@
+{
+  "name": "expo-app",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start"
+  },
+  "dependencies": {
+    "expo": "^54.0.0",
+    "expo-camera": "^17.0.0",
+    "expo-router": "^6.0.0",
+    "only-in-route": "^1.0.0",
+    "unused-pkg": "^1.0.0"
+  }
+}

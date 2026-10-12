@@ -164,3 +164,17 @@ fn tool_configs() {
 fn test_runners() {
     assert_eq!(dev_dependencies("test-runners"), ["package.json jest-unused:14"]);
 }
+
+/// Next.js plugin: App Router files and middleware are entries, so what
+/// only they import is used.
+#[test]
+fn next_app() {
+    assert_eq!(dependencies("next-app"), ["package.json unused-pkg:12"]);
+}
+
+/// Expo plugin: config plugins and `main` name packages, and Expo Router's
+/// routes are entries.
+#[test]
+fn expo_app() {
+    assert_eq!(dependencies("expo-app"), ["package.json unused-pkg:13"]);
+}

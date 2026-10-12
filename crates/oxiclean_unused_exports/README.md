@@ -74,6 +74,9 @@ finds with its plugins off, in the root package and each workspace package:
 - HTML pages that load the project's scripts (a `<script>` with a local
   `src`, or an inline module script), as a Vite app's `index.html` does,
   which knip's Vite plugin adds;
+- the files plugins make entries (see [Plugins](../../README.md#plugins)):
+  Next.js pages, App Router files and middleware, Expo Router routes, and
+  the setup files Jest's and Vitest's configs name;
 - declaration files in a directory with a `tsconfig.json`, which knip takes
   from the TypeScript program;
 - files passed to `require.resolve()` or `import.meta.resolve()`, which run

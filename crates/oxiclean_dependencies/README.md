@@ -92,10 +92,11 @@ Where oxiclean differs from knip:
 
 - knip's plugins load tool configs by running them; oxiclean reads them
   without running them (see [Plugins](../../README.md#plugins)): tsconfig,
-  ESLint, Babel, PostCSS, Prettier, Jest and Vitest configs so far, plus
-  HTML pages, MDX and stylesheets. A package that only another tool's
-  config names, that a config computes, or that a Jest preset's own config
-  names is reported unless it is in `ignoreDependencies`;
+  ESLint, Babel, PostCSS, Prettier, Jest, Vitest and Expo configs so far,
+  Next.js and Expo Router routes, HTML pages, MDX and stylesheets. A
+  package that only another tool's config names, that a config computes,
+  or that a Jest preset's own config names is reported unless it is in
+  `ignoreDependencies`;
 - an import counts for the nearest `package.json` that lists the package,
   so a workspace package can use what the root lists, where knip reports
   the import as unlisted in the workspace package.
