@@ -23,6 +23,7 @@ use crate::{
     exports::Export,
     sequencer::{Components, len_u32, sequence, strongly_connected},
     types::SpecKind,
+    uses::ModuleUses,
 };
 
 /// Dense index of a module in a [`ModuleGraph`].
@@ -62,6 +63,8 @@ pub struct ParsedFile {
     pub imports: Vec<RawImport>,
     /// The names the file exports.
     pub exports: Vec<Export>,
+    /// What the file takes from the modules it imports.
+    pub uses: ModuleUses,
     /// Set when the file had syntax errors. Its imports are still used, but
     /// may be incomplete, so the file is reported as a [`ParseFailure`].
     pub error: Option<String>,
@@ -73,12 +76,20 @@ struct Expanded {
     resolved: Vec<Resolved>,
     declaration: Option<PathBuf>,
     exports: Vec<Export>,
+    uses: ModuleUses,
     error: Option<String>,
 }
 
 impl Expanded {
     fn new(id: ModuleId) -> Self {
-        Self { id, resolved: Vec::new(), declaration: None, exports: Vec::new(), error: None }
+        Self {
+            id,
+            resolved: Vec::new(),
+            declaration: None,
+            exports: Vec::new(),
+            uses: ModuleUses::default(),
+            error: None,
+        }
     }
 }
 
@@ -121,6 +132,9 @@ pub struct Module {
     /// The names the module exports. Empty for files that aren't parsed:
     /// assets and, by default, files in `node_modules`.
     pub exports: Vec<Export>,
+    /// What the module takes from the modules it imports. Empty for files
+    /// that aren't parsed.
+    pub uses: ModuleUses,
 }
 
 impl Module {
@@ -298,13 +312,14 @@ impl ModuleGraph {
                         .collect();
                     out.resolved = resolved;
                     out.exports = parsed.exports;
+                    out.uses = parsed.uses;
                     out.error = parsed.error;
                     out
                 })
                 .collect();
 
             let mut next = Vec::new();
-            for Expanded { id, resolved, declaration, exports, error } in expanded {
+            for Expanded { id, resolved, declaration, exports, uses, error } in expanded {
                 let mut intern_next = |path: PathBuf| match index.get(&path) {
                     Some(&t) => t,
                     None => {
@@ -329,6 +344,7 @@ impl ModuleGraph {
                 module.passive_edges = passive_edges;
                 module.declaration = declaration;
                 module.exports = exports;
+                module.uses = uses;
                 if let Some(message) = error {
                     let path = modules[id.idx()].path.clone();
                     warn!("Could not parse {} cleanly: {message}", path.display());
@@ -590,6 +606,7 @@ fn intern(
         edges: Vec::new(),
         passive_edges: Vec::new(),
         declaration: None,
+        uses: ModuleUses::default(),
         exports: Vec::new(),
     });
     id

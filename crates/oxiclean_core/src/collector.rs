@@ -75,6 +75,50 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Every file under `root` outside `node_modules` and `.git`, sorted by
+/// path, for the checks of exports to pick test and declaration files from.
+/// `.gitignore` files are honoured as in [`collect_entries`].
+///
+/// # Errors
+/// Fails if the directory walk fails.
+pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != ".git" && e.file_name() != "node_modules")
+        .build();
+    let mut files = Vec::new();
+    for res in walker {
+        let dent = res.map_err(|source| Error::Walk { path: root.to_path_buf(), source })?;
+        if dent.file_type().is_some_and(|t| t.is_file()) || dent.path().is_file() {
+            files.push(dent.into_path());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// A test file, by its path relative to the root: `*.test.*` and `*.spec.*`
+/// files and files in `__tests__` directories. Tests use a project's exports
+/// as other code does.
+pub(crate) fn is_test_file(rel: &Path) -> bool {
+    let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(ext) = rel.extension().and_then(|e| e.to_str()) else { return false };
+    if !JS_TS_EXTENSIONS.contains(&ext) || is_declaration_name(name) {
+        return false;
+    }
+    let in_tests_dir = rel
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .any(|c| c == Component::Normal("__tests__".as_ref()));
+    in_tests_dir || name.contains(".test.") || name.contains(".spec.")
+}
+
+fn is_declaration_name(name: &str) -> bool {
+    name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
+}
+
 /// The `--entry-glob` filter: real globs plus plain substrings.
 struct EntryMatcher {
     globs: GlobSet,
@@ -125,10 +169,8 @@ fn is_source_file(p: &Path) -> bool {
     if !JS_TS_EXTENSIONS.contains(&ext) {
         return false;
     }
-    let is_declaration =
-        name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts");
     let is_test = name.contains(".test.") || name.contains(".spec.");
-    !is_declaration && !is_test
+    !is_declaration_name(name) && !is_test
 }
 
 /// Whether any parent directory of `rel` is named `src`. Compares whole path

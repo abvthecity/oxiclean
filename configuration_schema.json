@@ -13,7 +13,7 @@
       "default": null
     },
     "entries": {
-      "description": "Globs of entry files, relative to the root (e.g.\n\"apps/*/src/pages/**/*.tsx\"). `*` stays within one directory and `**`\ncrosses directories; a pattern without glob characters matches any path\ncontaining it. When empty, every JS/TS file inside a `src` directory is\nan entry.",
+      "description": "Globs of entry files, relative to the root (e.g.\n\"apps/*/src/pages/**/*.tsx\"). `*` stays within one directory and `**`\ncrosses directories; a pattern without glob characters matches any path\ncontaining it. When empty, every JS/TS file inside a `src` directory is\nan entry; unused-exports and unused-types start from each package's\nentry points instead (package.json `main`, `exports`, `bin` and\n`scripts`, `index` files, tests and declaration files).",
       "type": "array",
       "default": [],
       "items": {
@@ -174,6 +174,28 @@
         },
         "duplicates": {
           "description": "Files that export the same thing under more than one name, as knip's\n`duplicates`. Exports tagged `@alias` don't count. Default threshold:\n2 names.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-exports": {
+          "description": "Exports that no other file imports, as knip's `exports`. Entry files'\nexports and exports tagged `@public`, `@beta` or `@alias` don't\ncount. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-types": {
+          "description": "Exported types, interfaces and enums that no other file imports, as\nknip's `types`. The same exceptions apply. Default threshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

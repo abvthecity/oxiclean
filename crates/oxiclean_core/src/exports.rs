@@ -5,13 +5,18 @@
 //! comment on its statement (`@public`, `@internal`, `@alias`, ...). Checks
 //! for unused and duplicate exports build on this.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oxc_ast::ast::{
-    Declaration, ExportDefaultDeclarationKind, Expression, Program, Statement,
-    TSModuleDeclarationName, TSModuleReference,
+    Argument, ArrowFunctionExpression, BindingPatternKind, CallExpression, Declaration,
+    ExportDefaultDeclarationKind, Expression, Function, FunctionBody, ImportDeclarationSpecifier,
+    Program, Statement, TSAsExpression, TSModuleDeclarationName, TSModuleReference,
+    TSSatisfiesExpression, TSType, TSTypeAssertion, TSTypeName, TSTypeQuery, TSTypeQueryExprName,
+    TSTypeReference, VariableDeclarator,
 };
+use oxc_ast_visit::{Visit, walk};
 use oxc_span::GetSpan;
+use oxc_syntax::scope::ScopeFlags;
 
 /// What kind of symbol an export is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,6 +34,23 @@ pub enum ExportKind {
     Interface,
     /// `export namespace N {}`, `export module N {}` or `export * as N`.
     Namespace,
+}
+
+impl ExportKind {
+    /// Lower-case name, as in JSON output: `value`, `function`, `class`,
+    /// `enum`, `type`, `interface` or `namespace`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Function => "function",
+            Self::Class => "class",
+            Self::Enum => "enum",
+            Self::Type => "type",
+            Self::Interface => "interface",
+            Self::Namespace => "namespace",
+        }
+    }
 }
 
 /// How a name came to be exported.
@@ -64,16 +86,36 @@ pub struct Export {
     /// repeats under another name. Set only when `a` is declared or imported
     /// at the top level of the file.
     pub alias_of: Option<String>,
-    /// When the export passes an imported binding on unchanged
-    /// (`export { a }` or `export const b = a` where `a` is imported): the
-    /// module it is imported from, as written. knip treats these as
-    /// re-exports when that module is part of the project.
-    pub forwarded_from: Option<String>,
+    /// Set when the export passes on another module's export: a re-export
+    /// (`export { a } from './x'`, `export * as ns from './x'`), or an
+    /// imported binding exported unchanged (`export { a }`,
+    /// `export default a` or `export const b = a` where `a` is imported).
+    pub forwarded: Option<Forwarded>,
+    /// Whether the export is marked type-only: `export type { A }`,
+    /// `export { type A }` or `export type * as ns from './x'`.
+    pub type_only: bool,
+    /// Local names the export's signature refers to in type positions
+    /// (`T` in `function f(): T` or `const c: T`, and `x` in `typeof x`).
+    /// Set for exported functions, classes and variables; knip counts a
+    /// declaration as used when an export that refers to it is used.
+    pub signature_refs: Vec<String>,
     /// 1-based line of the exported name.
     pub line: u32,
     /// Tags of the block comment right before the export's statement, without
     /// the `@`, e.g. `public` or `alias`.
     pub tags: Vec<String>,
+}
+
+/// Another module's export that an [`Export`] passes on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Forwarded {
+    /// The module, as written in the import or re-export.
+    pub from: String,
+    /// The name exported by `from`; `default` for its default export.
+    /// `None` for the whole module, as in `export * as ns from './x'` or
+    /// `import * as ns from './x'; export { ns }`.
+    pub name: Option<String>,
 }
 
 impl Export {
@@ -82,14 +124,39 @@ impl Export {
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == tag)
     }
+
+    /// Whether knip reports this export as an unused *type* rather than an
+    /// unused export: a type alias, interface or enum declared in the
+    /// export, or a name exported with `type`. Like knip, `export { A }` of
+    /// an interface `A` counts as a value export.
+    #[must_use]
+    pub fn is_type(&self) -> bool {
+        match self.form {
+            ExportForm::Declaration => {
+                matches!(self.kind, ExportKind::Type | ExportKind::Interface | ExportKind::Enum)
+            }
+            ExportForm::Default => matches!(self.kind, ExportKind::Interface | ExportKind::Enum),
+            ExportForm::Specifier | ExportForm::ReExport => self.type_only,
+        }
+    }
 }
 
 /// A name bound at the top level of a module.
 #[derive(Debug, Clone, Copy)]
 struct Binding<'a> {
     kind: ExportKind,
-    /// The module an imported binding comes from.
-    source: Option<&'a str>,
+    /// For an imported binding: the module, and the name imported from it
+    /// (`None` for a namespace import).
+    import: Option<(&'a str, Option<&'a str>)>,
+}
+
+impl Binding<'_> {
+    fn forwarded(&self) -> Option<Forwarded> {
+        self.import.map(|(from, name)| Forwarded {
+            from: from.to_string(),
+            name: name.map(str::to_string),
+        })
+    }
 }
 
 /// Lists the exports of `program`. `line` maps a byte offset to its 1-based
@@ -108,6 +175,8 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
     };
 
     let mut out: Vec<Export> = Vec::new();
+    // Calls in each export's signature, by index in `out`.
+    let mut calls: Vec<(usize, Vec<Call>)> = Vec::new();
     // Index in `out` of each exported function, so overloads merge into one.
     let mut functions: HashMap<String, usize> = HashMap::new();
     for stmt in &program.body {
@@ -127,7 +196,9 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
             kind,
             form,
             alias_of: None,
-            forwarded_from: None,
+            forwarded: None,
+            type_only: false,
+            signature_refs: Vec::new(),
             line: line(at),
             tags: tags.clone(),
         };
@@ -135,20 +206,32 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
         match stmt {
             Statement::ExportNamedDeclaration(decl) => {
                 if let Some(declaration) = &decl.declaration {
-                    for_each_declared(declaration, &mut |name, kind, at, init| {
+                    for_each_declared(declaration, true, &mut |name, kind, at, init, refs| {
                         if kind == ExportKind::Function {
                             // Overload signatures and the implementation are
-                            // one export.
+                            // one export, whose signature is all of them.
                             if let Some(&i) = functions.get(name) {
                                 out[i].tags.extend(tags.iter().cloned());
+                                for r in refs.names {
+                                    if !out[i].signature_refs.contains(&r) {
+                                        out[i].signature_refs.push(r);
+                                    }
+                                }
+                                if !refs.calls.is_empty() {
+                                    calls.push((i, refs.calls));
+                                }
                                 return;
                             }
                             functions.insert(name.to_string(), out.len());
                         }
                         let mut e = new(name, Some(name), kind, ExportForm::Declaration, at);
                         if let Some((a, b)) = alias(init).filter(|(a, _)| a != name) {
-                            e.forwarded_from = b.source.map(str::to_string);
+                            e.forwarded = b.forwarded();
                             e.alias_of = Some(a);
+                        }
+                        e.signature_refs = refs.names;
+                        if !refs.calls.is_empty() {
+                            calls.push((out.len(), refs.calls));
                         }
                         out.push(e);
                     });
@@ -161,6 +244,13 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
                     } else {
                         (ExportForm::Specifier, binding(&local))
                     };
+                    let forwarded = match &decl.source {
+                        Some(source) => Some(Forwarded {
+                            from: source.value.to_string(),
+                            name: Some(local.to_string()),
+                        }),
+                        None => bound.and_then(|b| b.forwarded()),
+                    };
                     let kind = match bound {
                         _ if is_type => ExportKind::Type,
                         Some(b) => b.kind,
@@ -168,7 +258,8 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
                     };
                     let at = spec.exported.span().start;
                     let mut e = new(&spec.exported.name(), Some(&local), kind, form, at);
-                    e.forwarded_from = bound.and_then(|b| b.source).map(str::to_string);
+                    e.forwarded = forwarded;
+                    e.type_only = is_type;
                     out.push(e);
                 }
             }
@@ -205,6 +296,7 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
                         let kind = aliased.as_ref().map_or(ExportKind::Value, |(_, b)| b.kind);
                         let local = aliased.as_ref().map(|(a, _)| a.as_str());
                         let mut e = new("default", local, kind, ExportForm::Default, at);
+                        e.forwarded = aliased.as_ref().and_then(|(_, b)| b.forwarded());
                         e.alias_of = aliased.map(|(a, _)| a);
                         out.push(e);
                     }
@@ -227,57 +319,348 @@ pub(crate) fn collect(program: &Program<'_>, line: &dyn Fn(u32) -> u32) -> Vec<E
                         ExportKind::Namespace
                     };
                     let at = exported.span().start;
-                    out.push(new(&exported.name(), None, kind, ExportForm::ReExport, at));
+                    let mut e = new(&exported.name(), None, kind, ExportForm::ReExport, at);
+                    e.forwarded =
+                        Some(Forwarded { from: decl.source.value.to_string(), name: None });
+                    e.type_only = decl.export_kind.is_type();
+                    out.push(e);
                 }
             }
             _ => {}
         }
     }
+    if !calls.is_empty() {
+        follow_calls(program, &mut out, calls);
+    }
     out
 }
 
-/// Calls `f(name, kind, offset, initializer)` for each binding `declaration`
-/// declares. The initializer is given only for a plain `name = init`.
+/// A function or variable declared at the top level of a module.
+#[derive(Clone, Copy)]
+enum Local<'d, 'a> {
+    Function(&'d Function<'a>),
+    Variable(&'d VariableDeclarator<'a>),
+}
+
+/// Adds to each export's [`Export::signature_refs`] the type names that
+/// the local functions its signature calls return, and the types of the
+/// locals it passes to calls, as knip does. So in
+/// `export const read = () => helper()`, the return type of `helper` counts.
+fn follow_calls(program: &Program<'_>, out: &mut [Export], calls: Vec<(usize, Vec<Call>)>) {
+    let mut locals: HashMap<&str, Local<'_, '_>> = HashMap::new();
+    for stmt in &program.body {
+        let declaration = match stmt {
+            Statement::ExportNamedDeclaration(decl) => decl.declaration.as_ref(),
+            Statement::ExportDefaultDeclaration(decl) => {
+                if let ExportDefaultDeclarationKind::FunctionDeclaration(f) = &decl.declaration
+                    && let Some(id) = &f.id
+                {
+                    locals.entry(id.name.as_str()).or_insert(Local::Function(f));
+                }
+                None
+            }
+            other => other.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::FunctionDeclaration(f)) => {
+                if let Some(id) = &f.id {
+                    locals.entry(id.name.as_str()).or_insert(Local::Function(f));
+                }
+            }
+            Some(Declaration::VariableDeclaration(var)) => {
+                for d in &var.declarations {
+                    if let BindingPatternKind::BindingIdentifier(id) = &d.id.kind {
+                        locals.entry(id.name.as_str()).or_insert(Local::Variable(d));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (i, pending) in calls {
+        let mut seen: HashSet<Call> = HashSet::new();
+        let mut queue = pending;
+        while let Some(call) = queue.pop() {
+            let Some(&local) = locals.get(call.name.as_str()) else { continue };
+            if !seen.insert(call.clone()) {
+                continue;
+            }
+            let refs = if call.argument { local_type(local) } else { call_result(local) };
+            for name in refs.names {
+                if !out[i].signature_refs.contains(&name) {
+                    out[i].signature_refs.push(name);
+                }
+            }
+            queue.extend(refs.calls);
+        }
+    }
+}
+
+/// Whether `f` is `(p: T) => p.member`: its result is the member's type,
+/// not `T`, so knip leaves `T` out.
+fn returns_param_member(f: &ArrowFunctionExpression<'_>) -> bool {
+    let Some(Statement::ExpressionStatement(stmt)) = f.body.statements.first() else {
+        return false;
+    };
+    let Expression::StaticMemberExpression(member) = &stmt.expression else { return false };
+    let Expression::Identifier(object) = &member.object else { return false };
+    f.expression
+        && f.params.items.iter().any(|p| {
+            matches!(&p.pattern.kind, BindingPatternKind::BindingIdentifier(id) if id.name == object.name)
+                && matches!(
+                    p.pattern.type_annotation.as_ref().map(|a| &a.type_annotation),
+                    Some(TSType::TSTypeReference(r)) if r.type_arguments.is_none()
+                )
+        })
+}
+
+/// The type names in a local's signature, function bodies left out.
+fn local_type(local: Local<'_, '_>) -> TypeRefs {
+    let mut v = TypeRefs::signature(true);
+    match local {
+        Local::Function(f) => v.visit_function(f, ScopeFlags::empty()),
+        Local::Variable(d) => v.visit_variable_declarator(d),
+    }
+    v
+}
+
+/// The type names in what calling a local returns: its declared return type
+/// when it has one, or else its whole signature.
+fn call_result(local: Local<'_, '_>) -> TypeRefs {
+    let mut v = TypeRefs::signature(true);
+    let function = match local {
+        Local::Variable(d) => match d.id.type_annotation.as_ref().map(|a| &a.type_annotation) {
+            Some(TSType::TSFunctionType(f)) => {
+                if let Some(params) = &f.type_parameters {
+                    v.visit_ts_type_parameter_declaration(params);
+                }
+                v.visit_ts_type_annotation(&f.return_type);
+                return v;
+            }
+            Some(other) => {
+                v.visit_ts_type(other);
+                return v;
+            }
+            None => match &d.init {
+                Some(Expression::ArrowFunctionExpression(f)) => {
+                    if let Some(ret) = &f.return_type {
+                        if let Some(params) = &f.type_parameters {
+                            v.visit_ts_type_parameter_declaration(params);
+                        }
+                        v.visit_ts_type_annotation(ret);
+                    } else if !returns_param_member(f) {
+                        v.visit_arrow_function_expression(f);
+                    }
+                    return v;
+                }
+                Some(Expression::FunctionExpression(f)) => f,
+                Some(other) => {
+                    v.visit_expression(other);
+                    return v;
+                }
+                None => return v,
+            },
+        },
+        Local::Function(f) => f,
+    };
+    match &function.return_type {
+        Some(ret) => {
+            if let Some(params) = &function.type_parameters {
+                v.visit_ts_type_parameter_declaration(params);
+            }
+            v.visit_ts_type_annotation(ret);
+        }
+        None => v.visit_function(function, ScopeFlags::empty()),
+    }
+    v
+}
+
+/// Calls `f(name, kind, offset, initializer, refs)` for each binding
+/// `declaration` declares. The initializer is given only for a plain
+/// `name = init`. With `with_refs`, `refs` are the binding's
+/// [`Export::signature_refs`]; otherwise it is empty.
 fn for_each_declared<'d, 'a: 'd>(
     declaration: &'d Declaration<'a>,
-    f: &mut dyn FnMut(&'d str, ExportKind, u32, Option<&'d Expression<'a>>),
+    with_refs: bool,
+    f: &mut dyn FnMut(&'d str, ExportKind, u32, Option<&'d Expression<'a>>, TypeRefs),
 ) {
+    let refs = |collect: &dyn Fn(&mut TypeRefs)| {
+        let mut v = TypeRefs::default();
+        if with_refs {
+            collect(&mut v);
+        }
+        v
+    };
     match declaration {
         Declaration::VariableDeclaration(var) => {
             for d in &var.declarations {
                 // `export const b = a` repeats `a`; destructuring does not.
                 let init = if d.id.kind.is_binding_identifier() { d.init.as_ref() } else { None };
+                let refs = refs(&|v| match (&d.id.type_annotation, &d.init) {
+                    (Some(annotation), _) => v.visit_ts_type_annotation(annotation),
+                    (None, Some(init)) => {
+                        v.signature_only = has_return_type(init);
+                        v.visit_expression(init);
+                    }
+                    (None, None) => {}
+                });
                 for id in d.id.get_binding_identifiers() {
-                    f(id.name.as_str(), ExportKind::Value, id.span.start, init);
+                    f(id.name.as_str(), ExportKind::Value, id.span.start, init, refs.clone());
                 }
             }
         }
         Declaration::FunctionDeclaration(func) => {
             if let Some(id) = &func.id {
-                f(id.name.as_str(), ExportKind::Function, id.span.start, None);
+                let refs = refs(&|v| {
+                    v.signature_only = func.return_type.is_some();
+                    v.visit_function(func, ScopeFlags::empty());
+                });
+                f(id.name.as_str(), ExportKind::Function, id.span.start, None, refs);
             }
         }
         Declaration::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
-                f(id.name.as_str(), ExportKind::Class, id.span.start, None);
+                let refs = refs(&|v| {
+                    v.signature_only = true;
+                    v.visit_class(class);
+                });
+                f(id.name.as_str(), ExportKind::Class, id.span.start, None, refs);
             }
         }
         Declaration::TSTypeAliasDeclaration(t) => {
-            f(t.id.name.as_str(), ExportKind::Type, t.id.span.start, None);
+            f(t.id.name.as_str(), ExportKind::Type, t.id.span.start, None, TypeRefs::default());
         }
         Declaration::TSInterfaceDeclaration(i) => {
-            f(i.id.name.as_str(), ExportKind::Interface, i.id.span.start, None);
+            let none = TypeRefs::default();
+            f(i.id.name.as_str(), ExportKind::Interface, i.id.span.start, None, none);
         }
         Declaration::TSEnumDeclaration(e) => {
-            f(e.id.name.as_str(), ExportKind::Enum, e.id.span.start, None);
+            f(e.id.name.as_str(), ExportKind::Enum, e.id.span.start, None, TypeRefs::default());
         }
         Declaration::TSModuleDeclaration(m) => {
             if let TSModuleDeclarationName::Identifier(id) = &m.id {
-                f(id.name.as_str(), ExportKind::Namespace, id.span.start, None);
+                let none = TypeRefs::default();
+                f(id.name.as_str(), ExportKind::Namespace, id.span.start, None, none);
             }
         }
         Declaration::TSImportEqualsDeclaration(i) => {
-            f(i.id.name.as_str(), ExportKind::Value, i.id.span.start, None);
+            f(i.id.name.as_str(), ExportKind::Value, i.id.span.start, None, TypeRefs::default());
+        }
+    }
+}
+
+/// Whether `expr` is a function with an explicit return type, so its body
+/// doesn't shape its type.
+fn has_return_type(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ArrowFunctionExpression(f) => f.return_type.is_some(),
+        Expression::FunctionExpression(f) => f.return_type.is_some(),
+        _ => false,
+    }
+}
+
+/// Collects the names referred to in type positions, as knip's
+/// `collectRefsInType` does: type references `T` and type queries
+/// `typeof x`. With `signature_only`, function bodies are skipped. Inside a
+/// body, variable annotations and type assertions are skipped, since they
+/// rarely shape the type of the export.
+///
+/// It also notes the functions called (`helper()`) and, outside function
+/// bodies, the identifiers passed to calls (`wrap(inner)`), whose own types
+/// may shape the export's; [`follow_calls`] adds those.
+#[derive(Debug, Default, Clone)]
+struct TypeRefs {
+    names: Vec<String>,
+    calls: Vec<Call>,
+    signature_only: bool,
+    body_depth: u32,
+}
+
+/// A local name a signature calls, or passes to a call.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Call {
+    name: String,
+    argument: bool,
+}
+
+impl TypeRefs {
+    fn add(&mut self, name: &str) {
+        if !self.names.iter().any(|n| n == name) {
+            self.names.push(name.to_string());
+        }
+    }
+
+    fn signature(signature_only: bool) -> Self {
+        Self { signature_only, ..Self::default() }
+    }
+}
+
+impl<'a> Visit<'a> for TypeRefs {
+    fn visit_ts_type_reference(&mut self, it: &TSTypeReference<'a>) {
+        if let TSTypeName::IdentifierReference(id) = &it.type_name {
+            self.add(&id.name);
+        }
+        walk::walk_ts_type_reference(self, it);
+    }
+
+    fn visit_ts_type_query(&mut self, it: &TSTypeQuery<'a>) {
+        if let TSTypeQueryExprName::IdentifierReference(id) = &it.expr_name {
+            self.add(&id.name);
+        }
+    }
+
+    fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+        if let Expression::Identifier(callee) = &it.callee {
+            self.calls.push(Call { name: callee.name.to_string(), argument: false });
+        }
+        if self.body_depth == 0 {
+            for arg in &it.arguments {
+                if let Argument::Identifier(id) = arg {
+                    self.calls.push(Call { name: id.name.to_string(), argument: true });
+                }
+            }
+        }
+        walk::walk_call_expression(self, it);
+    }
+
+    fn visit_function_body(&mut self, it: &FunctionBody<'a>) {
+        if self.signature_only {
+            return;
+        }
+        self.body_depth += 1;
+        walk::walk_function_body(self, it);
+        self.body_depth -= 1;
+    }
+
+    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
+        if self.body_depth == 0 {
+            walk::walk_variable_declarator(self, it);
+        } else if let Some(init) = &it.init {
+            self.visit_expression(init);
+        }
+    }
+
+    fn visit_ts_as_expression(&mut self, it: &TSAsExpression<'a>) {
+        if self.body_depth == 0 {
+            walk::walk_ts_as_expression(self, it);
+        } else {
+            self.visit_expression(&it.expression);
+        }
+    }
+
+    fn visit_ts_satisfies_expression(&mut self, it: &TSSatisfiesExpression<'a>) {
+        if self.body_depth == 0 {
+            walk::walk_ts_satisfies_expression(self, it);
+        } else {
+            self.visit_expression(&it.expression);
+        }
+    }
+
+    fn visit_ts_type_assertion(&mut self, it: &TSTypeAssertion<'a>) {
+        if self.body_depth == 0 {
+            walk::walk_ts_type_assertion(self, it);
+        } else {
+            self.visit_expression(&it.expression);
         }
     }
 }
@@ -286,30 +669,34 @@ fn for_each_declared<'d, 'a: 'd>(
 /// declaration or an import, to `bindings`. The first binding of a name wins,
 /// so a type and a value of the same name keep the first one's kind.
 fn top_level_bindings<'a>(stmt: &'a Statement<'_>, bindings: &mut HashMap<&'a str, Binding<'a>>) {
-    let mut add = |name: &'a str, kind, source| {
-        bindings.entry(name).or_insert(Binding { kind, source });
+    let mut add = |name: &'a str, kind, import| {
+        bindings.entry(name).or_insert(Binding { kind, import });
     };
     let declaration = match stmt {
         Statement::ImportDeclaration(decl) => {
+            let from = decl.source.value.as_str();
             for spec in decl.specifiers.iter().flatten() {
-                add(
-                    spec.local().name.as_str(),
-                    ExportKind::Value,
-                    Some(decl.source.value.as_str()),
-                );
+                let imported = match spec {
+                    ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                        Some(s.imported.name().as_str())
+                    }
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => Some("default"),
+                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => None,
+                };
+                add(spec.local().name.as_str(), ExportKind::Value, Some((from, imported)));
             }
             return;
         }
         Statement::TSImportEqualsDeclaration(decl) => {
-            // `import a = require('m')` imports `m`; `import a = N.B` aliases
-            // a namespace member.
-            let source = match &decl.module_reference {
+            // `import a = require('m')` imports `m`'s default export, as knip
+            // reads it; `import a = N.B` aliases a namespace member.
+            let import = match &decl.module_reference {
                 TSModuleReference::ExternalModuleReference(ext) => {
-                    Some(ext.expression.value.as_str())
+                    Some((ext.expression.value.as_str(), Some("default")))
                 }
                 _ => None,
             };
-            add(decl.id.name.as_str(), ExportKind::Value, source);
+            add(decl.id.name.as_str(), ExportKind::Value, import);
             return;
         }
         Statement::ExportNamedDeclaration(decl) => match &decl.declaration {
@@ -337,7 +724,7 @@ fn top_level_bindings<'a>(stmt: &'a Statement<'_>, bindings: &mut HashMap<&'a st
             None => return,
         },
     };
-    for_each_declared(declaration, &mut |name, kind, _, _| add(name, kind, None));
+    for_each_declared(declaration, false, &mut |name, kind, _, _, _| add(name, kind, None));
 }
 
 /// Tags of the block comment right before `start`, as knip reads them: the
@@ -548,22 +935,96 @@ export default g;";
 
     #[test]
     fn forwarded_imports() {
-        let src = "import { x } from './x';
+        let src = "import { x as x2 } from './x';
 import * as ns from './ns';
-export { x, ns as space };
-export const y = x;
+import d from './d';
+export { x2, ns as space };
+export const y = x2;
 const z = 1;
-export { z };";
-        let got: Vec<(String, Option<String>)> =
-            exports(src).into_iter().map(|e| (e.name, e.forwarded_from)).collect();
-        let from = |m: &str| Some(m.to_string());
+export { z };
+export { a as b } from './a';
+export * as all from './all';
+export default d;";
+        // `name <- module:imported`, or `module:*` for a whole namespace.
+        let got: Vec<String> = exports(src)
+            .into_iter()
+            .map(|e| match e.forwarded {
+                Some(f) => format!("{} <- {}:{}", e.name, f.from, f.name.as_deref().unwrap_or("*")),
+                None => e.name,
+            })
+            .collect();
         assert_eq!(
             got,
             [
-                ("x".into(), from("./x")),
-                ("space".into(), from("./ns")),
-                ("y".into(), from("./x")),
-                ("z".into(), None),
+                "x2 <- ./x:x",
+                "space <- ./ns:*",
+                "y <- ./x:x",
+                "z",
+                "b <- ./a:a",
+                "all <- ./all:*",
+                "default <- ./d:default",
+            ]
+        );
+    }
+
+    #[test]
+    fn types_as_knip_groups_them() {
+        let src = "export type T = 1;
+export interface I {}
+export enum E { A }
+export class C {}
+interface J {}
+export { J };
+export type { J as K };
+export { type J as L };
+export type * as N from './n';
+export default interface D {}";
+        let got: Vec<(String, bool)> =
+            exports(src).into_iter().map(|e| (e.name.clone(), e.is_type())).collect();
+        let want: Vec<(String, bool)> = [
+            ("T", true),
+            ("I", true),
+            ("E", true),
+            ("C", false),
+            ("J", false),
+            ("K", true),
+            ("L", true),
+            ("N", true),
+            ("default", true),
+        ]
+        .into_iter()
+        .map(|(n, t)| (n.to_string(), t))
+        .collect();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn signature_refs() {
+        let src = "export function f(p: P): R { const x: Local = g as Cast; return x; }
+export function h(p: P) { const x: Local = 1; return y as Cast; }
+export const a: A = make();
+export const b = (q: Q): B => { let z: Z; return z; };
+export const c = new Map<K, V>();
+export class K2 extends Base implements I { prop: Prop; m(): M { let n: N; return n; } }
+export type T = U;
+export function o(p: O1): R1;
+export function o(p: O2): R2;
+export function o(p: unknown) { return p; }";
+        let got: Vec<(String, Vec<String>)> =
+            exports(src).into_iter().map(|e| (e.name, e.signature_refs)).collect();
+        let refs = |r: &[&str]| r.iter().map(|r| (*r).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            got,
+            [
+                ("f".into(), refs(&["P", "R"])),
+                ("h".into(), refs(&["P"])),
+                ("a".into(), refs(&["A"])),
+                ("b".into(), refs(&["Q", "B"])),
+                ("c".into(), refs(&["K", "V"])),
+                ("K2".into(), refs(&["Prop", "M"])),
+                ("T".into(), refs(&[])),
+                // Every overload's signature counts.
+                ("o".into(), refs(&["O1", "R1", "O2", "R2"])),
             ]
         );
     }

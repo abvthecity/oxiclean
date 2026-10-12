@@ -12,7 +12,9 @@ use colored::Colorize;
 mod machine;
 pub use machine::{OutputFormat, ReportMeta, message, write_json, write_sarif};
 
-use crate::{graph::ParseFailure, resolver::ResolutionStats, settings::Severity};
+use crate::{
+    exports::ExportKind, graph::ParseFailure, resolver::ResolutionStats, settings::Severity,
+};
 
 /// What a finding points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,26 @@ pub enum FindingKind {
     Cycle(CycleFinding),
     /// Names the file exports for the same thing.
     DuplicateExport(DuplicateExport),
+    /// An export nothing imports.
+    UnusedExport(UnusedExport),
+}
+
+/// An export nothing imports, for [`FindingKind::UnusedExport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnusedExport {
+    /// The exported name; `default` for the default export.
+    pub name: String,
+    /// 1-based line of the name.
+    pub line: u32,
+    pub kind: ExportKind,
+}
+
+impl UnusedExport {
+    #[must_use]
+    pub fn new(name: String, line: u32, kind: ExportKind) -> Self {
+        Self { name, line, kind }
+    }
 }
 
 /// Names a file exports for the same thing, for
@@ -139,6 +161,7 @@ impl Finding {
             FindingKind::Import { line, .. } => *line,
             FindingKind::Cycle(cycle) => cycle.steps.first().map_or(0, |s| s.line),
             FindingKind::DuplicateExport(dup) => dup.names.first().map_or(0, |n| n.line),
+            FindingKind::UnusedExport(unused) => unused.line,
             FindingKind::WholeGraph => 0,
         }
     }
@@ -193,6 +216,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::Import { request, .. } => request,
         FindingKind::Cycle(cycle) => cycle.steps.first().map_or("", |s| s.request.as_str()),
         FindingKind::DuplicateExport(dup) => dup.names.first().map_or("", |n| n.name.as_str()),
+        FindingKind::UnusedExport(unused) => &unused.name,
         FindingKind::WholeGraph => "",
     }
 }
@@ -200,7 +224,9 @@ fn request(f: &Finding) -> &str {
 /// How a finding listed under its file is introduced, e.g. `import './a'`.
 fn label(f: &Finding) -> String {
     match &f.kind {
-        FindingKind::DuplicateExport(_) => format!("export '{}'", request(f)),
+        FindingKind::DuplicateExport(_) | FindingKind::UnusedExport(_) => {
+            format!("export '{}'", request(f))
+        }
         _ => format!("import '{}'", request(f)),
     }
 }
@@ -243,11 +269,13 @@ pub struct ReportStyle {
     pub description: &'static str,
     /// e.g. "Import bloat detected".
     pub heading: &'static str,
-    /// Unit of the threshold in the heading, e.g. "modules".
+    /// Unit of the threshold in the heading, e.g. "modules". Empty to leave
+    /// the threshold out, for checks that report every finding.
     pub threshold_unit: &'static str,
     /// Renders a value next to an import, e.g. "123 modules" or "depth: 4".
     pub value_label: fn(usize) -> String,
-    /// e.g. "Maximum bloat".
+    /// e.g. "Maximum bloat". Empty to leave the maximum out of the summary,
+    /// for checks whose findings all have the same value.
     pub max_label: &'static str,
     /// Unit after the maximum, e.g. "modules".
     pub max_unit: &'static str,
@@ -285,6 +313,9 @@ impl ReportContext<'_> {
 /// # Errors
 /// Returns any error from writing to `writer`.
 pub fn print_ok<W: Write>(writer: &mut W, style: &ReportStyle, threshold: usize) -> io::Result<()> {
+    if style.threshold_unit.is_empty() {
+        return writeln!(writer, "{} {}", "✓".green().bold(), style.ok_message);
+    }
     writeln!(writer, "{} {} Threshold: {threshold}", "✓".green().bold(), style.ok_message)
 }
 
@@ -299,14 +330,18 @@ pub fn print_findings<W: Write>(
     threshold: usize,
     ctx: ReportContext<'_>,
 ) -> io::Result<()> {
-    writeln!(
-        writer,
-        "{} {} (threshold: {} {})\n",
-        "⚠".yellow().bold(),
-        style.heading,
-        threshold.to_string().yellow(),
-        style.threshold_unit,
-    )?;
+    if style.threshold_unit.is_empty() {
+        writeln!(writer, "{} {}\n", "⚠".yellow().bold(), style.heading)?;
+    } else {
+        writeln!(
+            writer,
+            "{} {} (threshold: {} {})\n",
+            "⚠".yellow().bold(),
+            style.heading,
+            threshold.to_string().yellow(),
+            style.threshold_unit,
+        )?;
+    }
 
     let mut by_file: BTreeMap<&Path, Vec<&Finding>> = BTreeMap::new();
     for f in findings {
@@ -380,7 +415,15 @@ fn print_summary<W: Write>(
     if warnings > 0 {
         writeln!(writer, "  Warnings (don't fail the run): {}", warnings.to_string().yellow())?;
     }
-    writeln!(writer, "  {}: {} {}", style.max_label, max.to_string().red().bold(), style.max_unit)?;
+    if !style.max_label.is_empty() {
+        writeln!(
+            writer,
+            "  {}: {} {}",
+            style.max_label,
+            max.to_string().red().bold(),
+            style.max_unit
+        )?;
+    }
 
     let top = &violations[..violations.len().min(5)];
     writeln!(writer, "  Top {} offenders:", top.len())?;

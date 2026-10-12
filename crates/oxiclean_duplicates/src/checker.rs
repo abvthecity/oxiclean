@@ -71,7 +71,7 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
 ///
 /// - `export const b = a`, where `a` is exported and its export is neither a
 ///   re-export with `from` nor an import from the project passed on
-///   ([`Export::forwarded_from`] a module for which `in_project` is true);
+///   ([`Export::forwarded`] from a module for which `in_project` is true);
 /// - `export default a`, where `a` is exported in any way except
 ///   `export { a }`.
 ///
@@ -87,7 +87,8 @@ pub fn duplicates(exports: &[Export], in_project: impl Fn(&str) -> bool) -> Vec<
     let mut in_specifier: HashSet<&str> = HashSet::new();
     for e in exports {
         first.entry(&e.name).or_insert(e);
-        if e.form != ExportForm::ReExport && !e.forwarded_from.as_deref().is_some_and(&in_project) {
+        let forwarded_in_project = e.forwarded.as_ref().is_some_and(|f| in_project(&f.from));
+        if e.form != ExportForm::ReExport && !forwarded_in_project {
             first_local.entry(&e.name).or_insert(e);
         }
         if e.form == ExportForm::Specifier {

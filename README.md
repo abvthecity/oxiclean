@@ -20,12 +20,17 @@ oxiclean cycles --root ./my-project
 # Find modules that export the same thing twice
 oxiclean duplicates --root ./my-project
 
+# Find exports and exported types that nothing imports
+oxiclean unused-exports --root ./my-project
+oxiclean unused-types --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
 oxiclean depth --help
 oxiclean cycles --help
 oxiclean duplicates --help
+oxiclean unused-exports --help
 ```
 
 ## Development
@@ -47,6 +52,7 @@ oxiclean/
 │   ├── oxiclean_bloat/              # Import bloat detection library
 │   ├── oxiclean_cycles/             # Circular import detection library
 │   ├── oxiclean_duplicates/         # Duplicate export detection library
+│   ├── oxiclean_unused_exports/     # Unused export and type detection library
 │   └── oxiclean_depth/              # Import depth analysis library
 └── Cargo.toml                       # Workspace configuration
 ```
@@ -65,7 +71,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports` and `unused-types` report every unused export and have no threshold.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -187,12 +193,44 @@ src/button.ts
         src/button.ts:12 also exports it as 'default'
 ```
 
+### Unused Exports and Types Checkers
+
+Find exports that no other file imports, like knip's `exports` and `types`
+issue types. `unused-exports` reports values, functions, classes and
+namespaces; `unused-types` reports types, interfaces and enums. Exports
+tagged `@public` (or `@beta`, or `@alias`) in their JSDoc are never
+reported, as in knip.
+
+The exports of entry files are the project's interface and always count as
+used, so these checks don't take every file in `src` as an entry. Unless
+`entries` is set, they start from what each package offers, as knip does:
+the files its `package.json` points to (`main`, `exports`, `bin` and
+others) or runs in `scripts`, its `index`, `main` and `cli` files, test
+files, and declaration files. Files no entry reaches aren't checked. See the
+[checker's README](crates/oxiclean_unused_exports/README.md) for what counts
+as a use and where oxiclean differs from knip.
+
+**Usage:**
+```bash
+oxiclean unused-exports --root ./my-project
+oxiclean unused-types --root ./my-project
+```
+
+**Example Output:**
+```
+⚠ Unused exports detected
+
+src/button.ts
+└──  export 'unusedHelper' (never imported)
+```
+
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
 - **Import Depth**: Counts longest import chain (depth) - indicates module resolution complexity
 - **Import Cycles**: Lists files that import each other - order-dependent initialisation bugs and code that can't be split
 - **Duplicate Exports**: Lists exports with a second name - two ways to import one thing
+- **Unused Exports and Types**: Lists exports nothing imports - dead code and API surface to remove
 
 These metrics provide complementary insights into code complexity.
 
@@ -210,7 +248,9 @@ apply settings to some files. Every key is optional.
   // Files that are never entries and never reported, relative to the root
   "ignorePatterns": ["**/fixtures/**", "apps/playground/**"],
   // Entry files. Without this, every JS/TS file inside a `src` directory is
-  // an entry. `*` stays within one directory and `**` crosses directories.
+  // an entry, except for unused-exports and unused-types, which start from
+  // each package's entry points. `*` stays within one directory and `**`
+  // crosses directories.
   "entries": ["packages/*/src/**/*.{ts,tsx}"],
   // Also follow dynamic import() calls
   "includeDynamic": false,

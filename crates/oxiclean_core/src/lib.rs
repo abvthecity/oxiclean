@@ -13,6 +13,7 @@ mod analysis;
 mod collector;
 mod config;
 mod constants;
+mod entry_points;
 mod error;
 mod exports;
 mod graph;
@@ -24,14 +25,16 @@ mod resolver;
 pub mod sequencer;
 pub mod settings;
 mod types;
+mod uses;
 
 // Re-export public API
 pub use analysis::{Analysis, CommonArgs};
 pub use collector::{CollectorConfig, collect_entries};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
+pub use entry_points::package_entry_points;
 pub use error::{Error, Result};
-pub use exports::{Export, ExportForm, ExportKind};
+pub use exports::{Export, ExportForm, ExportKind, Forwarded};
 pub use graph::{
     BuildOptions, Cycle, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
 };
@@ -39,8 +42,10 @@ pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     CheckResult, CycleFinding, CycleStep, DuplicateExport, ExportName, Finding, FindingKind,
+    UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
 pub use settings::{ConfigFile, RulePolicy, Severity};
 pub use types::{SpecKind, Specifier};
+pub use uses::{ModuleUses, Usage, Used};

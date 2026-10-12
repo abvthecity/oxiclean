@@ -14,6 +14,7 @@ use tracing::{debug, trace, warn};
 use crate::constants::{JS_TS_EXTENSIONS, is_declaration};
 use crate::exports::{self, Export};
 use crate::types::{SpecKind, Specifier};
+use crate::uses::{self, ModuleUses};
 
 /// The runtime imports of `file`, cached in `cache`: type-only imports are
 /// left out, so a declaration file has none. Assets such as `.css` have
@@ -51,8 +52,8 @@ pub fn imports_for(
 }
 
 /// The imports and exports of one file, plus the first syntax error if the
-/// file did not parse cleanly. After a syntax error `specs` and `exports` are
-/// incomplete, usually empty.
+/// file did not parse cleanly. After a syntax error `specs`, `exports` and
+/// `uses` are incomplete, usually empty.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ParsedImports {
@@ -60,6 +61,8 @@ pub struct ParsedImports {
     /// included as [`SpecKind::Type`].
     pub specs: Vec<Specifier>,
     pub exports: Vec<Export>,
+    /// What the file takes from the modules it imports.
+    pub uses: ModuleUses,
     pub error: Option<String>,
 }
 
@@ -84,6 +87,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
     let exports = exports::collect(&program, &|offset| collector.line(offset));
+    let uses = uses::collect(&program);
     let mut specs = collector.specs;
     // A declaration file only describes types, so its imports load nothing.
     if is_declaration(file) {
@@ -98,7 +102,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
         errors.first().map(|e| e.message.to_string())
     };
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
-    Ok(ParsedImports { specs, exports, error })
+    Ok(ParsedImports { specs, exports, uses, error })
 }
 
 /// Walks the whole AST collecting module requests, including re-exports and
@@ -191,12 +195,20 @@ impl<'a> Visit<'a> for ImportCollector {
             && let Some(Expression::StringLiteral(sl)) = call.arguments[0].as_expression()
         {
             self.push(&sl.value, SpecKind::Static, call.span);
+        } else if let Some(request) = uses::resolve_request(call) {
+            // Finds a file without loading it, so nothing runs here.
+            self.push(request, SpecKind::Type, call.span);
         }
         walk::walk_call_expression(self, call);
     }
 
-    // `declare module 'x' { import ... }` blocks describe types, not runtime edges
-    fn visit_ts_module_declaration(&mut self, _decl: &TSModuleDeclaration<'a>) {}
+    // `declare module './x' { ... }` augments `./x`'s types: a type-only
+    // import of it. Imports inside describe types, not runtime edges.
+    fn visit_ts_module_declaration(&mut self, decl: &TSModuleDeclaration<'a>) {
+        if let TSModuleDeclarationName::StringLiteral(module) = &decl.id {
+            self.push(&module.value, SpecKind::Type, decl.span);
+        }
+    }
 }
 
 /// How to parse `path`. JavaScript files may contain JSX whatever their
@@ -334,6 +346,20 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].request, "fs");
         assert!(matches!(imports[0].kind, SpecKind::Static));
+    }
+
+    #[test]
+    fn resolve_calls_find_files_without_loading_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.js",
+            "fork(require.resolve('./worker'));\nnew Worker(import.meta.resolve('./w2'));",
+        );
+        let specs = parse_imports(&file).unwrap().specs;
+        let got: Vec<(&str, SpecKind)> =
+            specs.iter().map(|s| (s.request.as_str(), s.kind)).collect();
+        assert_eq!(got, [("./worker", SpecKind::Type), ("./w2", SpecKind::Type)]);
     }
 
     #[test]

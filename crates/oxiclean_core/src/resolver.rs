@@ -6,7 +6,9 @@ use std::{
 };
 use tracing::{debug, trace};
 
-use crate::constants::{DECLARATION_SUFFIXES, INDEX_FILES, RESOLVE_EXTENSIONS, is_declaration};
+use crate::constants::{
+    DECLARATION_SUFFIXES, INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS, is_declaration,
+};
 use crate::project::{Project, normalize, split_package_request};
 
 /// Node.js built-in modules, which never contribute to an app's module graph.
@@ -216,7 +218,7 @@ fn resolve_in_package(
 
     if let Some(exports) = pkg.as_ref().and_then(|p| p.get("exports"))
         && let Some(target) = match_exports(exports, subpath)
-        && let Some(resolved) = resolve_package_target(pkg_dir, &target, mode)
+        && let Some(resolved) = resolve_package_target(project, pkg_dir, &target, mode)
     {
         return Some(resolved);
     }
@@ -224,16 +226,16 @@ fn resolve_in_package(
     if subpath.is_empty() {
         for field in ["source", "module", "main"] {
             if let Some(target) = pkg.as_ref().and_then(|p| p.get(field)).and_then(|v| v.as_str())
-                && let Some(resolved) = resolve_package_target(pkg_dir, target, mode)
+                && let Some(resolved) = resolve_package_target(project, pkg_dir, target, mode)
             {
                 return Some(resolved);
             }
         }
-        return resolve_package_target(pkg_dir, "src/index", mode)
-            .or_else(|| resolve_package_target(pkg_dir, "index", mode));
+        return resolve_package_target(project, pkg_dir, "src/index", mode)
+            .or_else(|| resolve_package_target(project, pkg_dir, "index", mode));
     }
 
-    resolve_package_target(pkg_dir, subpath, mode)
+    resolve_package_target(project, pkg_dir, subpath, mode)
 }
 
 /// Find the target for `subpath` in a package.json `exports` field.
@@ -282,12 +284,46 @@ const BUILD_DIRS: &[&str] = &["dist", "build", "lib", "esm", "cjs", "out"];
 
 /// Resolve a path inside a package. If it points into build output that does not
 /// exist (an unbuilt workspace package), fall back to the matching file under `src/`.
-fn resolve_package_target(pkg_dir: &Path, target: &str, mode: Mode) -> Option<PathBuf> {
+fn resolve_package_target(
+    project: &Project,
+    pkg_dir: &Path,
+    target: &str,
+    mode: Mode,
+) -> Option<PathBuf> {
     let target = target.trim_start_matches("./");
     if let Some(resolved) = resolve_file(&normalize(&pkg_dir.join(target)), mode) {
         return Some(resolved);
     }
+    if let Some(source) = source_for_out_dir(project, pkg_dir, target)
+        && let Some(resolved) = resolve_file(&source, mode)
+    {
+        return Some(resolved);
+    }
 
+    let source = source_for_build_target(target)?;
+    resolve_file(&normalize(&pkg_dir.join(source)), mode)
+}
+
+/// The source for a target in the `outDir` of the package's tsconfig, as
+/// knip maps it: under `rootDir`, or else `src` if the package has one.
+/// `development/a.js` is `src/a` with `"outDir": "development"`.
+fn source_for_out_dir(project: &Project, pkg_dir: &Path, target: &str) -> Option<PathBuf> {
+    let cfg = project.tsconfig_for(&pkg_dir.join("package.json"))?;
+    let out_dir = cfg.out_dir.as_deref()?;
+    let rest = normalize(&pkg_dir.join(target));
+    let rest = rest.strip_prefix(out_dir).ok()?.to_str()?;
+    let src_dir = match &cfg.root_dir {
+        Some(root_dir) => root_dir.clone(),
+        // tsc without rootDir mirrors the package directory, src/ included.
+        None if out_dir.join("src").is_dir() => pkg_dir.to_path_buf(),
+        None if pkg_dir.join("src").is_dir() => pkg_dir.join("src"),
+        None => pkg_dir.to_path_buf(),
+    };
+    (src_dir != out_dir).then(|| src_dir.join(strip_compiled_extension(rest)))
+}
+
+/// `src/a/b` for a target in build output such as `dist/esm/a/b.js`.
+fn source_for_build_target(target: &str) -> Option<String> {
     let (first, rest) = target.split_once('/')?;
     if !BUILD_DIRS.contains(&first) {
         return None;
@@ -295,11 +331,73 @@ fn resolve_package_target(pkg_dir: &Path, target: &str, mode: Mode) -> Option<Pa
     // Drop build-only subdirectories like dist/esm/... and the compiled extension
     let rest =
         BUILD_DIRS.iter().find_map(|d| rest.strip_prefix(&format!("{}/", d))).unwrap_or(rest);
-    let stem = [".d.ts", ".js", ".mjs", ".cjs", ".jsx"]
+    Some(format!("src/{}", strip_compiled_extension(rest)))
+}
+
+fn strip_compiled_extension(path: &str) -> &str {
+    [".d.ts", ".d.mts", ".d.cts", ".js", ".mjs", ".cjs", ".jsx"]
         .iter()
-        .find_map(|ext| rest.strip_suffix(ext))
-        .unwrap_or(rest);
-    resolve_file(&normalize(&pkg_dir.join("src").join(stem)), mode)
+        .find_map(|ext| path.strip_suffix(ext))
+        .unwrap_or(path)
+}
+
+/// The files a package.json target such as `./dist/index.js` points to, as
+/// [`resolve`] finds them, preferring runtime files. A target with `*`, as
+/// in `"./*": "./src/*.ts"`, matches every source file it can stand for,
+/// `*` matching across directories as in `exports` patterns.
+pub(crate) fn package_target_files(
+    project: &Project,
+    pkg_dir: &Path,
+    target: &str,
+) -> Vec<PathBuf> {
+    let target = target.trim_start_matches("./");
+    if !target.contains('*') {
+        return resolve_package_target(project, pkg_dir, target, Mode::Runtime)
+            .or_else(|| resolve_package_target(project, pkg_dir, target, Mode::Declaration))
+            .into_iter()
+            .collect();
+    }
+    let out_dir_source = source_for_out_dir(project, pkg_dir, target)
+        .and_then(|p| Some(p.strip_prefix(pkg_dir).ok()?.to_str()?.replace('\\', "/")));
+    let candidates = std::iter::once(strip_compiled_extension(target).to_string())
+        .chain(out_dir_source)
+        .chain(source_for_build_target(target));
+    for stem in candidates {
+        let files = files_matching_stem(pkg_dir, &stem);
+        if !files.is_empty() {
+            return files;
+        }
+    }
+    Vec::new()
+}
+
+/// Source files under `dir` whose path without its extension matches `stem`,
+/// a path with `*` wildcards. Already-present extensions such as `.ts` in
+/// `src/*.ts` match too.
+fn files_matching_stem(dir: &Path, stem: &str) -> Vec<PathBuf> {
+    let exts = JS_TS_EXTENSIONS.join(",");
+    let pattern = if JS_TS_EXTENSIONS.iter().any(|e| stem.ends_with(&format!(".{e}"))) {
+        stem.to_string()
+    } else {
+        format!("{stem}{{.{{{exts}}},/index.{{{exts}}}}}")
+    };
+    let Ok(glob) = globset::GlobBuilder::new(&pattern).literal_separator(false).build() else {
+        trace!("Invalid package target pattern '{}'", pattern);
+        return Vec::new();
+    };
+    let matcher = glob.compile_matcher();
+    let walker = ignore::WalkBuilder::new(dir)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != "node_modules" && e.file_name() != ".git")
+        .build();
+    let mut files: Vec<PathBuf> = walker
+        .filter_map(std::result::Result::ok)
+        .map(ignore::DirEntry::into_path)
+        .filter(|p| p.is_file() && p.strip_prefix(dir).is_ok_and(|rel| matcher.is_match(rel)))
+        .filter_map(canonical)
+        .collect();
+    files.sort();
+    files
 }
 
 /// Resolves `p` to a runtime file, or with [`Mode::Declaration`] to a
@@ -668,6 +766,38 @@ mod tests {
         assert_eq!(got("pkg"), Some(pkg_src));
         // With no runtime file anywhere, the declaration file is used.
         assert_eq!(got("shim-only"), Some(root.join("types/shim-only/index.d.ts")));
+    }
+
+    #[test]
+    fn unbuilt_targets_in_tsconfig_out_dir_map_to_root_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let root_buf = temp_dir.path().canonicalize().unwrap();
+        let root = root_buf.as_path();
+        create_test_file(root, "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+        // As in lit: `development` is not a usual build directory name.
+        create_test_file(
+            root,
+            "packages/lit/package.json",
+            r#"{"name":"lit","exports":{".":"./development/index.js","./directive.js":"./development/directive.js"}}"#,
+        );
+        create_test_file(
+            root,
+            "packages/lit/tsconfig.json",
+            r#"{"compilerOptions":{"outDir":"./development","rootDir":"./source"}}"#,
+        );
+        let index = create_test_file(root, "packages/lit/source/index.ts", "");
+        let directive = create_test_file(root, "packages/lit/source/directive.ts", "");
+        let from_file = create_test_file(root, "packages/app/src/index.ts", "");
+
+        let project = Project::load(root);
+        let got = |r: &str| resolve(&project, &from_file, r, &cache).unwrap();
+        assert_eq!(got("lit"), Some(index));
+        assert_eq!(got("lit/directive.js"), Some(directive.clone()));
+        assert_eq!(
+            package_target_files(&project, &root.join("packages/lit"), "./development/*.js"),
+            [directive, root.join("packages/lit/source/index.ts")]
+        );
     }
 
     #[test]

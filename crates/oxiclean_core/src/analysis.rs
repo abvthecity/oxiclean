@@ -4,14 +4,16 @@
 use std::path::{Path, PathBuf};
 
 use dashmap::DashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{
     CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, collect_entries,
+    collector::{collect_project_files, is_test_file},
     config::find_git_root,
+    constants::is_declaration,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
-    parse_imports,
+    package_entry_points, parse_imports,
     report::{CheckResult, Finding, sort_findings},
     resolve,
     settings::file_globs,
@@ -62,6 +64,23 @@ impl CommonArgs {
     /// # Errors
     /// As for [`Self::analyze`].
     pub fn analyze_with(&self, extra: BuildOptions) -> Result<Analysis> {
+        self.analyze_from(extra, DefaultEntries::SourceFiles)
+    }
+
+    /// Like [`Self::analyze_with`], for the checks of exports. Unless the
+    /// config sets `entries`, the entries are the files each package offers
+    /// to others ([`package_entry_points`]), test files, and declaration
+    /// files in a tsconfig's directory, as in knip,
+    /// rather than every file in `src`: an entry's exports always count as
+    /// used, so with every file an entry nothing would be reported.
+    ///
+    /// # Errors
+    /// As for [`Self::analyze`].
+    pub fn analyze_package_entries(&self, extra: BuildOptions) -> Result<Analysis> {
+        self.analyze_from(extra, DefaultEntries::PackageEntryPoints)
+    }
+
+    fn analyze_from(&self, extra: BuildOptions, defaults: DefaultEntries) -> Result<Analysis> {
         let root = match &self.root {
             Some(r) => {
                 r.canonicalize().map_err(|source| Error::Root { path: r.clone(), source })?
@@ -78,10 +97,35 @@ impl CommonArgs {
         let project = Project::load(&root);
         debug!("Found {} workspace packages", project.workspace_package_count());
 
-        let mut entry_paths = collect_entries(&CollectorConfig {
-            root: root.clone(),
-            entry_globs: config.entries.clone(),
-        })?;
+        let mut entry_paths =
+            if config.entries.is_empty() && defaults == DefaultEntries::PackageEntryPoints {
+                let mut paths = package_entry_points(&project);
+                debug!("Found {} package entry points", paths.len());
+                if paths.is_empty() {
+                    warn!(
+                        "No package entry points (package.json main, exports or bin, or an index, \
+                     main or cli file) found; set \"entries\" in the config file"
+                    );
+                }
+                // As in knip, declaration files a tsconfig covers are
+                // entries too: they declare types for code oxiclean can't see.
+                for file in collect_project_files(&root)? {
+                    let rel = file.strip_prefix(&root).unwrap_or(&file);
+                    if is_test_file(rel)
+                        || is_declaration(&file) && project.tsconfig_for(&file).is_some()
+                    {
+                        paths.push(file);
+                    }
+                }
+                paths.sort();
+                paths.dedup();
+                paths
+            } else {
+                collect_entries(&CollectorConfig {
+                    root: root.clone(),
+                    entry_globs: config.entries.clone(),
+                })?
+            };
 
         let ignore = file_globs(&config.ignore_patterns).map_err(|message| Error::Config {
             path: config_path.clone().unwrap_or_default(),
@@ -106,6 +150,7 @@ impl CommonArgs {
                         .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
                         .collect(),
                     exports: parsed.exports,
+                    uses: parsed.uses,
                     error: parsed.error,
                 })
             },
@@ -121,6 +166,15 @@ impl CommonArgs {
         let resolution = ResolutionStats::from_cache(&resolve_cache);
         Ok(Analysis { root, graph, entries, resolution, project, config, config_path })
     }
+}
+
+/// Which files are entries when the config sets no `entries`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultEntries {
+    /// Every source file in a `src` directory.
+    SourceFiles,
+    /// Package entry points, test files and declaration files.
+    PackageEntryPoints,
 }
 
 /// The prepared input for a checker.

@@ -40,6 +40,12 @@ enum Commands {
     /// Check for modules that export the same thing under several names
     #[command(name = "duplicates")]
     Duplicates(oxiclean_duplicates::Config),
+    /// Check for exports that no other file imports
+    #[command(name = "unused-exports")]
+    UnusedExports(oxiclean_unused_exports::Config),
+    /// Check for exported types, interfaces and enums that no other file imports
+    #[command(name = "unused-types")]
+    UnusedTypes(oxiclean_unused_exports::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -68,6 +74,16 @@ fn main() -> Result<ExitCode> {
             oxiclean_duplicates::run_duplicates_check(cfg)?,
             oxiclean_duplicates::REPORT_STYLE,
             oxiclean_duplicates::RULE,
+        ),
+        Commands::UnusedExports(cfg) => (
+            oxiclean_unused_exports::run_unused_exports_check(cfg)?,
+            oxiclean_unused_exports::UNUSED_EXPORTS_STYLE,
+            oxiclean_unused_exports::UNUSED_EXPORTS_RULE,
+        ),
+        Commands::UnusedTypes(cfg) => (
+            oxiclean_unused_exports::run_unused_types_check(cfg)?,
+            oxiclean_unused_exports::UNUSED_TYPES_STYLE,
+            oxiclean_unused_exports::UNUSED_TYPES_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();
