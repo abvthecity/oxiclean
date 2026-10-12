@@ -46,9 +46,6 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Check workspace
-        run: cargo check --workspace --all-targets --verbose
-
       - name: Run tests
         run: cargo test --workspace --verbose
 
