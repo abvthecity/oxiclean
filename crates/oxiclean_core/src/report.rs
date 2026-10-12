@@ -40,6 +40,29 @@ pub enum FindingKind {
     /// A member of a used enum or namespace that nothing uses. The name is
     /// the export and the member's path, as `Fruits.Tropical.mango`.
     UnusedMember(UnusedExport),
+    /// A package a package.json lists that nothing uses. The finding's file
+    /// is the package.json.
+    UnusedDependency(UnusedDependency),
+}
+
+/// A package a package.json lists that nothing uses, for
+/// [`FindingKind::UnusedDependency`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnusedDependency {
+    /// The package's name, as `react` or `@types/node`.
+    pub name: String,
+    /// The package.json field that lists it, as `devDependencies`.
+    pub field: String,
+    /// 1-based line of the package in the package.json, or 0 when unknown.
+    pub line: u32,
+}
+
+impl UnusedDependency {
+    #[must_use]
+    pub fn new(name: String, field: String, line: u32) -> Self {
+        Self { name, field, line }
+    }
 }
 
 /// An export nothing imports, for [`FindingKind::UnusedExport`], or a
@@ -166,6 +189,7 @@ impl Finding {
             FindingKind::Cycle(cycle) => cycle.steps.first().map_or(0, |s| s.line),
             FindingKind::DuplicateExport(dup) => dup.names.first().map_or(0, |n| n.line),
             FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => unused.line,
+            FindingKind::UnusedDependency(dep) => dep.line,
             FindingKind::WholeGraph => 0,
         }
     }
@@ -221,6 +245,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::Cycle(cycle) => cycle.steps.first().map_or("", |s| s.request.as_str()),
         FindingKind::DuplicateExport(dup) => dup.names.first().map_or("", |n| n.name.as_str()),
         FindingKind::UnusedExport(unused) | FindingKind::UnusedMember(unused) => &unused.name,
+        FindingKind::UnusedDependency(dep) => &dep.name,
         FindingKind::WholeGraph => "",
     }
 }
@@ -232,6 +257,7 @@ fn label(f: &Finding) -> String {
             format!("export '{}'", request(f))
         }
         FindingKind::UnusedMember(_) => format!("member '{}'", request(f)),
+        FindingKind::UnusedDependency(_) => format!("package '{}'", request(f)),
         _ => format!("import '{}'", request(f)),
     }
 }

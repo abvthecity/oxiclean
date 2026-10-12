@@ -108,6 +108,7 @@ pub(crate) fn parse_file(
 
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
+    collector.reference_types(&program.comments, &src);
     let (exports, uses) = if with_exports {
         let line = |offset| collector.line(offset);
         let mut exports = exports::collect(&program, &line);
@@ -163,6 +164,26 @@ impl ImportCollector {
         trace!("Found {:?} import: '{}'", kind, request);
         let line = self.line(span.start);
         self.specs.push(Specifier { request: request.to_string(), kind, line });
+    }
+}
+
+impl ImportCollector {
+    /// `/// <reference types="x" />` loads `x`'s types: a type-only import.
+    fn reference_types(&mut self, comments: &[Comment], src: &str) {
+        for comment in comments.iter().filter(|c| c.is_line()) {
+            let span = comment.span;
+            let Some(text) = src.get(span.start as usize..span.end as usize) else { continue };
+            let Some(rest) = text.strip_prefix("///") else { continue };
+            let Some(rest) = rest.trim_start().strip_prefix("<reference") else { continue };
+            let Some(at) = rest.find("types=") else { continue };
+            let value = &rest[at + "types=".len()..];
+            let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
+                continue;
+            };
+            if let Some(end) = value[1..].find(quote) {
+                self.push(&value[1..=end], SpecKind::Type, span);
+            }
+        }
     }
 }
 
@@ -232,6 +253,17 @@ impl<'a> Visit<'a> for ImportCollector {
             self.push(request, SpecKind::Type, call.span);
         }
         walk::walk_call_expression(self, call);
+    }
+
+    // `typeof import('x')` and `import('x').T` in a type refer to `x`'s
+    // types: a type-only import.
+    fn visit_ts_import_type(&mut self, it: &TSImportType<'a>) {
+        if let TSType::TSLiteralType(lit) = &it.argument
+            && let TSLiteral::StringLiteral(sl) = &lit.literal
+        {
+            self.push(&sl.value, SpecKind::Type, it.span);
+        }
+        walk::walk_ts_import_type(self, it);
     }
 
     // `declare module './x' { ... }` augments `./x`'s types: a type-only
@@ -497,6 +529,25 @@ import type F = require('./f');";
                 t("./f", SpecKind::Type),
             ]
         );
+    }
+
+    #[test]
+    fn import_types_and_reference_directives_are_type_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        let src = "/// <reference types=\"vite/client\" />
+/// <reference path=\"./global.d.ts\" />
+// <reference types=\"not-a-directive\" />
+type A = typeof import('pkg-a');
+type B = import('./b').B;";
+        let file = create_test_file(temp_dir.path(), "test.ts", src);
+        let got: Vec<(String, SpecKind, u32)> = parse_imports(&file)
+            .unwrap()
+            .specs
+            .into_iter()
+            .map(|s| (s.request, s.kind, s.line))
+            .collect();
+        let t = |r: &str, line| (r.to_string(), SpecKind::Type, line);
+        assert_eq!(got, [t("pkg-a", 4), t("./b", 5), t("vite/client", 1)]);
     }
 
     #[test]

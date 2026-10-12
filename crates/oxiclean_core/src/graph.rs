@@ -21,6 +21,7 @@ use tracing::{debug, trace, warn};
 use crate::{
     constants::{COMPONENT_EXTENSIONS, JS_TS_EXTENSIONS, declaration_for, is_declaration},
     exports::Export,
+    project::split_package_request,
     sequencer::{Components, len_u32, sequence, strongly_connected},
     types::SpecKind,
     uses::ModuleUses,
@@ -77,6 +78,7 @@ struct Expanded {
     declaration: Option<PathBuf>,
     exports: Vec<Export>,
     uses: ModuleUses,
+    packages: Vec<String>,
     error: Option<String>,
 }
 
@@ -88,6 +90,7 @@ impl Expanded {
             declaration: None,
             exports: Vec::new(),
             uses: ModuleUses::default(),
+            packages: Vec::new(),
             error: None,
         }
     }
@@ -135,6 +138,12 @@ pub struct Module {
     /// What the module takes from the modules it imports. Empty for files
     /// that aren't parsed.
     pub uses: ModuleUses,
+    /// The packages the module imports by name, as `react` or `@scope/pkg`
+    /// for `@scope/pkg/sub`, whether or not they resolve: every import kind.
+    /// Bare built-in names such as `buffer` are kept, as a package of that
+    /// name shadows the built-in; `node:` imports are left out. Sorted,
+    /// without duplicates.
+    pub packages: Vec<String>,
 }
 
 impl Module {
@@ -302,6 +311,7 @@ impl ModuleGraph {
                             return out;
                         }
                     };
+                    out.packages = package_names(parsed.imports.iter().map(|i| i.request.as_str()));
                     let resolved = parsed
                         .imports
                         .into_iter()
@@ -341,7 +351,7 @@ impl ModuleGraph {
                 .collect();
 
             let mut next = Vec::new();
-            for Expanded { id, resolved, declaration, exports, uses, error } in expanded {
+            for Expanded { id, resolved, declaration, exports, uses, packages, error } in expanded {
                 let mut intern_next = |path: PathBuf| match index.get(&path) {
                     Some(&t) => t,
                     None => {
@@ -367,6 +377,7 @@ impl ModuleGraph {
                 module.declaration = declaration;
                 module.exports = exports;
                 module.uses = uses;
+                module.packages = packages;
                 if let Some(message) = error {
                     let path = modules[id.idx()].path.clone();
                     warn!("Could not parse {} cleanly: {message}", path.display());
@@ -635,8 +646,23 @@ fn intern(
         declaration: None,
         uses: ModuleUses::default(),
         exports: Vec::new(),
+        packages: Vec::new(),
     });
     id
+}
+
+/// The package each of `requests` names, for [`Module::packages`]: bare
+/// specifiers only, so not relative or absolute paths, `#` subpath imports,
+/// URLs and other `scheme:` requests such as `node:fs`.
+fn package_names<'r>(requests: impl Iterator<Item = &'r str>) -> Vec<String> {
+    let mut names: Vec<String> = requests
+        .filter(|r| !r.is_empty() && !r.starts_with(['.', '/', '#', '\\']) && !r.contains(':'))
+        .map(|r| split_package_request(r).0.to_string())
+        .filter(|name| !name.is_empty() && (!name.starts_with('@') || name.contains('/')))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 #[cfg(test)]

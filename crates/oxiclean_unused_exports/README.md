@@ -67,6 +67,8 @@ finds with its plugins off, in the root package and each workspace package:
   such as `"@mui/icons-material/*": ["./packages/mui-icons-material/lib/*"]`,
   since imports of the package resolve through the alias;
 - `index`, `main` and `cli` files in the package directory and its `src`;
+- JS/TS config files in the package directory, such as `vite.config.ts`
+  or `.eslintrc.cjs`, which knip's plugins take as entries;
 - test files (`*.test.*`, `*.spec.*` and files in `__tests__`), which knip's
   test-runner plugins add;
 - declaration files in a directory with a `tsconfig.json`, which knip takes
@@ -118,7 +120,7 @@ Where oxiclean differs from knip:
   (`const n = ns`), spread or nested further; oxiclean keeps every export of
   such a namespace too, so it reports less, never more;
 - knip reads `.mdx` files and counts `import.meta.glob` patterns, files that `fork()` or `spawn()`
-  run, and the config files its plugins know; oxiclean doesn't read them
+  run, and the config files its plugins know in other formats; oxiclean doesn't read them
   yet, so files reached only that way are not checked;
 - knip maps build output to sources only through tsconfig `outDir`, so it
   reports the re-exports of a package whose `exports` point to `dist` with

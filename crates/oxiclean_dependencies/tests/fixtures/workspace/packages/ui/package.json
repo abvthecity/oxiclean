@@ -1,0 +1,10 @@
+{
+  "name": "@acme/ui",
+  "main": "./src/index.ts",
+  "peerDependencies": {
+    "react": "^18.0.0"
+  },
+  "devDependencies": {
+    "left-pad": "^1.0.0"
+  }
+}

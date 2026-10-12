@@ -1,0 +1,4 @@
+{
+  "entries": ["entry.ts"],
+  "ignoreDependencies": ["stream"]
+}

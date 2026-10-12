@@ -52,6 +52,9 @@ enum Commands {
     /// Check for what used namespaces export that nothing uses
     #[command(name = "unused-namespace-members")]
     UnusedNamespaceMembers(oxiclean_unused_exports::Config),
+    /// Check for packages a package.json lists that nothing imports or runs
+    #[command(name = "unused-dependencies")]
+    UnusedDependencies(oxiclean_dependencies::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -100,6 +103,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_unused_exports::run_unused_namespace_members_check(cfg)?,
             oxiclean_unused_exports::UNUSED_NAMESPACE_MEMBERS_STYLE,
             oxiclean_unused_exports::UNUSED_NAMESPACE_MEMBERS_RULE,
+        ),
+        Commands::UnusedDependencies(cfg) => (
+            oxiclean_dependencies::run_unused_dependencies_check(cfg)?,
+            oxiclean_dependencies::UNUSED_DEPENDENCIES_STYLE,
+            oxiclean_dependencies::UNUSED_DEPENDENCIES_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

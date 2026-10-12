@@ -92,6 +92,9 @@ pub struct ConfigFile {
     /// Globs of files, relative to the root, that are never entries and never
     /// reported.
     pub ignore_patterns: Vec<String>,
+    /// Names of packages, globs such as "@types/*" allowed, that the unused
+    /// dependency checks never report, as knip's `ignoreDependencies`.
+    pub ignore_dependencies: Vec<String>,
     /// Settings per rule. A rule that isn't listed runs with its defaults.
     pub rules: Rules,
     /// Settings for some workspace packages or files. Later overrides win.
@@ -132,6 +135,12 @@ pub struct Rules {
     /// What used namespaces export that nothing uses, as knip's
     /// `namespaceMembers`. The same exceptions apply. Default threshold: 1.
     pub unused_namespace_members: Option<RuleSetting>,
+    /// Packages a package.json lists in `dependencies` or `devDependencies`
+    /// that no file imports and no script runs, as knip's `dependencies` and
+    /// `devDependencies`. The `fields` option picks which of the two to
+    /// check. A package in both is reported in `devDependencies`. Default
+    /// threshold: 1.
+    pub unused_dependencies: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -147,6 +156,7 @@ impl Rules {
             "unused-types" => self.unused_types.as_ref(),
             "unused-enum-members" => self.unused_enum_members.as_ref(),
             "unused-namespace-members" => self.unused_namespace_members.as_ref(),
+            "unused-dependencies" => self.unused_dependencies.as_ref(),
             _ => None,
         }
     }
@@ -161,6 +171,7 @@ impl Rules {
             &self.unused_types,
             &self.unused_enum_members,
             &self.unused_namespace_members,
+            &self.unused_dependencies,
         ]
         .into_iter()
         .flatten()
@@ -199,6 +210,17 @@ pub struct RuleOptions {
     pub threshold: Option<usize>,
     /// Globs of files, relative to the root, this rule does not report on.
     pub ignore_patterns: Vec<String>,
+    /// For `unused-dependencies`: the package.json fields to check. Both by
+    /// default.
+    pub fields: Option<Vec<DependencyField>>,
+}
+
+/// A package.json field `unused-dependencies` can check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DependencyField {
+    Dependencies,
+    DevDependencies,
 }
 
 /// Rule settings for the files of some workspace packages or paths.
@@ -221,6 +243,7 @@ struct RuleConfig {
     severity: Option<Severity>,
     threshold: Option<usize>,
     ignore: Vec<String>,
+    fields: Option<DependencyFields>,
 }
 
 impl RuleSetting {
@@ -239,6 +262,7 @@ impl RuleSetting {
             severity,
             threshold: options.and_then(|o| o.threshold),
             ignore: options.map(|o| o.ignore_patterns.clone()).unwrap_or_default(),
+            fields: options.and_then(|o| o.fields.as_deref()).map(DependencyFields::from),
         }
     }
 }
@@ -293,6 +317,16 @@ impl ConfigFile {
         text
     }
 
+    /// The packages the unused dependency checks never report, from
+    /// `ignoreDependencies`.
+    ///
+    /// # Errors
+    /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.
+    pub fn ignored_dependencies(&self) -> Result<GlobSet> {
+        name_globs(&self.ignore_dependencies)
+            .map_err(|message| Error::Config { path: PathBuf::new(), message })
+    }
+
     fn validate(&self, path: &Path) -> Result<()> {
         let err = |message: String| Error::Config { path: path.to_path_buf(), message };
         let all_rules = self.rules.all().chain(self.overrides.iter().flat_map(|o| o.rules.all()));
@@ -300,6 +334,7 @@ impl ConfigFile {
             file_globs(&rule.to_config().ignore).map_err(err)?;
         }
         file_globs(&self.ignore_patterns).map_err(err)?;
+        name_globs(&self.ignore_dependencies).map_err(err)?;
         for o in &self.overrides {
             if o.packages.is_empty() && o.files.is_empty() {
                 return Err(err("each entry in `overrides` needs `files` or `packages`".into()));
@@ -322,6 +357,7 @@ impl ConfigFile {
             severity: Severity::Error,
             threshold: default_threshold,
             ignored: false,
+            fields: DependencyFields::default(),
         };
         let mut ignore = self.ignore_patterns.clone();
         if let Some(setting) = self.rules.get(rule) {
@@ -357,6 +393,42 @@ pub struct ResolvedRule {
     pub threshold: usize,
     /// The file matches an ignore pattern.
     pub ignored: bool,
+    /// The package.json fields `unused-dependencies` checks.
+    pub fields: DependencyFields,
+}
+
+/// Which package.json fields `unused-dependencies` checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DependencyFields {
+    pub dependencies: bool,
+    pub dev_dependencies: bool,
+}
+
+impl Default for DependencyFields {
+    fn default() -> Self {
+        Self { dependencies: true, dev_dependencies: true }
+    }
+}
+
+impl From<&[DependencyField]> for DependencyFields {
+    fn from(fields: &[DependencyField]) -> Self {
+        Self {
+            dependencies: fields.contains(&DependencyField::Dependencies),
+            dev_dependencies: fields.contains(&DependencyField::DevDependencies),
+        }
+    }
+}
+
+impl DependencyFields {
+    /// Whether `field` is checked.
+    #[must_use]
+    pub fn includes(self, field: DependencyField) -> bool {
+        match field {
+            DependencyField::Dependencies => self.dependencies,
+            DependencyField::DevDependencies => self.dev_dependencies,
+        }
+    }
 }
 
 impl ResolvedRule {
@@ -369,6 +441,9 @@ impl ResolvedRule {
         }
         if let Some(t) = rc.threshold {
             self.threshold = t;
+        }
+        if let Some(f) = rc.fields {
+            self.fields = f;
         }
     }
 
@@ -415,6 +490,7 @@ impl RulePolicy {
                 severity: Severity::Error,
                 threshold,
                 ignored: false,
+                fields: DependencyFields::default(),
             },
             ignore: GlobSet::empty(),
             overrides: Vec::new(),

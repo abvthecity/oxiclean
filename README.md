@@ -28,6 +28,9 @@ oxiclean unused-types --root ./my-project
 oxiclean unused-enum-members --root ./my-project
 oxiclean unused-namespace-members --root ./my-project
 
+# Find package.json dependencies and devDependencies that nothing imports or runs
+oxiclean unused-dependencies --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -55,6 +58,7 @@ oxiclean/
 │   ├── oxiclean_core/               # Shared utilities (parser, resolver, etc.)
 │   ├── oxiclean_bloat/              # Import bloat detection library
 │   ├── oxiclean_cycles/             # Circular import detection library
+│   ├── oxiclean_dependencies/       # Unused dependency detection library
 │   ├── oxiclean_duplicates/         # Duplicate export detection library
 │   ├── oxiclean_unused_exports/     # Unused export and type detection library
 │   └── oxiclean_depth/              # Import depth analysis library
@@ -75,7 +79,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members` and `unused-namespace-members` report every unused export or member and have no threshold.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` and `unused-dependencies` report every unused export, member or package and have no threshold.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -252,6 +256,26 @@ oxiclean unused-enum-members --root ./my-project
 oxiclean unused-namespace-members --root ./my-project
 ```
 
+### Unused Dependencies Checker
+
+Find the packages a `package.json` lists in `dependencies` or
+`devDependencies` that no file imports and no script runs, like knip's
+`dependencies` and `devDependencies`, as one rule whose `fields` option
+picks `dependencies`, `devDependencies` or both (the default), per package
+too with `overrides`. The root's and every workspace
+package's `package.json` are checked, from the files the package entries
+reach (including config files such as `vite.config.ts`), the binaries their
+`scripts` run, and the packages their tsconfig files name. `@types/x` is
+used when `x` is imported. Packages in `ignoreDependencies` are never
+reported. See
+[oxiclean_dependencies](crates/oxiclean_dependencies/README.md) for what
+counts as a use.
+
+**Usage:**
+```bash
+oxiclean unused-dependencies --root ./my-project
+```
+
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
@@ -260,6 +284,7 @@ oxiclean unused-namespace-members --root ./my-project
 - **Duplicate Exports**: Lists exports with a second name - two ways to import one thing
 - **Unused Exports and Types**: Lists exports nothing imports - dead code and API surface to remove
 - **Unused Enum and Namespace Members**: Lists members of used enums and namespaces that nothing reads - dead cases and helpers
+- **Unused Dependencies**: Lists packages a package.json lists that nothing imports or runs - installs to drop
 
 These metrics provide complementary insights into code complexity.
 
@@ -281,6 +306,8 @@ apply settings to some files. Every key is optional.
   // from each package's entry points. `*` stays within one directory and `**`
   // crosses directories.
   "entries": ["packages/*/src/**/*.{ts,tsx}"],
+  // Packages the unused dependency checks never report
+  "ignoreDependencies": ["eslint-config-*"],
   // Also follow dynamic import() calls
   "includeDynamic": false,
   // Also scan installed packages: parse files in node_modules and follow
