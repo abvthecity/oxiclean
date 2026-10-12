@@ -80,8 +80,9 @@ finds with its plugins off, in the root package and each workspace package:
   Vitest's configs name;
 - declaration files in a directory with a `tsconfig.json`, which knip takes
   from the TypeScript program;
-- files passed to `require.resolve()` or `import.meta.resolve()`, which run
-  in a worker or another process.
+- files passed to `require.resolve()` or `import.meta.resolve()`, or named
+  by `new URL('./x', import.meta.url)`, which run in a worker or another
+  process.
 
 Only files these entries reach are checked. A file nothing imports is an
 unused file, not a file of unused exports. With `entries` set, those files
@@ -103,6 +104,8 @@ An export is used when:
   every export;
 - `() => import('./x')` is passed to a function, as route loaders do: that
   uses the default export only;
+- `import.meta.glob` matches the file: that uses every export, or the one
+  its `import` option names (`{ import: 'default' }`);
 - it is re-exported (`export { a } from './x'`, `export * from './x'`, or an
   imported name exported again) and the re-export is used. `export *`
   passes on every name except `default` that the re-exporting file doesn't

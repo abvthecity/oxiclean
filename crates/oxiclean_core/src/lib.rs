@@ -16,6 +16,7 @@ mod constants;
 mod entry_points;
 mod error;
 mod exports;
+mod globs;
 mod graph;
 mod jsonc;
 mod members;

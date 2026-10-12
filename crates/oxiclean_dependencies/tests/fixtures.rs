@@ -186,3 +186,10 @@ fn expo_app() {
 fn repo_tooling() {
     assert_eq!(dev_dependencies("repo-tooling"), ["package.json unused-pkg:15"]);
 }
+
+/// Files `import.meta.glob` matches and workers `new URL(...,
+/// import.meta.url)` names are reached, so what they import is used.
+#[test]
+fn vite_globs() {
+    assert_eq!(dependencies("vite-globs"), ["package.json unused-pkg:8"]);
+}
