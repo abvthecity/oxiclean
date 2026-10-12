@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use log::{debug, trace};
 use std::path::{Component, Path, PathBuf};
@@ -18,11 +18,14 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     // If entries glob provided, walk and filter by suffix; else treat all top-level src files as entries
     let mut files: Vec<PathBuf> = Vec::new();
     let root = &cfg.root;
+    let matcher = cfg.entry_glob.as_deref().map(EntryMatcher::new).transpose()?;
     debug!("Walking directory tree from root: {}", root.display());
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .ignore(true)
         .git_ignore(true)
+        // Honor .gitignore even when the root is not inside a git checkout
+        .require_git(false)
         .filter_entry(|e| {
             e.file_name().to_str().is_none_or(|n| n != ".git" && !SKIPPED_DIRS.contains(&n))
         })
@@ -50,15 +53,12 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
         if let Some(ext) = p.extension().and_then(|e| e.to_str())
             && JS_TS_EXTENSIONS.contains(&ext)
         {
-            // If entry_glob is set, check if the relative path from root contains the pattern
-            if let Some(gl) = &cfg.entry_glob {
-                if let Ok(rel_path) = p.strip_prefix(root) {
-                    let rel_str = rel_path.to_string_lossy();
-                    // Match if relative path contains the glob pattern
-                    if rel_str.contains(gl) {
-                        trace!("Matched entry file with glob '{}': {}", gl, rel_str);
-                        files.push(p.to_path_buf());
-                    }
+            if let Some(matcher) = &matcher {
+                if let Ok(rel_path) = p.strip_prefix(root)
+                    && matcher.is_match(rel_path)
+                {
+                    trace!("Matched entry file: {}", rel_path.display());
+                    files.push(p.to_path_buf());
                 }
             } else {
                 // Heuristic: anything under src is considered
@@ -72,6 +72,37 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     files.sort();
     debug!("Collected {} entry files", files.len());
     Ok(files)
+}
+
+/// `--entry-glob` filter. Patterns with glob syntax (`*`, `?`, `[`, `{`) are
+/// matched against the whole path relative to the root; plain strings keep the
+/// original behavior of matching any path that contains them.
+enum EntryMatcher {
+    Glob(globset::GlobMatcher),
+    Substring(String),
+}
+
+impl EntryMatcher {
+    fn new(pattern: &str) -> Result<Self> {
+        if pattern.contains(['*', '?', '[', '{']) {
+            let glob = globset::GlobBuilder::new(pattern.trim_start_matches("./"))
+                .literal_separator(true)
+                .build()
+                .with_context(|| format!("Invalid --entry-glob pattern '{}'", pattern))?;
+            Ok(Self::Glob(glob.compile_matcher()))
+        } else {
+            Ok(Self::Substring(pattern.to_string()))
+        }
+    }
+
+    fn is_match(&self, rel_path: &Path) -> bool {
+        match self {
+            Self::Glob(glob) => glob.is_match(rel_path),
+            Self::Substring(s) => {
+                rel_path.to_string_lossy().replace('\\', "/").contains(s.as_str())
+            }
+        }
+    }
 }
 
 fn is_under_src(rel: &Path) -> bool {
@@ -233,5 +264,42 @@ mod tests {
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].ends_with("src/file.ts"));
+    }
+
+    #[test]
+    fn test_collect_entries_with_real_glob() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        create_test_file(root, "src/pages/home.tsx", "// home");
+        create_test_file(root, "src/pages/nested/deep.tsx", "// deep");
+        create_test_file(root, "src/pages/util.ts", "// util");
+
+        let cfg = CollectorConfig {
+            root: root.to_path_buf(),
+            entry_glob: Some("src/pages/*.tsx".to_string()),
+        };
+        let entries = collect_entries(&cfg).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].ends_with("src/pages/home.tsx"));
+
+        let cfg =
+            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("**/*.tsx".to_string()) };
+        assert_eq!(collect_entries(&cfg).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_gitignore_honored_outside_git_checkout() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        create_test_file(root, ".gitignore", "generated/\n");
+        create_test_file(root, "src/app.ts", "// app");
+        create_test_file(root, "generated/src/out.ts", "// generated");
+
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+        let entries = collect_entries(&cfg).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].ends_with("src/app.ts"));
     }
 }
