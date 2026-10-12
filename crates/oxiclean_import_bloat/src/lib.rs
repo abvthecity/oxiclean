@@ -13,7 +13,7 @@
 //! use std::path::Path;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let cfg = Config { common: CommonArgs::with_root("/path/to/project"), threshold: Some(200) };
+//! let cfg = Config { common: CommonArgs::with_root("/path/to/project") };
 //! let result = run_import_bloat_check(&cfg)?;
 //!
 //! let root = Path::new("/path/to/project");

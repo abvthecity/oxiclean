@@ -9,7 +9,7 @@ pub fn parse_jsonc(src: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&strip_jsonc(src)).ok()
 }
 
-fn strip_jsonc(src: &str) -> String {
+pub(crate) fn strip_jsonc(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;

@@ -34,7 +34,7 @@ Results are deterministic, so any change in violations comes from a code change.
 
 The default thresholds (300 modules for `import-bloat`, 20 levels for
 `import-depth`) come from the distribution of each file's worst value in
-these targets, measured with `--threshold 1 --format json`:
+these targets, measured with `--format json` and a threshold of 1 in `.oxicleanrc.json`:
 
 | Target | Check | Files | p90 | p95 | p99 | Files flagged at default |
 |---|---|---|---|---|---|---|
