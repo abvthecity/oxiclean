@@ -1,15 +1,17 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use log::{debug, trace};
-use std::{collections::HashMap, path::PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::constants::JS_TS_EXTENSIONS;
 
 pub struct CollectorConfig {
     pub root: PathBuf,
     pub entry_glob: Option<String>,
-    pub tsconfig_paths: HashMap<String, Vec<String>>,
 }
+
+/// Directories whose files are tests or fixtures rather than application code.
+const SKIPPED_DIRS: &[&str] = &["node_modules", "__tests__", "__mocks__", "__fixtures__"];
 
 pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     debug!("Collecting entry files");
@@ -17,7 +19,14 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     let root = &cfg.root;
     debug!("Walking directory tree from root: {}", root.display());
-    let walker = WalkBuilder::new(root).hidden(false).ignore(true).git_ignore(true).build();
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .ignore(true)
+        .git_ignore(true)
+        .filter_entry(|e| {
+            e.file_name().to_str().is_none_or(|n| n != ".git" && !SKIPPED_DIRS.contains(&n))
+        })
+        .build();
 
     for res in walker {
         let dent = res?;
@@ -26,10 +35,15 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
             continue;
         }
 
-        // Skip test files (*.test.*, *.spec.*)
-        let path_str = p.to_string_lossy();
-        if path_str.contains(".test.") || path_str.contains(".spec.") {
-            trace!("Skipping test file: {}", path_str);
+        // Skip test files (*.test.*, *.spec.*) and type declarations (*.d.ts)
+        let file_name = dent.file_name().to_string_lossy();
+        if file_name.contains(".test.")
+            || file_name.contains(".spec.")
+            || file_name.ends_with(".d.ts")
+            || file_name.ends_with(".d.mts")
+            || file_name.ends_with(".d.cts")
+        {
+            trace!("Skipping test or declaration file: {}", p.display());
             continue;
         }
 
@@ -48,15 +62,21 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
                 }
             } else {
                 // Heuristic: anything under src is considered
-                if p.to_string_lossy().contains("/src/") {
+                if is_under_src(p.strip_prefix(root).unwrap_or(p)) {
                     trace!("Found entry file in /src/: {}", p.display());
                     files.push(p.to_path_buf());
                 }
             }
         }
     }
+    files.sort();
     debug!("Collected {} entry files", files.len());
     Ok(files)
+}
+
+fn is_under_src(rel: &Path) -> bool {
+    let mut parents = rel.parent().into_iter().flat_map(Path::components);
+    parents.any(|c| c == Component::Normal("src".as_ref()))
 }
 
 #[cfg(test)]
@@ -88,11 +108,7 @@ mod tests {
         // File outside src should not be collected
         create_test_file(root, "lib/utils.js", "// utils");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: None,
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 3);
@@ -113,11 +129,8 @@ mod tests {
         create_test_file(root, "src/components/Button.js", "// button");
         create_test_file(root, "src/utils.js", "// utils");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: Some("index".to_string()),
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg =
+            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("index".to_string()) };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
@@ -133,11 +146,7 @@ mod tests {
         create_test_file(root, "src/file.test.js", "// test");
         create_test_file(root, "src/file.spec.ts", "// spec");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: None,
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 1);
@@ -164,11 +173,7 @@ mod tests {
         create_test_file(root, "src/file.json", "{}");
         create_test_file(root, "src/file.txt", "text");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: None,
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 8); // All JS/TS variants
@@ -186,11 +191,7 @@ mod tests {
 
         create_test_file(root, "lib/utils.js", "// utils");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: None,
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 0);
@@ -205,11 +206,8 @@ mod tests {
         create_test_file(root, "src/pages/about.js", "// about");
         create_test_file(root, "src/components/Button.js", "// button");
 
-        let cfg = CollectorConfig {
-            root: root.to_path_buf(),
-            entry_glob: Some("pages".to_string()),
-            tsconfig_paths: HashMap::new(),
-        };
+        let cfg =
+            CollectorConfig { root: root.to_path_buf(), entry_glob: Some("pages".to_string()) };
 
         let entries = collect_entries(&cfg).unwrap();
         assert_eq!(entries.len(), 2);
@@ -217,5 +215,23 @@ mod tests {
         for entry in &entries {
             assert!(entry.to_string_lossy().contains("pages"));
         }
+    }
+
+    #[test]
+    fn test_collect_entries_skips_tests_mocks_and_declarations() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        create_test_file(root, "src/file.ts", "// file");
+        create_test_file(root, "src/__tests__/file-test.ts", "// test");
+        create_test_file(root, "src/__mocks__/fs.ts", "// mock");
+        create_test_file(root, "src/types.d.ts", "// types");
+        create_test_file(root, "node_modules/pkg/src/index.js", "// dep");
+
+        let cfg = CollectorConfig { root: root.to_path_buf(), entry_glob: None };
+
+        let entries = collect_entries(&cfg).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].ends_with("src/file.ts"));
     }
 }

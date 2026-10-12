@@ -1,0 +1,50 @@
+[
+  {
+    "target": "nextjs",
+    "commit": "d8c1c1b0002db8ccb63b58095f338e8bf423fa99",
+    "check": "import-bloat",
+    "installed": false,
+    "elapsed_ms": 1071,
+    "files": 2340,
+    "violations": 366,
+    "imports_resolved": 5577,
+    "imports_total": 6281,
+    "builtins": 858
+  },
+  {
+    "target": "nextjs",
+    "commit": "d8c1c1b0002db8ccb63b58095f338e8bf423fa99",
+    "check": "import-depth",
+    "installed": false,
+    "elapsed_ms": 956,
+    "files": 2340,
+    "violations": 607,
+    "imports_resolved": 5577,
+    "imports_total": 6281,
+    "builtins": 858
+  },
+  {
+    "target": "expo",
+    "commit": "fe4a2c8e7875d56283ab314a9b4a0da6b6df159d",
+    "check": "import-bloat",
+    "installed": false,
+    "elapsed_ms": 853,
+    "files": 4656,
+    "violations": 1001,
+    "imports_resolved": 10266,
+    "imports_total": 13725,
+    "builtins": 1197
+  },
+  {
+    "target": "expo",
+    "commit": "fe4a2c8e7875d56283ab314a9b4a0da6b6df159d",
+    "check": "import-depth",
+    "installed": false,
+    "elapsed_ms": 570,
+    "files": 4656,
+    "violations": 3928,
+    "imports_resolved": 10266,
+    "imports_total": 13725,
+    "builtins": 1197
+  }
+]

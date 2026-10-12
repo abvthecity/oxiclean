@@ -11,4 +11,6 @@ pub struct Warning {
 pub struct CheckResult {
     pub warnings: Vec<Warning>,
     pub files_analyzed: usize,
+    /// How many imports resolved to files; low numbers mean the graph is incomplete
+    pub resolution: oxiclean_core::ResolutionStats,
 }

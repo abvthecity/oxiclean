@@ -3,21 +3,24 @@
 //! This crate provides shared functionality for analyzing JavaScript/TypeScript
 //! projects, including:
 //! - Parsing import statements from JS/TS files
-//! - Resolving module paths (relative, node_modules, tsconfig paths)
+//! - Resolving module paths (relative, tsconfig paths, node_modules, workspace packages)
 //! - Collecting entry files from a project
 //! - Configuration utilities (git root finding, tsconfig reading)
 
 mod collector;
 mod config;
 mod constants;
+mod jsonc;
 mod parser;
+mod project;
 mod resolver;
 mod types;
 
 // Re-export public API
 pub use collector::{CollectorConfig, collect_entries};
-pub use config::{find_git_root, read_tsconfig_paths};
+pub use config::find_git_root;
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
 pub use parser::imports_for;
-pub use resolver::resolve;
+pub use project::{Project, TsConfig, split_package_request};
+pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use types::{SpecKind, Specifier};

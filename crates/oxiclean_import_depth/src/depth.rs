@@ -2,11 +2,11 @@ use anyhow::Result;
 use dashmap::DashMap;
 use log::{debug, trace, warn};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
 };
 
-use oxiclean_core::{imports_for, resolve};
+use oxiclean_core::{Project, imports_for, resolve};
 
 /// Computes the maximum depth of the import tree starting from a given file.
 ///
@@ -15,8 +15,7 @@ use oxiclean_core::{imports_for, resolve};
 /// recomputing depths for files that have already been analyzed.
 ///
 /// # Arguments
-/// * `root` - The root directory of the project
-/// * `tsconfig_paths` - TypeScript path mappings from tsconfig.json
+/// * `project` - The project context (root, tsconfig and workspace information)
 /// * `start` - The file to start the depth analysis from
 /// * `import_cache` - Cache of parsed imports for each file
 /// * `resolve_cache` - Cache of resolved import paths
@@ -25,29 +24,19 @@ use oxiclean_core::{imports_for, resolve};
 /// # Returns
 /// The maximum depth of imports from the starting file
 pub fn compute_depth(
-    root: &Path,
-    tsconfig_paths: &HashMap<String, Vec<String>>,
+    project: &Project,
     start: &Path,
     import_cache: &DashMap<PathBuf, Vec<oxiclean_core::Specifier>>,
     resolve_cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
     depth_cache: &DashMap<PathBuf, usize>,
 ) -> Result<usize> {
     let mut visiting = HashSet::new();
-    compute_depth_internal(
-        root,
-        tsconfig_paths,
-        start,
-        import_cache,
-        resolve_cache,
-        depth_cache,
-        &mut visiting,
-    )
+    compute_depth_internal(project, start, import_cache, resolve_cache, depth_cache, &mut visiting)
 }
 
 /// Internal depth computation with cycle detection
 fn compute_depth_internal(
-    root: &Path,
-    tsconfig_paths: &HashMap<String, Vec<String>>,
+    project: &Project,
     start: &Path,
     import_cache: &DashMap<PathBuf, Vec<oxiclean_core::Specifier>>,
     resolve_cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
@@ -90,10 +79,10 @@ fn compute_depth_internal(
 
     let mut max_depth = 0;
 
-    for spec in specs {
+    for spec in specs.iter().filter(|s| s.is_static()) {
         trace!("Checking import: '{}'", spec.request);
 
-        let resolved = match resolve(root, tsconfig_paths, start, &spec.request, resolve_cache) {
+        let resolved = match resolve(project, start, &spec.request, resolve_cache) {
             Ok(Some(r)) => r,
             Ok(None) => {
                 trace!("Could not resolve import: '{}'", spec.request);
@@ -107,8 +96,7 @@ fn compute_depth_internal(
 
         // Recursively compute depth for the resolved import
         let child_depth = compute_depth_internal(
-            root,
-            tsconfig_paths,
+            project,
             &resolved,
             import_cache,
             resolve_cache,
@@ -139,8 +127,7 @@ fn compute_depth_internal(
 /// # Returns
 /// A vector of tuples containing (import_request, resolved_path, depth)
 pub fn compute_import_depths(
-    root: &Path,
-    tsconfig_paths: &HashMap<String, Vec<String>>,
+    project: &Project,
     from_file: &Path,
     import_cache: &DashMap<PathBuf, Vec<oxiclean_core::Specifier>>,
     resolve_cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
@@ -158,11 +145,10 @@ pub fn compute_import_depths(
 
     let mut results = Vec::new();
 
-    for spec in specs {
+    for spec in specs.iter().filter(|s| s.is_static()) {
         trace!("Analyzing import: '{}'", spec.request);
 
-        let resolved = match resolve(root, tsconfig_paths, from_file, &spec.request, resolve_cache)
-        {
+        let resolved = match resolve(project, from_file, &spec.request, resolve_cache) {
             Ok(Some(r)) => r,
             Ok(None) => {
                 trace!("Could not resolve import: '{}'", spec.request);
@@ -175,14 +161,7 @@ pub fn compute_import_depths(
         };
 
         // Compute depth for this resolved import (uses cycle detection internally)
-        let depth = compute_depth(
-            root,
-            tsconfig_paths,
-            &resolved,
-            import_cache,
-            resolve_cache,
-            depth_cache,
-        )?;
+        let depth = compute_depth(project, &resolved, import_cache, resolve_cache, depth_cache)?;
 
         // The depth of importing this module is 1 + its internal depth
         let import_depth = 1 + depth;
@@ -227,15 +206,9 @@ mod tests {
         let resolve_cache = DashMap::new();
         let depth_cache = DashMap::new();
 
-        let depth = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         assert_eq!(depth, 0);
     }
@@ -252,15 +225,9 @@ mod tests {
         let resolve_cache = DashMap::new();
         let depth_cache = DashMap::new();
 
-        let depth = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         assert_eq!(depth, 1); // file -> a
     }
@@ -279,15 +246,9 @@ mod tests {
         let resolve_cache = DashMap::new();
         let depth_cache = DashMap::new();
 
-        let depth = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         assert_eq!(depth, 3); // file -> a -> b -> c
     }
@@ -305,15 +266,9 @@ mod tests {
         let resolve_cache = DashMap::new();
         let depth_cache = DashMap::new();
 
-        let depth = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         // Should handle circular dependencies - depth should be finite
         assert!(depth < 10); // Should not be infinite
@@ -332,26 +287,14 @@ mod tests {
         let depth_cache = DashMap::new();
 
         // First call
-        let depth1 = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth1 =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         // Second call should use cache
-        let depth2 = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth2 =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         assert_eq!(depth1, depth2);
         assert_eq!(depth_cache.len(), 2); // file and a
@@ -372,15 +315,9 @@ mod tests {
         let resolve_cache = DashMap::new();
         let depth_cache = DashMap::new();
 
-        let depth = compute_depth(
-            root,
-            &HashMap::new(),
-            &file,
-            &import_cache,
-            &resolve_cache,
-            &depth_cache,
-        )
-        .unwrap();
+        let depth =
+            compute_depth(&Project::new(root), &file, &import_cache, &resolve_cache, &depth_cache)
+                .unwrap();
 
         // Should return max depth (through b -> c = 2)
         assert_eq!(depth, 2);
@@ -401,8 +338,7 @@ mod tests {
         let depth_cache = DashMap::new();
 
         let depths = compute_import_depths(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &file,
             &import_cache,
             &resolve_cache,
@@ -432,8 +368,7 @@ mod tests {
         let depth_cache = DashMap::new();
 
         let depths = compute_import_depths(
-            root,
-            &HashMap::new(),
+            &Project::new(root),
             &file,
             &import_cache,
             &resolve_cache,

@@ -35,6 +35,7 @@ just test      # Run tests
 just lint      # Run clippy
 just fmt       # Format code
 just ci        # Run all checks
+just bench     # Run against pinned Next.js and Expo checkouts (see bench/README.md)
 
 # Show all commands
 just
@@ -150,6 +151,24 @@ Both tools fully support TypeScript path aliases defined in `tsconfig.json`:
 ```
 
 Imports like `import { foo } from '@/utils'` are correctly resolved and analyzed.
+Each file uses the aliases of its nearest `tsconfig.json` (following `extends`),
+so packages in a monorepo can define the same alias differently.
+
+## Monorepos
+
+Workspace packages declared in `pnpm-workspace.yaml` or the root `package.json`
+`workspaces` field resolve to their source files, even before `node_modules`
+is installed. When a package's `main` or `exports` points at build output that
+doesn't exist yet (for example `build/index.js`), the matching file under
+`src/` is used instead.
+
+## What counts as an import
+
+Static `import`, re-exports (`export * from`, `export { x } from`), `require()`
+calls anywhere in a file, and TypeScript `import x = require()` are followed.
+Type-only imports and exports are ignored. Dynamic `import()` is not followed,
+because it loads the module as a separate chunk, which is the usual fix for
+bloat. Node.js built-ins such as `fs` or `node:path` are skipped.
 
 ## License
 

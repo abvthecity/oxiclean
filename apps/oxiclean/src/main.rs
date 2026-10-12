@@ -56,13 +56,12 @@ fn main() -> Result<()> {
                     cfg.threshold,
                 )?;
 
-                writeln!(
-                    stdout,
-                    "\n{} Finished in {}ms on {} files (using {} threads).",
-                    "●".bright_blue(),
-                    elapsed_ms.to_string().cyan(),
-                    result.files_analyzed.to_string().cyan(),
-                    num_threads.to_string().cyan()
+                print_finished(
+                    &mut stdout,
+                    elapsed_ms,
+                    result.files_analyzed,
+                    &result.resolution,
+                    num_threads,
                 )?;
                 stdout.flush()?;
 
@@ -71,13 +70,12 @@ fn main() -> Result<()> {
             } else {
                 info!("No bloat detected");
                 oxiclean_import_bloat::print_no_bloat_message(&mut stdout, cfg.threshold)?;
-                writeln!(
-                    stdout,
-                    "\n{} Finished in {}ms on {} files (using {} threads).",
-                    "●".bright_blue(),
-                    elapsed_ms.to_string().cyan(),
-                    result.files_analyzed.to_string().cyan(),
-                    num_threads.to_string().cyan()
+                print_finished(
+                    &mut stdout,
+                    elapsed_ms,
+                    result.files_analyzed,
+                    &result.resolution,
+                    num_threads,
                 )?;
                 stdout.flush()?;
             }
@@ -105,13 +103,12 @@ fn main() -> Result<()> {
                     cfg.threshold,
                 )?;
 
-                writeln!(
-                    stdout,
-                    "\n{} Finished in {}ms on {} files (using {} threads).",
-                    "●".bright_blue(),
-                    elapsed_ms.to_string().cyan(),
-                    result.files_analyzed.to_string().cyan(),
-                    num_threads.to_string().cyan()
+                print_finished(
+                    &mut stdout,
+                    elapsed_ms,
+                    result.files_analyzed,
+                    &result.resolution,
+                    num_threads,
                 )?;
                 stdout.flush()?;
 
@@ -120,13 +117,12 @@ fn main() -> Result<()> {
             } else {
                 info!("No depth issues detected");
                 oxiclean_import_depth::print_no_depth_issues_message(&mut stdout, cfg.threshold)?;
-                writeln!(
-                    stdout,
-                    "\n{} Finished in {}ms on {} files (using {} threads).",
-                    "●".bright_blue(),
-                    elapsed_ms.to_string().cyan(),
-                    result.files_analyzed.to_string().cyan(),
-                    num_threads.to_string().cyan()
+                print_finished(
+                    &mut stdout,
+                    elapsed_ms,
+                    result.files_analyzed,
+                    &result.resolution,
+                    num_threads,
                 )?;
                 stdout.flush()?;
             }
@@ -134,4 +130,31 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn print_finished(
+    out: &mut impl Write,
+    elapsed_ms: u128,
+    files_analyzed: usize,
+    resolution: &oxiclean_core::ResolutionStats,
+    num_threads: usize,
+) -> Result<()> {
+    writeln!(
+        out,
+        "\n{} Finished in {}ms on {} files (using {} threads).",
+        "●".bright_blue(),
+        elapsed_ms.to_string().cyan(),
+        files_analyzed.to_string().cyan(),
+        num_threads.to_string().cyan()
+    )?;
+    writeln!(
+        out,
+        "{} Resolved {} of {} imports ({}%), {} built-ins skipped.",
+        "●".bright_blue(),
+        resolution.resolved.to_string().cyan(),
+        (resolution.resolved + resolution.unresolved).to_string().cyan(),
+        format!("{:.1}", resolution.resolved_percent()).cyan(),
+        resolution.builtin.to_string().cyan()
+    )?;
+    Ok(())
 }

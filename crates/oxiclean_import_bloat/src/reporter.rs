@@ -175,8 +175,7 @@ pub fn print_warnings_tree<W: Write>(
         // Sort warnings within this file by module count (descending)
         let mut sorted_file_warnings: Vec<_> =
             file_warnings.iter().filter(|w| !w.import_statement.contains("Entry file")).collect();
-        sorted_file_warnings
-            .sort_by(|a, b| b.reachable_unique_modules.cmp(&a.reachable_unique_modules));
+        sorted_file_warnings.sort_by_key(|w| std::cmp::Reverse(w.reachable_unique_modules));
 
         for (idx, warning) in sorted_file_warnings.iter().enumerate() {
             let is_last = idx == sorted_file_warnings.len() - 1;
@@ -224,7 +223,7 @@ fn print_summary<W: Write>(writer: &mut W, warnings: &[Warning], cfg: &Config) -
 
     // Get top 5 offenders (sorted by module count, descending)
     let mut top_offenders: Vec<_> = violations.iter().collect();
-    top_offenders.sort_by(|a, b| b.reachable_unique_modules.cmp(&a.reachable_unique_modules));
+    top_offenders.sort_by_key(|w| std::cmp::Reverse(w.reachable_unique_modules));
     top_offenders.truncate(5);
 
     writeln!(writer, "{}", "─".repeat(60).dimmed())?;

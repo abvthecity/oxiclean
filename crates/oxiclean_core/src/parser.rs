@@ -3,6 +3,7 @@ use dashmap::DashMap;
 use log::{debug, trace};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
+use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{Parser as OxcParser, ParserReturn};
 use oxc_span::SourceType;
 use std::{
@@ -10,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::constants::JS_TS_EXTENSIONS;
 use crate::types::{SpecKind, Specifier};
 
 pub fn imports_for(
@@ -21,6 +23,15 @@ pub fn imports_for(
         trace!("Cache hit for imports: {}", file.display());
         return Ok(v.clone());
     }
+
+    // Assets such as `.css` or `.json` are leaves of the graph
+    let is_js =
+        file.extension().and_then(|e| e.to_str()).is_some_and(|e| JS_TS_EXTENSIONS.contains(&e));
+    if !is_js {
+        cache.insert(file_buf, Vec::new());
+        return Ok(Vec::new());
+    }
+
     trace!("Parsing file for imports: {}", file.display());
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
@@ -29,114 +40,100 @@ pub fn imports_for(
     let allocator = Allocator::default();
     let ParserReturn { program, .. } = OxcParser::new(&allocator, &src, st).parse();
 
-    let mut specs: Vec<Specifier> = Vec::new();
-
-    for stmt in &program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                // Skip type-only imports (import type { Foo } from 'bar')
-                if decl.import_kind.is_type() {
-                    trace!("Skipping type-only import declaration in {}", file.display());
-                    continue;
-                }
-
-                // Check if all specifiers are type-only (import { type Foo } from 'bar')
-                // If there's at least one non-type import, we should include it
-                let has_runtime_import = if let Some(specifiers) = &decl.specifiers {
-                    specifiers.iter().any(|spec| match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) => !s.import_kind.is_type(),
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => true,
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => true,
-                    })
-                } else {
-                    // No specifiers means something like: import 'side-effect'
-                    true
-                };
-
-                if has_runtime_import {
-                    let req = decl.source.value.to_string();
-                    trace!("Found static import: '{}' in {}", req, file.display());
-                    specs.push(Specifier { request: req, kind: SpecKind::Static });
-                }
-            }
-            Statement::ExpressionStatement(es) => {
-                // Recursively extract all require() and import() calls
-                extract_require_from_expression(&es.expression, &mut specs);
-            }
-            Statement::VariableDeclaration(vd) => {
-                // Handle const x = require('...') or const x = someFunc(require('...'))
-                for decl in &vd.declarations {
-                    if let Some(init) = &decl.init {
-                        extract_require_from_expression(init, &mut specs);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    let mut collector = ImportCollector::default();
+    collector.visit_program(&program);
+    let specs = collector.specs;
 
     debug!("Found {} import specifiers in {}", specs.len(), file.display());
     cache.insert(file_buf, specs.clone());
     Ok(specs)
 }
 
-fn extract_require_from_expression(expr: &Expression, specs: &mut Vec<Specifier>) {
-    match expr {
-        Expression::CallExpression(ce) => {
-            // Check if this is a require() call
-            if let Expression::Identifier(callee_ident) = &ce.callee
-                && callee_ident.name.as_str() == "require"
-                && !ce.arguments.is_empty()
-                && let Some(Expression::StringLiteral(sl)) = ce.arguments[0].as_expression()
-            {
-                trace!("Found require() call: '{}'", sl.value);
-                specs.push(Specifier { request: sl.value.to_string(), kind: SpecKind::Static });
-            }
-            // Recursively check arguments for nested require() calls
-            for arg in &ce.arguments {
-                if let Some(arg_expr) = arg.as_expression() {
-                    extract_require_from_expression(arg_expr, specs);
-                }
-            }
-            // Also check the callee in case it's a complex expression
-            extract_require_from_expression(&ce.callee, specs);
+/// Walks the whole AST collecting module requests, including re-exports and
+/// `require()`/`import()` calls nested inside functions or conditionals.
+#[derive(Default)]
+struct ImportCollector {
+    specs: Vec<Specifier>,
+}
+
+impl ImportCollector {
+    fn push(&mut self, request: &str, kind: SpecKind) {
+        trace!("Found {:?} import: '{}'", kind, request);
+        self.specs.push(Specifier { request: request.to_string(), kind });
+    }
+}
+
+impl<'a> Visit<'a> for ImportCollector {
+    fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
+        // Skip type-only imports (import type { Foo } from 'bar')
+        if decl.import_kind.is_type() {
+            return;
         }
-        Expression::ImportExpression(ie) => {
-            if let Expression::StringLiteral(sl) = &ie.source {
-                trace!("Found dynamic import(): '{}'", sl.value);
-                specs.push(Specifier { request: sl.value.to_string(), kind: SpecKind::Dynamic });
-            }
-        }
-        // Handle other expression types that might contain nested expressions
-        Expression::ArrayExpression(ae) => {
-            for elem in &ae.elements {
-                if let Some(expr) = elem.as_expression() {
-                    extract_require_from_expression(expr, specs);
-                }
-            }
-        }
-        Expression::ObjectExpression(oe) => {
-            for prop in &oe.properties {
-                if let Some(expr) = prop.as_property() {
-                    extract_require_from_expression(&expr.value, specs);
-                }
-            }
-        }
-        Expression::ConditionalExpression(ce) => {
-            extract_require_from_expression(&ce.test, specs);
-            extract_require_from_expression(&ce.consequent, specs);
-            extract_require_from_expression(&ce.alternate, specs);
-        }
-        Expression::AssignmentExpression(ae) => {
-            extract_require_from_expression(&ae.right, specs);
-        }
-        Expression::ParenthesizedExpression(pe) => {
-            extract_require_from_expression(&pe.expression, specs);
-        }
-        _ => {
-            // For other expression types, we don't recurse further
+        // Skip `import { type Foo } from 'bar'` when every specifier is a type.
+        // No specifiers means a side-effect import: `import 'polyfill'`.
+        let has_runtime_import = decl.specifiers.as_ref().is_none_or(|specifiers| {
+            specifiers.is_empty()
+                || specifiers.iter().any(|spec| match spec {
+                    ImportDeclarationSpecifier::ImportSpecifier(s) => !s.import_kind.is_type(),
+                    _ => true,
+                })
+        });
+        if has_runtime_import {
+            self.push(&decl.source.value, SpecKind::Static);
         }
     }
+
+    fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
+        if !decl.export_kind.is_type() {
+            self.push(&decl.source.value, SpecKind::Static);
+        }
+    }
+
+    fn visit_export_named_declaration(&mut self, decl: &ExportNamedDeclaration<'a>) {
+        if let Some(source) = &decl.source {
+            let has_runtime_export = !decl.export_kind.is_type()
+                && (decl.specifiers.is_empty()
+                    || decl.specifiers.iter().any(|s| !s.export_kind.is_type()));
+            if has_runtime_export {
+                self.push(&source.value, SpecKind::Static);
+            }
+        }
+        walk::walk_export_named_declaration(self, decl);
+    }
+
+    fn visit_ts_import_equals_declaration(&mut self, decl: &TSImportEqualsDeclaration<'a>) {
+        // import x = require('y')
+        if !decl.import_kind.is_type()
+            && let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
+        {
+            self.push(&ext.expression.value, SpecKind::Static);
+        }
+    }
+
+    fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
+        if let Expression::StringLiteral(sl) = &expr.source {
+            self.push(&sl.value, SpecKind::Dynamic);
+        } else if let Expression::TemplateLiteral(tl) = &expr.source
+            && let Some(quasi) = tl.single_quasi()
+        {
+            self.push(&quasi, SpecKind::Dynamic);
+        }
+        walk::walk_import_expression(self, expr);
+    }
+
+    fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        if let Expression::Identifier(callee) = &call.callee
+            && callee.name == "require"
+            && call.arguments.len() == 1
+            && let Some(Expression::StringLiteral(sl)) = call.arguments[0].as_expression()
+        {
+            self.push(&sl.value, SpecKind::Static);
+        }
+        walk::walk_call_expression(self, call);
+    }
+
+    // `declare module 'x' { import ... }` blocks describe types, not runtime edges
+    fn visit_ts_module_declaration(&mut self, _decl: &TSModuleDeclaration<'a>) {}
 }
 
 fn source_type_for(path: &Path) -> SourceType {
@@ -390,5 +387,73 @@ mod tests {
         let imports = imports_for(&file, &cache).unwrap();
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].request, "react");
+    }
+
+    #[test]
+    fn test_reexports_are_imports() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(
+            temp_dir.path(),
+            "index.ts",
+            "export * from './a';\nexport * as b from './b';\nexport { c } from './c';\nexport type { T } from './types';\nexport { type U } from './types2';\nexport const local = 1;",
+        );
+        let imports = imports_for(&file, &cache).unwrap();
+        let requests: Vec<&str> = imports.iter().map(|s| s.request.as_str()).collect();
+        assert_eq!(requests, vec!["./a", "./b", "./c"]);
+        assert!(imports.iter().all(|s| s.is_static()));
+    }
+
+    #[test]
+    fn test_nested_require_and_dynamic_import() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.js",
+            "function load() { if (x) { return require('./lazy'); } }\nasync function f() { const m = await import('./chunk'); }\nexport default require('./default');",
+        );
+        let imports = imports_for(&file, &cache).unwrap();
+        let find = |r: &str| imports.iter().find(|s| s.request == r).unwrap().kind;
+        assert_eq!(imports.len(), 3);
+        assert_eq!(find("./lazy"), SpecKind::Static);
+        assert_eq!(find("./chunk"), SpecKind::Dynamic);
+        assert_eq!(find("./default"), SpecKind::Static);
+    }
+
+    #[test]
+    fn test_ts_import_equals_require() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.ts",
+            "import fs = require('fs-extra');\nimport type T = require('./types');",
+        );
+        let imports = imports_for(&file, &cache).unwrap();
+        let requests: Vec<&str> = imports.iter().map(|s| s.request.as_str()).collect();
+        assert_eq!(requests, vec!["fs-extra"]);
+    }
+
+    #[test]
+    fn test_declare_module_blocks_are_ignored() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.ts",
+            "declare module 'x' { import { Y } from 'y'; }\nimport './real';",
+        );
+        let imports = imports_for(&file, &cache).unwrap();
+        let requests: Vec<&str> = imports.iter().map(|s| s.request.as_str()).collect();
+        assert_eq!(requests, vec!["./real"]);
+    }
+
+    #[test]
+    fn test_non_js_files_are_leaves() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(temp_dir.path(), "styles.css", "@import './other.css';");
+        assert!(imports_for(&file, &cache).unwrap().is_empty());
     }
 }
