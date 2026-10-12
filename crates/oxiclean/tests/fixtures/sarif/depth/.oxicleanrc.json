@@ -1,0 +1,1 @@
+{ "entries": ["src/main.ts"], "rules": { "depth": ["error", { "threshold": 2 }] } }

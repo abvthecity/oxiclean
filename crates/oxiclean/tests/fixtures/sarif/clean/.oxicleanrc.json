@@ -1,0 +1,1 @@
+{ "rules": { "bloat": ["error", { "threshold": 100 }], "depth": ["error", { "threshold": 100 }], "cycles": "error" } }
