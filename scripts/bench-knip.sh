@@ -4,8 +4,10 @@
 #
 # Usage: scripts/bench-knip.sh [check...]
 #   check   oxiclean check to compare (default: all with a knip equivalent).
-#           Supported: cycles and duplicates, which knip names the same, and
-#           unused-exports and unused-types, which knip calls exports and types.
+#           Supported: cycles and duplicates, which knip names the same,
+#           unused-exports and unused-types, which knip calls exports and types,
+#           and unused-enum-members and unused-namespace-members, which knip
+#           calls enumMembers and namespaceMembers.
 #
 # Both tools get the same entry files, with all of knip's plugins off so
 # neither tool picks up entries the other doesn't know about:
@@ -15,7 +17,7 @@
 #   while oxiclean also reports on files outside them that the entries import.
 #   (Making every file a knip project file instead makes knip analyse files no
 #   entry reaches.)
-# - For unused exports and types, the default entries of both tools: each
+# - For unused exports, types and members, the default entries of both tools: each
 #   package's package.json `main`, `bin` and `exports` and its `index`, `main`
 #   and `cli` files, plus test files, which knip's test-runner plugins would
 #   add.
@@ -33,8 +35,9 @@
 # imports breaks, and should be 0; `ox_only` counts oxiclean cycles that share
 # no file with any knip cycle. For duplicate exports, a finding matches when
 # both tools list the same names in the same file: `knip_missed` counts knip
-# findings oxiclean lacks and `ox_only` the reverse. For unused exports and
-# types, a finding is a file and a name, compared the same way.
+# findings oxiclean lacks and `ox_only` the reverse. For unused exports,
+# types and members, a finding is a file and a name (`Enum.member` for a
+# member), compared the same way.
 #
 # Needs bash 4+, GNU date, jq and Node.js (Linux).
 set -euo pipefail
@@ -49,7 +52,8 @@ KNIP_DIR=$BENCH_DIR/.knip
 OUT_DIR=$KNIP_DIR/results
 
 declare -A KNIP_TYPE=([cycles]=cycles [duplicates]=duplicates [unused-exports]=exports
-  [unused-types]=types)
+  [unused-types]=types [unused-enum-members]=enumMembers
+  [unused-namespace-members]=namespaceMembers)
 checks=("$@")
 if [[ ${#checks[@]} -eq 0 ]]; then checks=("${!KNIP_TYPE[@]}"); fi
 for check in "${checks[@]}"; do
@@ -140,19 +144,24 @@ compare_duplicates() {
     | "\($od | length) \($kd | length) \($kd - $od | length) \($od - $kd | length)"'
 }
 
-# Prints: our unused exports (or types), knip's, knip's that we lack, and ours
-# that knip lacks. A finding is a file and a name.
+# Prints: our unused exports (or types, or members), knip's, knip's that we
+# lack, and ours that knip lacks. A finding is a file and a name; knip names a
+# member by its export in `namespace`.
 compare_exports() {
   local ours=$1 theirs=$2 type=${3:-exports}
   jq -rn --slurpfile o "$ours" --slurpfile k "$theirs" --arg type "$type" '
     ($o[0].findings | map({file, name}) | unique) as $ou
-    | ($k[0].issues | map(.file as $f | (.[$type] // [])[] | {file: $f, name}) | unique) as $ku
+    | ($k[0].issues | map(.file as $f | (.[$type] // [])[]
+        | {file: $f, name: (if .namespace then "\(.namespace).\(.name)" else .name end)})
+      | unique) as $ku
     | "\($ou | length) \($ku | length) \($ku - $ou | length) \($ou - $ku | length)"'
 }
 
 compare_types() { compare_exports "$1" "$2" types; }
+compare_enumMembers() { compare_exports "$1" "$2" enumMembers; }
+compare_namespaceMembers() { compare_exports "$1" "$2" namespaceMembers; }
 
-printf '\n%-10s %-17s %10s %10s %7s %7s %12s %9s\n' \
+printf '\n%-10s %-25s %10s %10s %7s %7s %12s %9s\n' \
   target check oxiclean knip ox knip knip_missed ox_only
 while IFS=$'\t' read -r name _ sha; do
   [[ -z $name || $name == \#* ]] && continue
@@ -170,16 +179,16 @@ while IFS=$'\t' read -r name _ sha; do
     # No .oxicleanrc.json in the targets, so oxiclean runs with its defaults.
     ox_ms=$(best_time "$dir" "$ours" env NO_COLOR=1 "$BIN" "$check" --root . --format json)
     config=$CONFIG
-    if [[ $type == exports || $type == types ]]; then config=$EXPORTS_CONFIG; fi
+    if [[ $type != cycles && $type != duplicates ]]; then config=$EXPORTS_CONFIG; fi
     knip_ms=$(best_time "$dir" "$theirs" "$KNIP" --config "$config" --include "$type" \
       --reporter json --no-progress --no-exit-code --no-config-hints)
     if [[ $ox_ms == FAIL || $knip_ms == FAIL ]]; then
-      printf '%-10s %-17s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \
+      printf '%-10s %-25s %10s %10s   failed; see %s.err\n' "$name" "$check" "$ox_ms" "$knip_ms" \
         "$([[ $ox_ms == FAIL ]] && echo "$ours" || echo "$theirs")"
       continue
     fi
     read -r oc kc missed only < <("compare_${type}" "$ours" "$theirs")
-    printf '%-10s %-17s %8sms %8sms %7s %7s %12s %9s\n' \
+    printf '%-10s %-25s %8sms %8sms %7s %7s %12s %9s\n' \
       "$name" "$check" "$ox_ms" "$knip_ms" "$oc" "$kc" "$missed" "$only"
   done
 done < bench/targets.tsv

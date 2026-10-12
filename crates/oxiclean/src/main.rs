@@ -46,6 +46,12 @@ enum Commands {
     /// Check for exported types, interfaces and enums that no other file imports
     #[command(name = "unused-types")]
     UnusedTypes(oxiclean_unused_exports::Config),
+    /// Check for members of used enums that nothing uses
+    #[command(name = "unused-enum-members")]
+    UnusedEnumMembers(oxiclean_unused_exports::Config),
+    /// Check for what used namespaces export that nothing uses
+    #[command(name = "unused-namespace-members")]
+    UnusedNamespaceMembers(oxiclean_unused_exports::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -84,6 +90,16 @@ fn main() -> Result<ExitCode> {
             oxiclean_unused_exports::run_unused_types_check(cfg)?,
             oxiclean_unused_exports::UNUSED_TYPES_STYLE,
             oxiclean_unused_exports::UNUSED_TYPES_RULE,
+        ),
+        Commands::UnusedEnumMembers(cfg) => (
+            oxiclean_unused_exports::run_unused_enum_members_check(cfg)?,
+            oxiclean_unused_exports::UNUSED_ENUM_MEMBERS_STYLE,
+            oxiclean_unused_exports::UNUSED_ENUM_MEMBERS_RULE,
+        ),
+        Commands::UnusedNamespaceMembers(cfg) => (
+            oxiclean_unused_exports::run_unused_namespace_members_check(cfg)?,
+            oxiclean_unused_exports::UNUSED_NAMESPACE_MEMBERS_STYLE,
+            oxiclean_unused_exports::UNUSED_NAMESPACE_MEMBERS_RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();

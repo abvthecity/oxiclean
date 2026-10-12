@@ -18,6 +18,7 @@ mod error;
 mod exports;
 mod graph;
 mod jsonc;
+mod members;
 mod parser;
 mod project;
 pub mod report;
@@ -37,6 +38,7 @@ pub use exports::{Export, ExportForm, ExportKind, Forwarded};
 pub use graph::{
     BuildOptions, Cycle, Edge, Module, ModuleGraph, ModuleId, ParseFailure, ParsedFile, RawImport,
 };
+pub use members::ExportMember;
 pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{

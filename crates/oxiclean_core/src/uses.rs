@@ -4,6 +4,11 @@
 //! export whether or not the binding is referenced, type-only imports count
 //! like any other, and a namespace import uses the members accessed on it,
 //! or every export once the namespace is used as a whole.
+//!
+//! Members read on an imported binding, as `E.a` or `N.a.b`, are recorded as
+//! paths for the checks of enum and namespace members, and so are reads of
+//! every member at once: `E[key]`, `Object.keys(E)`, the type `E` and
+//! `typeof E`. As in knip, passing `E` around uses none of its members.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,8 +18,8 @@ use oxc_ast::ast::{
     ExpressionStatement, IdentifierReference, ImportDeclarationSpecifier, ImportExpression,
     JSXMemberExpression, JSXMemberExpressionObject, ObjectPattern, Program, Statement,
     StaticMemberExpression, TSInterfaceDeclaration, TSInterfaceHeritage, TSModuleDeclaration,
-    TSModuleDeclarationName, TSModuleReference, TSQualifiedName, TSTypeName, TSTypeReference,
-    VariableDeclarator,
+    TSModuleDeclarationName, TSModuleReference, TSQualifiedName, TSTypeName, TSTypeQuery,
+    TSTypeQueryExprName, TSTypeReference, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 
@@ -26,8 +31,12 @@ pub enum Used {
     Name(String),
     /// A member of an export, as `x.a` on `import { x } from './m'`: the
     /// export `x` is used, and when `x` is a namespace re-exported from
-    /// another module, only its member `a` there.
-    Member { name: String, member: String },
+    /// another module, only its member `a` there. `member` is the path
+    /// read, so `x.a.b` uses `["a", "b"]`.
+    Member { name: String, member: Vec<String> },
+    /// An export and every one of its members: `E[key]`, `Object.keys(E)`,
+    /// `const e = E`, the type `E` or `typeof E`.
+    Whole(String),
     /// Every export: a namespace used as a whole, or a dynamic `import()`
     /// whose result isn't destructured.
     All,
@@ -56,6 +65,23 @@ pub struct ModuleUses {
     /// Modules whose exports, except `default`, the module re-exports with
     /// `export * from`.
     pub reexport_all: Vec<String>,
+}
+
+/// Member paths in the order first read, without duplicates.
+#[derive(Default)]
+struct Paths {
+    list: Vec<Vec<String>>,
+    seen: HashSet<Vec<String>>,
+}
+
+impl Paths {
+    fn insert(&mut self, path: &[&str]) {
+        let path: Vec<String> = path.iter().map(|p| (*p).to_string()).collect();
+        if !self.seen.contains(&path) {
+            self.seen.insert(path.clone());
+            self.list.push(path);
+        }
+    }
 }
 
 /// An imported binding at the top level, or a local holding an awaited
@@ -87,8 +113,11 @@ struct Collector {
     refs: HashMap<String, usize>,
     /// Namespaces used as a whole.
     opaque: HashSet<String>,
-    /// Members used on each namespace.
-    members: HashMap<String, Vec<String>>,
+    /// Member paths read on each binding, as `[a]` or `[a, b]`.
+    members: HashMap<String, Paths>,
+    /// Paths on each binding whose every member is read, empty for the
+    /// binding itself.
+    whole: HashMap<String, Paths>,
     usages: Vec<Usage>,
     seen: HashSet<Usage>,
     reexport_all: Vec<String>,
@@ -127,11 +156,27 @@ impl Collector {
         self.bindings.contains_key(name)
     }
 
-    fn member(&mut self, ns: &str, member: &str) {
-        let members = self.members.entry(ns.to_string()).or_default();
-        if !members.iter().any(|m| m == member) {
-            members.push(member.to_string());
+    fn is_namespace(&self, name: &str) -> bool {
+        self.bindings.get(name).is_some_and(|b| b.name.is_none())
+    }
+
+    /// Records a read of `path` on the binding `local`.
+    fn member(&mut self, local: &str, path: &[&str]) {
+        *self.refs.entry(local.to_string()).or_default() += 1;
+        self.members.entry(local.to_string()).or_default().insert(path);
+    }
+
+    /// Records `E[key]`, `Object.keys(E)` and the like on a member chain: a
+    /// read of every member below it. `false`, recording nothing, when the
+    /// chain doesn't start from an import, or is a namespace import itself,
+    /// which is used as a whole like any other reference to it.
+    fn record_whole(&mut self, root: &IdentifierReference<'_>, path: &[&str]) -> bool {
+        if !self.is_bound(&root.name) || (path.is_empty() && self.is_namespace(&root.name)) {
+            return false;
         }
+        *self.refs.entry(root.name.to_string()).or_default() += 1;
+        self.whole.entry(root.name.to_string()).or_default().insert(path);
+        true
     }
 
     /// Records the bindings and re-exports of a top-level statement.
@@ -187,29 +232,43 @@ impl Collector {
             if self.reexported.contains(local) && self.refs.get(local).is_none_or(|&n| n == 0) {
                 continue;
             }
-            let members = self.members.get(local).filter(|_| !self.opaque.contains(local));
+            let opaque = self.opaque.contains(local);
+            let members = self.members.get(local).map_or(&[][..], |p| p.list.as_slice());
+            let whole = self.whole.get(local).map_or(&[][..], |p| p.list.as_slice());
+            let mut add = |used| usages.push(Usage { request: b.request.clone(), used });
             match &b.name {
                 // `x.a` on an imported `x` uses member `a` of that export,
-                // which matters when it is a namespace re-exported as `x`.
-                Some(name) if members.is_some() => {
-                    for m in members.into_iter().flatten() {
-                        usages.push(Usage {
-                            request: b.request.clone(),
-                            used: Used::Member { name: name.clone(), member: m.clone() },
-                        });
+                // which matters when it is a namespace re-exported as `x`,
+                // or an enum or namespace whose members are checked.
+                Some(name) => {
+                    // A deeper path read as a whole, as `x.a[key]`, counts
+                    // for all of `x`.
+                    if !whole.is_empty() {
+                        add(Used::Whole(name.clone()));
+                    }
+                    for m in members {
+                        add(Used::Member { name: name.clone(), member: m.clone() });
+                    }
+                    if opaque || (members.is_empty() && whole.is_empty()) {
+                        add(Used::Name(name.clone()));
                     }
                 }
-                Some(name) => usages
-                    .push(Usage { request: b.request.clone(), used: Used::Name(name.clone()) }),
-                None if self.opaque.contains(local) => {
-                    usages.push(Usage { request: b.request.clone(), used: Used::All });
-                }
+                None if opaque => add(Used::All),
+                // `ns.x.a` reads member `a` of the export `x`.
                 None => {
-                    for m in self.members.get(local).into_iter().flatten() {
-                        usages.push(Usage {
-                            request: b.request.clone(),
-                            used: Used::Name(m.clone()),
-                        });
+                    for m in members {
+                        match m.split_first() {
+                            Some((name, [])) => add(Used::Name(name.clone())),
+                            Some((name, member)) => {
+                                add(Used::Member { name: name.clone(), member: member.to_vec() })
+                            }
+                            None => {}
+                        }
+                    }
+                    for w in whole {
+                        if let Some(name) = w.first() {
+                            add(Used::Whole(name.clone()));
+                        }
                     }
                 }
             }
@@ -263,6 +322,68 @@ pub(crate) fn resolve_request<'a>(call: &'a CallExpression<'_>) -> Option<&'a st
         Some(Argument::StringLiteral(s)) if is_resolver => Some(s.value.as_str()),
         _ => None,
     }
+}
+
+/// The key of `obj[key]` when it names a member: a string that doesn't read
+/// as a number. Any other key may read any member, as `E[code]`, or reads
+/// the reverse mapping of a numeric enum, as `E[3]` or `E['3']`.
+pub(crate) fn member_key<'b>(key: &'b Expression<'_>) -> Option<&'b str> {
+    match key {
+        Expression::StringLiteral(s) if !is_numeric(&s.value) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// Whether JavaScript reads `key` as a number: `Number(key)` is finite and
+/// prints back as `key`, so `'2000'` does but `'0x10'` and `'1e3'` don't.
+fn is_numeric(key: &str) -> bool {
+    key.parse::<f64>().is_ok_and(|n| n.is_finite() && n.to_string() == key)
+}
+
+/// `a.b.c`, or `a['b'].c` with a member key: the identifier it starts from
+/// and the names after it. `a` alone is `a` with no names.
+pub(crate) fn member_chain<'b, 'a>(
+    expr: &'b Expression<'a>,
+) -> Option<(&'b IdentifierReference<'a>, Vec<&'b str>)> {
+    match expr {
+        Expression::Identifier(id) => Some((id, Vec::new())),
+        Expression::StaticMemberExpression(m) => {
+            let (root, mut path) = member_chain(&m.object)?;
+            path.push(m.property.name.as_str());
+            Some((root, path))
+        }
+        Expression::ComputedMemberExpression(m) => {
+            let key = member_key(&m.expression)?;
+            let (root, mut path) = member_chain(&m.object)?;
+            path.push(key);
+            Some((root, path))
+        }
+        _ => None,
+    }
+}
+
+/// `A.b.c` in a type: the identifier it starts from and the names after it.
+pub(crate) fn qualified_chain<'b, 'a>(
+    name: &'b TSQualifiedName<'a>,
+) -> Option<(&'b IdentifierReference<'a>, Vec<&'b str>)> {
+    let (root, mut path) = match &name.left {
+        TSTypeName::IdentifierReference(id) => (&**id, Vec::new()),
+        TSTypeName::QualifiedName(inner) => qualified_chain(inner)?,
+        TSTypeName::ThisExpression(_) => return None,
+    };
+    path.push(name.right.name.as_str());
+    Some((root, path))
+}
+
+/// Whether `call` lists every key of its arguments: `Object.keys`,
+/// `Object.values`, `Object.entries` or `Object.getOwnPropertyNames`.
+pub(crate) fn enumerates(call: &CallExpression<'_>) -> bool {
+    let Expression::StaticMemberExpression(callee) = &call.callee else { return false };
+    matches!(&callee.object, Expression::Identifier(id) if id.name == "Object")
+        && matches!(
+            callee.property.name.as_str(),
+            "keys" | "values" | "entries" | "getOwnPropertyNames"
+        )
 }
 
 /// The `import()` an arrow's body returns: `import('m')` or
@@ -335,45 +456,76 @@ impl<'a> Visit<'a> for Collector {
     }
 
     fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
-        if let Expression::Identifier(obj) = &it.object
-            && self.is_bound(&obj.name)
+        if let Some((root, mut path)) = member_chain(&it.object)
+            && self.is_bound(&root.name)
         {
-            *self.refs.entry(obj.name.to_string()).or_default() += 1;
-            self.member(&obj.name, &it.property.name);
+            path.push(&it.property.name);
+            self.member(&root.name, &path);
             return;
         }
         walk::walk_static_member_expression(self, it);
     }
 
     fn visit_computed_member_expression(&mut self, it: &ComputedMemberExpression<'a>) {
-        if let (Expression::Identifier(obj), Expression::StringLiteral(key)) =
-            (&it.object, &it.expression)
-            && self.is_bound(&obj.name)
+        if let Some((root, mut path)) = member_chain(&it.object)
+            && self.is_bound(&root.name)
         {
-            *self.refs.entry(obj.name.to_string()).or_default() += 1;
-            self.member(&obj.name, &key.value);
-            return;
+            match member_key(&it.expression) {
+                Some(key) => {
+                    path.push(key);
+                    self.member(&root.name, &path);
+                    return;
+                }
+                // `E[code]` may read any member.
+                None if self.record_whole(root, &path) => {
+                    return self.visit_expression(&it.expression);
+                }
+                None => {}
+            }
         }
         walk::walk_computed_member_expression(self, it);
     }
 
     fn visit_ts_qualified_name(&mut self, it: &TSQualifiedName<'a>) {
-        if let TSTypeName::IdentifierReference(left) = &it.left
-            && self.is_bound(&left.name)
+        if let Some((root, path)) = qualified_chain(it)
+            && self.is_bound(&root.name)
         {
-            *self.refs.entry(left.name.to_string()).or_default() += 1;
-            self.member(&left.name, &it.right.name);
+            self.member(&root.name, &path);
             return;
         }
         walk::walk_ts_qualified_name(self, it);
+    }
+
+    // The type `E` stands for any of its members.
+    fn visit_ts_type_reference(&mut self, it: &TSTypeReference<'a>) {
+        if let TSTypeName::IdentifierReference(id) = &it.type_name
+            && self.record_whole(id, &[])
+        {
+            if let Some(args) = &it.type_arguments {
+                self.visit_ts_type_parameter_instantiation(args);
+            }
+            return;
+        }
+        walk::walk_ts_type_reference(self, it);
+    }
+
+    fn visit_ts_type_query(&mut self, it: &TSTypeQuery<'a>) {
+        if let TSTypeQueryExprName::IdentifierReference(id) = &it.expr_name
+            && self.record_whole(id, &[])
+        {
+            if let Some(args) = &it.type_arguments {
+                self.visit_ts_type_parameter_instantiation(args);
+            }
+            return;
+        }
+        walk::walk_ts_type_query(self, it);
     }
 
     fn visit_jsx_member_expression(&mut self, it: &JSXMemberExpression<'a>) {
         if let JSXMemberExpressionObject::IdentifierReference(obj) = &it.object
             && self.is_bound(&obj.name)
         {
-            *self.refs.entry(obj.name.to_string()).or_default() += 1;
-            self.member(&obj.name, &it.property.name);
+            self.member(&obj.name, &[&it.property.name]);
             return;
         }
         walk::walk_jsx_member_expression(self, it);
@@ -392,10 +544,13 @@ impl<'a> Visit<'a> for Collector {
             // `const { a } = ns`
             Expression::Identifier(ns) if self.is_bound(&ns.name) => {
                 if let Some(names) = names {
-                    *self.refs.entry(ns.name.to_string()).or_default() += 1;
                     for n in names {
-                        self.member(&ns.name, &n);
+                        self.member(&ns.name, &[&n]);
                     }
+                    return self.visit_binding_pattern(&it.id);
+                }
+                // `const e = E` may read any member through `e`.
+                if it.id.kind.is_binding_identifier() && self.record_whole(ns, &[]) {
                     return self.visit_binding_pattern(&it.id);
                 }
             }
@@ -454,6 +609,19 @@ impl<'a> Visit<'a> for Collector {
         }
         if let Some(request) = resolve_request(it) {
             self.use_(request, Used::All);
+            return;
+        }
+        // `Object.keys(E)` reads every member of `E`.
+        if enumerates(it) {
+            for arg in &it.arguments {
+                let handled = arg
+                    .as_expression()
+                    .and_then(member_chain)
+                    .is_some_and(|(root, path)| self.record_whole(root, &path));
+                if !handled {
+                    self.visit_argument(arg);
+                }
+            }
             return;
         }
         for arg in &it.arguments {
@@ -535,7 +703,10 @@ mod tests {
                 Used::Name(n) => format!("{}:{n}", u.request),
                 Used::All => format!("{}:*", u.request),
                 Used::Loader => format!("{}:loader", u.request),
-                Used::Member { name, member } => format!("{}:{name}.{member}", u.request),
+                Used::Member { name, member } => {
+                    format!("{}:{name}.{}", u.request, member.join("."))
+                }
+                Used::Whole(n) => format!("{}:{n}!", u.request),
             })
             .collect();
         out.extend(uses.reexport_all.into_iter().map(|r| format!("*{r}")));
@@ -577,7 +748,7 @@ let t: types.T;
 const el = <ui.Button />;";
         assert_eq!(
             uses(src),
-            ["./ns:a", "./ns:b", "./ns:c", "./ns:e", "./ns:f", "./types:T", "./ui:Button"]
+            ["./ns:a", "./ns:b", "./ns:c.d", "./ns:e", "./ns:f", "./types:T", "./ui:Button"]
         );
     }
 
@@ -586,8 +757,11 @@ const el = <ui.Button />;";
         let src = "import { Color, ns, Other } from './m';
 Color.Red; ns.a(); const { b } = ns;
 Other.X; f(Other);";
-        // `Other` is also passed to a call, so it is used as a whole.
-        assert_eq!(uses(src), ["./m:Color.Red", "./m:Other", "./m:ns.a", "./m:ns.b"]);
+        // `Other` is also passed to a call, so it is used by name too.
+        assert_eq!(
+            uses(src),
+            ["./m:Color.Red", "./m:Other.X", "./m:Other", "./m:ns.a", "./m:ns.b"]
+        );
     }
 
     #[test]
@@ -616,6 +790,44 @@ declare module './events' { interface Events { created: t.Payload } }";
         assert_eq!(uses(src), ["./events:Events", "./types:Payload"]);
     }
 
+    /// Each use as above, with `request:name!` for an export used as a
+    /// whole.
+    #[test]
+    fn member_paths_and_whole_reads() {
+        let src = "import { E, N, T, A } from './m';
+import * as ns from './ns';
+E.a; E['b']; N.x.y; ns.N.z.w; let t: T.Inner.Deep;
+E[code]; A[3]; A['2000']; A['0x10'];";
+        assert_eq!(
+            uses(src),
+            [
+                "./m:A!",
+                "./m:A.0x10",
+                "./m:E!",
+                "./m:E.a",
+                "./m:E.b",
+                "./m:N.x.y",
+                "./m:T.Inner.Deep",
+                "./ns:N.z.w"
+            ]
+        );
+        for src in [
+            "import { E } from './m'; Object.keys(E);",
+            "import { E } from './m'; Object.values(E);",
+            "import { E } from './m'; const e = E;",
+            "import { E } from './m'; let e: E;",
+            "import { E } from './m'; type K = keyof typeof E;",
+            "import * as ns from './m'; Object.entries(ns.E);",
+            "import * as ns from './m'; ns.E[key];",
+        ] {
+            assert_eq!(uses(src), ["./m:E!"], "{src}");
+        }
+        // Passing `E` around uses it but none of its members, as in knip.
+        assert_eq!(uses("import { E } from './m'; f(E);"), ["./m:E"]);
+        // A namespace import enumerated is used as a whole.
+        assert_eq!(uses("import * as ns from './m'; Object.keys(ns);"), ["./m:*"]);
+    }
+
     #[test]
     fn require_bindings() {
         let src = "const lib = require('./lib'); lib.x;
@@ -642,7 +854,8 @@ async function two() { const mod = await import('./b'); mod.runB(); }";
         assert_eq!(uses("import * as ns from './ns'; export { ns };"), Vec::<String>::new());
         // ...unless also used here.
         assert_eq!(uses("import { a } from './a'; a(); export { a };"), ["./a:a"]);
-        assert_eq!(uses("import { a } from './a'; export const b = a;"), ["./a:a"]);
+        // `b` may be read like `a`, so every member of `a` is used.
+        assert_eq!(uses("import { a } from './a'; export const b = a;"), ["./a:a!"]);
     }
 
     #[test]

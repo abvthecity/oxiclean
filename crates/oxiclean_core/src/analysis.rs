@@ -125,7 +125,7 @@ impl CommonArgs {
         let graph = ModuleGraph::build(
             &entry_paths,
             |file: &Path| {
-                parse_file(file, extra.read_exports).map(|parsed| ParsedFile {
+                parse_file(file, extra.read_exports, extra.read_members).map(|parsed| ParsedFile {
                     imports: parsed
                         .specs
                         .into_iter()

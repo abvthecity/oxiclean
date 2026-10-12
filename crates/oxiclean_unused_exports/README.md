@@ -1,10 +1,13 @@
 # Unused Exports Checker
 
-Finds exports that no other file imports. It is the equivalent of knip's
-`exports` and `types` issue types, as two rules:
+Finds exports that no other file imports, and members of exported enums and
+namespaces that nothing uses. It is the equivalent of knip's `exports`,
+`types`, `enumMembers` and `namespaceMembers` issue types, as four rules:
 
 - `unused-exports`: values, functions, classes and namespaces;
-- `unused-types`: types, interfaces and enums.
+- `unused-types`: types, interfaces and enums;
+- `unused-enum-members`: keys of used enums;
+- `unused-namespace-members`: what used namespaces export.
 
 ```ts
 // src/button.ts
@@ -18,6 +21,8 @@ export type Size = 'sm' | 'lg';   // reported by unused-types
 ```bash
 oxiclean unused-exports --root ./my-project
 oxiclean unused-types --root ./my-project
+oxiclean unused-enum-members --root ./my-project
+oxiclean unused-namespace-members --root ./my-project
 ```
 
 ### Options
@@ -125,6 +130,62 @@ Where oxiclean differs from knip:
   default `ignoreExportsUsedInFile: false`; there is no option to change it
   yet.
 
+## Unused members
+
+`unused-enum-members` and `unused-namespace-members` check the members of
+exported enums and TypeScript namespaces that something uses. As in knip,
+only those exported where they are declared (`export enum E {}`) are
+checked, not ones exported by name (`export { E }`). An unused enum is
+reported by `unused-types`, not member by member. A namespace's
+members are what it exports; members of a nested namespace are named by
+their path, as `Fruits.Tropical.mango`. When an enum and a namespace of the
+same name merge, all their members are enum members, as in knip.
+
+```ts
+// src/lib.ts
+export enum Color { Red, Blue }   // Color.Blue is reported
+export namespace Api {
+  export const get = 1;
+  export function put() {}        // Api.put is reported
+}
+
+// src/index.ts (an entry)
+import { Color, Api } from './lib';
+console.log(Color.Red, Api.get);
+```
+
+A member is used when:
+
+- it is read on the export, in values or types, through imports, renames
+  and re-exports: `Color.Red`, `Color['Red']`, `ns.Color.Red`,
+  `let c: Color.Red`, `Fruits.Tropical.mango`. Reading a member's own
+  members uses it too;
+- it is read in its own file, by path or, inside its namespace, by name. A
+  local that shadows the export, such as a parameter called `Color`,
+  doesn't count;
+- every member is read at once: `Color[key]`, a numeric key such as
+  `Color[3]` or `Color['3']`, `Object.keys(Color)` (or `values`, `entries`,
+  `getOwnPropertyNames`), `const c = Color`, the type `Color` or
+  `typeof Color`;
+- the export is re-exported by an entry file, or its module is used as a
+  whole.
+
+Passing the export around, as in `f(Color)`, uses none of its members, as
+in knip. Members tagged `@public`, `@beta` or `@alias` are never reported,
+and neither are the members of exports with those tags.
+
+Where oxiclean differs from knip:
+
+- knip follows a local alias (`const c = Color; c.Red`) member by member;
+  oxiclean counts every member of an aliased export as used;
+- a deeper path read as a whole on a named import, as `N.Inner[key]`,
+  counts as reading all of `N`;
+- members of ambient namespaces (`declare namespace`, or any namespace in a
+  `.d.ts` file) are not checked, since everything in them is exported
+  whether or not it says so;
+- a local that shadows an imported name is only told apart in the file that
+  declares the members, as for the other checks.
+
 ## Library Usage
 
 ```rust,no_run
@@ -145,10 +206,12 @@ for f in &result.findings {
 
 The `tests/fixtures/knip-*` projects are knip's own fixtures, copied
 unchanged with its ISC license notice (`tests/fixtures/KNIP-LICENSE.md`).
-oxiclean reports the same unused exports and types on them as knip's tests
-expect. Across 82 of knip's export, type, import and re-export fixtures, 66
+oxiclean reports the same unused exports, types and members on them as
+knip's tests expect. Across 82 of knip's export, type, import and re-export fixtures, 66
 give knip's exact results; the rest are the differences above or need knip
-options oxiclean doesn't have.
+options oxiclean doesn't have. All 14 of knip's enum and namespace member
+fixtures in `types`, `namespaces`, `entry` and `re-exports` give knip's
+results with its default options.
 
 ## License
 

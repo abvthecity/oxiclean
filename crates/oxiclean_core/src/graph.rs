@@ -190,6 +190,10 @@ pub struct BuildOptions {
     /// [`Module::exports`] and [`Module::uses`]. Off by default, as only the
     /// checks of exports need them.
     pub read_exports: bool,
+    /// With [`Self::read_exports`], also read the members of exported enums
+    /// and namespaces into [`crate::Export::members`], which resolves each
+    /// file's scopes. Only the checks of members need them.
+    pub read_members: bool,
 }
 
 impl BuildOptions {
@@ -214,6 +218,12 @@ impl BuildOptions {
     #[must_use]
     pub fn read_exports(mut self, yes: bool) -> Self {
         self.read_exports = yes;
+        self
+    }
+
+    #[must_use]
+    pub fn read_members(mut self, yes: bool) -> Self {
+        self.read_members = yes;
         self
     }
 }
