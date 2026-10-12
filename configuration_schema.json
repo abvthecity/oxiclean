@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oxiclean configuration",
+  "description": "Configuration for oxiclean, read from `.oxicleanrc.json` in the project\nroot. Comments and trailing commas are allowed.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Path or URL of this JSON schema, for editor support.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "entries": {
+      "description": "Globs of entry files, relative to the root (e.g.\n\"apps/*/src/pages/**/*.tsx\"). `*` stays within one directory and `**`\ncrosses directories; a pattern without glob characters matches any path\ncontaining it. When empty, every JS/TS file inside a `src` directory is\nan entry.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "ignorePatterns": {
+      "description": "Globs of files, relative to the root, that are never entries and never\nreported.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "includeDynamic": {
+      "description": "Also follow dynamic `import()` calls. They are skipped by default\nbecause lazily loaded modules are split into separate chunks.",
+      "type": "boolean",
+      "default": false
+    },
+    "includeNodeModules": {
+      "description": "Also scan installed packages: parse files inside `node_modules` and\nfollow their imports, so a dependency counts every module it loads.\nOff by default, which counts each imported package file as a single\nmodule and keeps runs fast.",
+      "type": "boolean",
+      "default": false
+    },
+    "overrides": {
+      "description": "Settings for some workspace packages or files. Later overrides win.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Override"
+      }
+    },
+    "rules": {
+      "description": "Settings per rule. A rule that isn't listed runs with its defaults.",
+      "$ref": "#/$defs/Rules"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AllowWarnDeny": {
+      "description": "`off` (or `allow`) turns a rule off, `warn` reports without failing the\nrun, and `error` (or `deny`) fails it.",
+      "type": "string",
+      "enum": [
+        "off",
+        "allow",
+        "warn",
+        "error",
+        "deny"
+      ]
+    },
+    "Override": {
+      "description": "Rule settings for the files of some workspace packages or paths.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Globs of files, relative to the root.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "packages": {
+          "description": "Workspace package names; globs such as \"@scope/*\" are allowed.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleOptions": {
+      "description": "Options shared by every rule.",
+      "type": "object",
+      "properties": {
+        "ignorePatterns": {
+          "description": "Globs of files, relative to the root, this rule does not report on.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "threshold": {
+          "description": "Report values at or above this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleSetting": {
+      "description": "A rule's severity, optionally with options.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllowWarnDeny"
+        },
+        {
+          "type": "array",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/AllowWarnDeny"
+            },
+            {
+              "$ref": "#/$defs/RuleOptions"
+            }
+          ]
+        }
+      ]
+    },
+    "Rules": {
+      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
+      "type": "object",
+      "properties": {
+        "import-bloat": {
+          "description": "Imports and entries that pull in too many unique modules.\nDefault threshold: 300 modules.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "import-depth": {
+          "description": "Imports with too long a chain of imports below them.\nDefault threshold: 20 levels.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

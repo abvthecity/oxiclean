@@ -25,17 +25,16 @@ oxiclean <COMMAND> [OPTIONS]
 Detects excessive imports that can lead to large bundle sizes.
 
 ```bash
-# Analyze a project
-oxiclean import-bloat --root ./my-project --threshold 100
-
-# Filter entry files
-oxiclean import-bloat --entry-glob "apps/*/src/**/*.tsx"
+oxiclean import-bloat --root ./my-project
 ```
 
 **Options:**
 - `--root <PATH>` - Root directory to analyze (default: git root)
-- `--threshold <N>` - Max reachable modules before warning (default: 200)
-- `--entry-glob <PATTERN>` - Glob pattern to filter entry files
+- `-c, --config <FILE>` - Config file (default: `.oxicleanrc.json` in the root)
+- `--format <text|json|sarif>` - Output format
+
+Thresholds, entry files and everything else are set in `.oxicleanrc.json`;
+see the [main README](../../README.md#configuration).
 
 See [crates/oxiclean_import_bloat/README.md](../oxiclean_import_bloat/README.md) for details.
 

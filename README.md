@@ -9,10 +9,10 @@ A Rust monorepo for code quality and analysis tools for JavaScript/TypeScript pr
 cargo install --path crates/oxiclean
 
 # Run import bloat checker
-oxiclean import-bloat --root ./my-project --threshold 300
+oxiclean import-bloat --root ./my-project
 
 # Run import depth checker
-oxiclean import-depth --root ./my-project --threshold 20
+oxiclean import-depth --root ./my-project
 
 # Get help
 oxiclean --help
@@ -43,19 +43,17 @@ oxiclean/
 
 ## Tools
 
-Both tools accept the same options for choosing what to analyse:
+The command line only says where to look and how to print. Everything else,
+including thresholds, entry files and ignore patterns, is set in
+[`.oxicleanrc.json`](#configuration).
 
 | Option | Meaning |
 |---|---|
 | `--root <DIR>` | Project root. Defaults to the git root of the current directory. |
-| `--entry-glob <GLOB>` | Only treat files matching this glob (relative to the root) as entries, e.g. `"src/pages/**/*.tsx"`. `*` stays within one directory; `**` crosses directories. A pattern without glob characters matches any path containing it. Repeat to give several. Without it, every JS/TS file inside a `src` directory is an entry. |
-| `--include-dynamic` | Also follow dynamic `import()` calls. They are skipped by default because lazily loaded modules are split into separate chunks. |
-| `--threshold <N>` | Flag findings at or above N (default: 300 modules for `import-bloat`, 20 levels for `import-depth`). Replaces every threshold in the config file. |
-| `--package <NAME>` | Only analyse entries in this workspace package. Globs such as `"@scope/*"` work. Repeat to give several. |
-| `--config <FILE>` | Read this config file instead of `oxiclean.toml` in the root. |
+| `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-The defaults flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)); use `oxiclean.toml` to tune them per package.
+The default thresholds are 300 modules for `import-bloat` and 20 levels for `import-depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
 Both exit with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -65,8 +63,7 @@ Detects excessive imports in JavaScript/TypeScript projects that can lead to lar
 
 **Usage:**
 ```bash
-oxiclean import-bloat --root ./my-project --threshold 300
-oxiclean import-bloat --entry-glob "src/**/*.tsx" --threshold 100
+oxiclean import-bloat --root ./my-project
 ```
 
 **Example Output:**
@@ -81,7 +78,7 @@ src/pages/Dashboard.tsx (512 modules)
 **Features:**
 - Resolves Node.js modules and TypeScript path mappings
 - Follows re-exports (`export * from`) so barrel files are counted
-- Skips dynamic `import()` unless `--include-dynamic` is given
+- Skips dynamic `import()` unless `includeDynamic` is set
 - Respects `.gitignore` patterns, even outside a git repository
 - Skips test files, `node_modules` and `.d.ts` declarations
 
@@ -91,8 +88,7 @@ Detects excessive import depth in JavaScript/TypeScript projects that can lead t
 
 **Usage:**
 ```bash
-oxiclean import-depth --root ./my-project --threshold 20
-oxiclean import-depth --entry-glob "src/**/*.tsx" --threshold 15
+oxiclean import-depth --root ./my-project
 ```
 
 **Example Output:**
@@ -121,43 +117,55 @@ Both metrics provide complementary insights into code complexity.
 
 ## Configuration
 
-Put an `oxiclean.toml` in the project root to configure rules without
-repeating flags. Every key is optional.
+Put a `.oxicleanrc.json` in the project root. Its format follows oxlint's
+[`.oxlintrc.json`](https://oxc.rs/docs/guide/usage/linter/config.html):
+comments and trailing commas are allowed, each rule is set to a severity
+(`"off"`, `"warn"` or `"error"`) or to `[severity, options]`, and `overrides`
+apply settings to some files. Every key is optional.
 
-```toml
-# Files that are never entries and never reported, relative to the root
-ignore = ["**/fixtures/**", "apps/playground/**"]
-# Used when --entry-glob isn't given
-entry-globs = ["packages/*/src/**/*.{ts,tsx}"]
-include-dynamic = false
-
-[rules.import-bloat]
-threshold = 300
-severity = "error"         # "error" fails the run; "warn" only reports
-ignore = ["scripts/**"]    # files this rule doesn't report on
-
-[rules.import-depth]
-enabled = false
-
-# Settings for some workspace packages or paths. Overrides apply in order, so
-# later ones win. `packages` matches package names (globs allowed) and `files`
-# matches paths relative to the root; when both are given, a file must match both.
-[[overrides]]
-packages = ["@acme/legacy-*"]
-[overrides.rules.import-bloat]
-threshold = 1000
-severity = "warn"
-
-[[overrides]]
-packages = ["@acme/web"]
-[overrides.rules.import-depth]
-enabled = true
-threshold = 12
+```jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/abvthecity/oxiclean/main/configuration_schema.json",
+  // Files that are never entries and never reported, relative to the root
+  "ignorePatterns": ["**/fixtures/**", "apps/playground/**"],
+  // Entry files. Without this, every JS/TS file inside a `src` directory is
+  // an entry. `*` stays within one directory and `**` crosses directories.
+  "entries": ["packages/*/src/**/*.{ts,tsx}"],
+  // Also follow dynamic import() calls
+  "includeDynamic": false,
+  // Also scan installed packages: parse files in node_modules and follow
+  // their imports. Off by default, so each imported package file counts as
+  // one module.
+  "includeNodeModules": false,
+  "rules": {
+    // "warn" reports without failing the run; "error" fails it
+    "import-bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],
+    "import-depth": "off"
+  },
+  // Later overrides win. `packages` matches workspace package names (globs
+  // allowed) and `files` matches paths relative to the root; when both are
+  // given, a file must match both.
+  "overrides": [
+    {
+      "packages": ["@acme/legacy-*"],
+      "rules": { "import-bloat": ["warn", { "threshold": 1000 }] }
+    },
+    {
+      "packages": ["@acme/web"],
+      "rules": { "import-depth": ["error", { "threshold": 12 }] }
+    }
+  ]
+}
 ```
 
 Unknown keys and rule names are errors, so a typo can't silently do nothing.
-Flags given on the command line win over the file: `--entry-glob` replaces
-`entry-globs`, and `--threshold` replaces every threshold, overrides included.
+A rule listed with only a severity keeps its default threshold.
+
+[`configuration_schema.json`](configuration_schema.json) is a JSON schema for
+the file, generated from the Rust types; point `$schema` at it for completion
+and validation in your editor. After changing the config types, regenerate it
+with `UPDATE_SCHEMA=1 cargo test -p oxiclean_core committed_schema`; a test
+fails while the committed schema is out of date.
 
 ## Output formats
 
@@ -224,9 +232,8 @@ to their source files, even before `node_modules` is installed. When a package's
 doesn't exist yet (for example `build/index.js`), the matching file under
 `src/` is used instead.
 
-Use `--package` to check one package at a time, and `[[overrides]]` in
-`oxiclean.toml` to give packages their own thresholds. JSON and SARIF output
-name the package each finding belongs to.
+Use `overrides` with `packages` in `.oxicleanrc.json` to give packages their
+own settings. JSON and SARIF output name the package each finding belongs to.
 
 ## What counts as an import
 

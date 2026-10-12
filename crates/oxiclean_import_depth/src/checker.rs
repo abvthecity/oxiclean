@@ -13,7 +13,7 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 pub fn run_import_depth_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import depth check");
     let analysis = cfg.common.analyze()?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, cfg.threshold)?;
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy))
 }
 
@@ -70,11 +70,11 @@ mod tests {
 
     /// (request, depth) pairs for the given entry glob, in report order.
     fn depths(root: &Path, entry_glob: &str) -> Vec<(String, usize)> {
-        let cfg = Config {
-            common: CommonArgs::with_root(root).entry_glob(entry_glob),
-            threshold: Some(1),
-        };
-        run_import_depth_check(&cfg)
+        let config = format!(
+            r#"{{ "entries": ["{entry_glob}"], "rules": {{ "import-depth": ["error", {{ "threshold": 1 }}] }} }}"#
+        );
+        write(root, ".oxicleanrc.json", &config);
+        run_import_depth_check(&Config { common: CommonArgs::with_root(root) })
             .unwrap()
             .findings
             .into_iter()

@@ -13,7 +13,7 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 pub fn run_import_bloat_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import bloat check");
     let analysis = cfg.common.analyze()?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, cfg.threshold)?;
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy))
 }
 
@@ -81,12 +81,17 @@ mod tests {
         fs::write(p, content).unwrap();
     }
 
-    fn run(root: &Path, entry_glob: &str, threshold: usize) -> CheckResult {
-        let cfg = Config {
-            common: CommonArgs::with_root(root).entry_glob(entry_glob),
-            threshold: Some(threshold),
-        };
-        run_import_bloat_check(&cfg).unwrap()
+    fn run_with(root: &Path, entry: &str, threshold: usize, dynamic: bool) -> CheckResult {
+        let config = format!(
+            r#"{{ "entries": ["{entry}"], "includeDynamic": {dynamic},
+                 "rules": {{ "import-bloat": ["error", {{ "threshold": {threshold} }}] }} }}"#
+        );
+        write(root, ".oxicleanrc.json", &config);
+        run_import_bloat_check(&Config { common: CommonArgs::with_root(root) }).unwrap()
+    }
+
+    fn run(root: &Path, entry: &str, threshold: usize) -> CheckResult {
+        run_with(root, entry, threshold, false)
     }
 
     /// (request or "<entry>", value) pairs, in report order.
@@ -148,13 +153,7 @@ mod tests {
 
         assert_eq!(summary(&run(t.path(), "src/index.js", 1)), vec![("<entry>".into(), 1)]);
 
-        let cfg = Config {
-            common: CommonArgs::with_root(t.path())
-                .entry_glob("src/index.js")
-                .include_dynamic(true),
-            threshold: Some(1),
-        };
-        let result = run_import_bloat_check(&cfg).unwrap();
+        let result = run_with(t.path(), "src/index.js", 1, true);
         assert_eq!(summary(&result), vec![("<entry>".into(), 3), ("./lazy".into(), 2)]);
     }
 

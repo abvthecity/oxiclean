@@ -23,6 +23,17 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
+## Config schema
+
+`configuration_schema.json` is generated from the config types in
+`crates/oxiclean_core/src/settings.rs`. After changing them, regenerate it:
+
+```bash
+UPDATE_SCHEMA=1 cargo test -p oxiclean_core committed_schema
+```
+
+`cargo test` fails while the committed schema is out of date.
+
 ## Benchmarks
 
 `scripts/bench.sh` runs every checker against pinned Next.js and Expo

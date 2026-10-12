@@ -42,9 +42,6 @@ pub enum Error {
 
     #[error("invalid config file {}: {message}", path.display())]
     Config { path: PathBuf, message: String },
-
-    #[error("no workspace package matches {}", .0.join(", "))]
-    NoSuchPackage(Vec<String>),
 }
 
 /// Shorthand for results in this crate.

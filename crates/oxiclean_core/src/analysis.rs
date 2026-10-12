@@ -14,10 +14,11 @@ use crate::{
     parse_imports,
     report::{CheckResult, Finding, sort_findings},
     resolve,
-    settings::{file_globs, name_globs},
+    settings::file_globs,
 };
 
-/// Command-line options every checker accepts.
+/// Command-line options every checker accepts. Everything else is set in
+/// the config file.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "cli", derive(clap::Args))]
 #[non_exhaustive]
@@ -26,26 +27,9 @@ pub struct CommonArgs {
     #[cfg_attr(feature = "cli", arg(long))]
     pub root: Option<PathBuf>,
 
-    /// Only treat files matching this glob as entries, relative to the root
-    /// (e.g. "src/pages/**/*.tsx"). A pattern without glob characters matches
-    /// any path containing it. Repeat to give several. Without it, every
-    /// JS/TS file in a `src` directory is an entry.
-    #[cfg_attr(feature = "cli", arg(long = "entry-glob", value_name = "GLOB"))]
-    pub entry_globs: Vec<String>,
-
-    /// Also follow dynamic `import()` calls. They are skipped by default
-    /// because lazily loaded modules are split into separate chunks.
-    #[cfg_attr(feature = "cli", arg(long))]
-    pub include_dynamic: bool,
-
-    /// Config file to use instead of `oxiclean.toml` in the root
-    #[cfg_attr(feature = "cli", arg(long, value_name = "FILE"))]
+    /// Config file to use instead of `.oxicleanrc.json` in the root
+    #[cfg_attr(feature = "cli", arg(long, short = 'c', value_name = "FILE"))]
     pub config: Option<PathBuf>,
-
-    /// Only analyse entries in this workspace package. Globs such as
-    /// "@scope/*" are allowed. Repeat to give several.
-    #[cfg_attr(feature = "cli", arg(long = "package", value_name = "NAME"))]
-    pub packages: Vec<String>,
 }
 
 impl CommonArgs {
@@ -56,35 +40,17 @@ impl CommonArgs {
     }
 
     #[must_use]
-    pub fn entry_glob(mut self, glob: impl Into<String>) -> Self {
-        self.entry_globs.push(glob.into());
-        self
-    }
-
-    #[must_use]
-    pub fn include_dynamic(mut self, yes: bool) -> Self {
-        self.include_dynamic = yes;
-        self
-    }
-
-    #[must_use]
     pub fn config(mut self, path: impl Into<PathBuf>) -> Self {
         self.config = Some(path.into());
         self
     }
 
-    #[must_use]
-    pub fn package(mut self, name: impl Into<String>) -> Self {
-        self.packages.push(name.into());
-        self
-    }
-
-    /// Resolves the root, collects entry files and builds the module graph.
+    /// Resolves the root, reads the config file, collects entry files and
+    /// builds the module graph.
     ///
     /// # Errors
     /// Fails if the root can't be found or read, the config file is invalid,
-    /// a glob is invalid, no package matches `--package`, or no entry files
-    /// are found.
+    /// or no entry files are found.
     pub fn analyze(&self) -> Result<Analysis> {
         let root = match &self.root {
             Some(r) => {
@@ -102,24 +68,17 @@ impl CommonArgs {
         let project = Project::load(&root);
         debug!("Found {} workspace packages", project.workspace_package_count());
 
-        // Entry globs on the command line replace the config file's.
-        let entry_globs =
-            if self.entry_globs.is_empty() { &config.entry_globs } else { &self.entry_globs };
         let mut entry_paths = collect_entries(&CollectorConfig {
             root: root.clone(),
-            entry_globs: entry_globs.clone(),
+            entry_globs: config.entries.clone(),
         })?;
 
-        let ignore = file_globs(&config.ignore).map_err(|message| Error::Config {
+        let ignore = file_globs(&config.ignore_patterns).map_err(|message| Error::Config {
             path: config_path.clone().unwrap_or_default(),
             message,
         })?;
         entry_paths.retain(|p| !ignore.is_match(p.strip_prefix(&root).unwrap_or(p)));
 
-        if !self.packages.is_empty() {
-            let dirs = package_dirs(&project, &self.packages)?;
-            entry_paths.retain(|p| dirs.iter().any(|d| p.starts_with(d)));
-        }
         if entry_paths.is_empty() {
             return Err(Error::NoEntries(root));
         }
@@ -147,29 +106,14 @@ impl CommonArgs {
                 resolve(&project, from, request, &resolve_cache).ok().flatten()
             },
             BuildOptions::default()
-                .follow_dynamic(self.include_dynamic || config.include_dynamic == Some(true)),
+                .follow_dynamic(config.include_dynamic)
+                .follow_node_modules(config.include_node_modules),
         );
 
         let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();
         let resolution = ResolutionStats::from_cache(&resolve_cache);
         Ok(Analysis { root, graph, entries, resolution, project, config, config_path })
     }
-}
-
-/// Directories of the workspace packages matching `patterns`.
-fn package_dirs(project: &Project, patterns: &[String]) -> Result<Vec<PathBuf>> {
-    let globs = name_globs(patterns)
-        .map_err(|message| Error::Config { path: PathBuf::from("--package"), message })?;
-    let dirs: Vec<PathBuf> = project
-        .workspace_packages()
-        .into_iter()
-        .filter(|(name, _)| globs.is_match(name))
-        .map(|(_, dir)| dir.to_path_buf())
-        .collect();
-    if dirs.is_empty() {
-        return Err(Error::NoSuchPackage(patterns.to_vec()));
-    }
-    Ok(dirs)
 }
 
 /// The prepared input for a checker.
@@ -192,18 +136,12 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// The config file's settings for `rule`. `cli_threshold`, when given,
-    /// replaces every threshold in the file.
+    /// The config file's settings for `rule`.
     ///
     /// # Errors
     /// Fails if the config file has an invalid glob.
-    pub fn policy(
-        &self,
-        rule: &str,
-        default_threshold: usize,
-        cli_threshold: Option<usize>,
-    ) -> Result<RulePolicy> {
-        self.config.policy(rule, default_threshold, cli_threshold)
+    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold)
     }
 
     /// Applies `policy` to a checker's candidate findings, dropping those it

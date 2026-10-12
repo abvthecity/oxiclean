@@ -8,18 +8,12 @@ use oxiclean_core::{CommonArgs, report::ReportStyle};
 pub struct Config {
     #[command(flatten)]
     pub common: CommonArgs,
-
-    /// Flag imports and entries that reach at least this many unique modules
-    /// [default: 300, or the config file's `threshold`]. Replaces every
-    /// threshold in the config file, overrides included.
-    #[arg(long)]
-    pub threshold: Option<usize>,
 }
 
-/// Name of this rule in `oxiclean.toml` and in JSON and SARIF output.
+/// Name of this rule in `.oxicleanrc.json` and in JSON and SARIF output.
 pub const RULE: &str = "import-bloat";
 
-/// Threshold used when neither the command line nor the config file sets one.
+/// Threshold used when the config file sets none.
 pub const DEFAULT_THRESHOLD: usize = 300;
 
 /// How import bloat findings are worded in the terminal report.

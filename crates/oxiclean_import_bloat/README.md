@@ -18,15 +18,25 @@ cargo run -- import-bloat --help
 # Analyze current directory (defaults to git root)
 oxiclean import-bloat
 
-# Common options
-oxiclean import-bloat --root ./my-project --threshold 100 --entry-glob "src/**/*.tsx"
+# Analyze another project
+oxiclean import-bloat --root ./my-project
 ```
 
 ### Options
 
 - `--root <PATH>` - Root directory to analyze (default: git root)
-- `--threshold <N>` - Max reachable modules before warning (default: 200)
-- `--entry-glob <PATTERN>` - Glob pattern to filter entry files (default: all files in `/src/`)
+- `-c, --config <FILE>` - Config file (default: `.oxicleanrc.json` in the root)
+- `--format <text|json|sarif>` - Output format
+
+The threshold (default: 300 modules), entry files and ignore patterns are set
+in `.oxicleanrc.json`:
+
+```json
+{
+  "entries": ["src/**/*.tsx"],
+  "rules": { "import-bloat": ["error", { "threshold": 300 }] }
+}
+```
 
 ## Example Output
 

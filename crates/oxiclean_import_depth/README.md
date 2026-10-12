@@ -18,15 +18,25 @@ cargo run -- import-depth --help
 # Analyze current directory (defaults to git root)
 oxiclean import-depth
 
-# Common options
-oxiclean import-depth --root ./my-project --threshold 10 --entry-glob "src/**/*.tsx"
+# Analyze another project
+oxiclean import-depth --root ./my-project
 ```
 
 ### Options
 
 - `--root <PATH>` - Root directory to analyze (default: git root)
-- `--threshold <N>` - Max import depth before warning (default: 10)
-- `--entry-glob <PATTERN>` - Glob pattern to filter entry files (default: all files in `/src/`)
+- `-c, --config <FILE>` - Config file (default: `.oxicleanrc.json` in the root)
+- `--format <text|json|sarif>` - Output format
+
+The threshold (default: 20 levels), entry files and ignore patterns are set
+in `.oxicleanrc.json`:
+
+```json
+{
+  "entries": ["src/**/*.tsx"],
+  "rules": { "import-depth": ["error", { "threshold": 20 }] }
+}
+```
 
 ## Example Output
 
