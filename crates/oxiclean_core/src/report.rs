@@ -379,14 +379,16 @@ mod tests {
         let ctx = ReportContext { root: Path::new("/p"), cwd: Path::new("/p") };
         print_findings(&mut out, &fs, &STYLE, 2, ctx).unwrap();
         let out = String::from_utf8(out).unwrap();
-        // Displayed paths use the platform separator.
-        let src_b = Path::new("src").join("b.ts").display().to_string();
-        let src_a = Path::new("src").join("a.ts").display().to_string();
-        let b = out.find(&src_b).unwrap();
-        let a = out.find(&src_a).unwrap();
+        // Paths are printed with the platform's separator.
+        let rel = |name: &str| ["src", name].iter().collect::<PathBuf>().display().to_string();
+        let b = out.find(&rel("b.ts")).unwrap();
+        let a = out.find(&rel("a.ts")).unwrap();
         assert!(b < a, "{out}");
         assert!(out.contains("Total violations: 2"), "{out}");
         assert!(out.contains("Maximum bloat: 10 modules"), "{out}");
-        assert!(out.contains(&format!("1. import './big' (10 modules) - {src_b}")), "{out}");
+        assert!(
+            out.contains(&format!("1. import './big' (10 modules) - {}", rel("b.ts"))),
+            "{out}"
+        );
     }
 }
