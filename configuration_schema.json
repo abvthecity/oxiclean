@@ -172,7 +172,7 @@
             }
           ]
         },
-        "duplicate-exports": {
+        "duplicates": {
           "description": "Files that export the same thing under more than one name, as knip's\n`duplicates`. Exports tagged `@alias` don't count. Default threshold:\n2 names.",
           "anyOf": [
             {

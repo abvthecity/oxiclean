@@ -3,7 +3,7 @@ use oxiclean_core::{CommonArgs, report::ReportStyle};
 
 /// Options for the duplicate exports check.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "duplicate-exports")]
+#[command(name = "duplicates")]
 #[command(about = "Check for modules that export the same thing under several names")]
 pub struct Config {
     #[command(flatten)]
@@ -11,7 +11,7 @@ pub struct Config {
 }
 
 /// Name of this rule in `.oxicleanrc.json` and in JSON and SARIF output.
-pub const RULE: &str = "duplicate-exports";
+pub const RULE: &str = "duplicates";
 
 /// Threshold used when the config file sets none: two names for one thing.
 pub const DEFAULT_THRESHOLD: usize = 2;

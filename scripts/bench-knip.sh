@@ -4,8 +4,7 @@
 #
 # Usage: scripts/bench-knip.sh [check...]
 #   check   oxiclean check to compare (default: all with a knip equivalent).
-#           Supported: cycles (knip `cycles`), duplicate-exports (knip
-#           `duplicates`).
+#           Supported: cycles and duplicates, which knip names the same.
 #
 # Both tools get the same entry files: oxiclean's default (every non-test JS/TS
 # file inside a `src` directory). knip runs with that as `entry` and `project`
@@ -40,7 +39,7 @@ KNIP_VERSION=6.41.0
 KNIP_DIR=$BENCH_DIR/.knip
 OUT_DIR=$KNIP_DIR/results
 
-declare -A KNIP_TYPE=([cycles]=cycles [duplicate-exports]=duplicates)
+declare -A KNIP_TYPE=([cycles]=cycles [duplicates]=duplicates)
 checks=("$@")
 if [[ ${#checks[@]} -eq 0 ]]; then checks=("${!KNIP_TYPE[@]}"); fi
 for check in "${checks[@]}"; do

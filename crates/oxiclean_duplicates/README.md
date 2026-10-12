@@ -13,10 +13,10 @@ export default Button;              // reported: a third
 
 ```bash
 # Analyze current directory (defaults to git root)
-oxiclean duplicate-exports
+oxiclean duplicates
 
 # Analyze another project
-oxiclean duplicate-exports --root ./my-project
+oxiclean duplicates --root ./my-project
 ```
 
 ### Options
@@ -31,7 +31,7 @@ patterns are set in `.oxicleanrc.json`:
 
 ```json
 {
-  "rules": { "duplicate-exports": "warn" }
+  "rules": { "duplicates": "warn" }
 }
 ```
 
@@ -85,10 +85,10 @@ files and everything they import.
 
 ```rust,no_run
 use oxiclean_core::CommonArgs;
-use oxiclean_duplicate_exports::{Config, FindingKind, run_duplicate_exports_check};
+use oxiclean_duplicates::{Config, FindingKind, run_duplicates_check};
 
 let result =
-    run_duplicate_exports_check(&Config { common: CommonArgs::with_root("./my-project") })?;
+    run_duplicates_check(&Config { common: CommonArgs::with_root("./my-project") })?;
 for f in &result.findings {
     if let FindingKind::DuplicateExport(dup) = &f.kind {
         let names: Vec<&str> = dup.names.iter().map(|n| n.name.as_str()).collect();
