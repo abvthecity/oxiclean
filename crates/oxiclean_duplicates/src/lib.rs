@@ -11,12 +11,12 @@
 //!
 //! ```no_run
 //! use oxiclean_core::{CommonArgs, report};
-//! use oxiclean_duplicate_exports::{Config, REPORT_STYLE, run_duplicate_exports_check};
+//! use oxiclean_duplicates::{Config, REPORT_STYLE, run_duplicates_check};
 //! use std::path::Path;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let cfg = Config { common: CommonArgs::with_root("/path/to/project") };
-//! let result = run_duplicate_exports_check(&cfg)?;
+//! let result = run_duplicates_check(&cfg)?;
 //!
 //! let root = Path::new("/path/to/project");
 //! let ctx = report::ReportContext { root, cwd: root };
@@ -33,6 +33,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, duplicates, run_duplicate_exports_check};
+pub use checker::{check, duplicates, run_duplicates_check};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, DuplicateExport, ExportName, Finding, FindingKind};

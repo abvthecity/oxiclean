@@ -18,14 +18,14 @@ oxiclean depth --root ./my-project
 oxiclean cycles --root ./my-project
 
 # Find modules that export the same thing twice
-oxiclean duplicate-exports --root ./my-project
+oxiclean duplicates --root ./my-project
 
 # Get help
 oxiclean --help
 oxiclean bloat --help
 oxiclean depth --help
 oxiclean cycles --help
-oxiclean duplicate-exports --help
+oxiclean duplicates --help
 ```
 
 ## Development
@@ -46,7 +46,7 @@ oxiclean/
 │   ├── oxiclean_core/               # Shared utilities (parser, resolver, etc.)
 │   ├── oxiclean_bloat/              # Import bloat detection library
 │   ├── oxiclean_cycles/             # Circular import detection library
-│   ├── oxiclean_duplicate_exports/  # Duplicate export detection library
+│   ├── oxiclean_duplicates/         # Duplicate export detection library
 │   └── oxiclean_depth/              # Import depth analysis library
 └── Cargo.toml                       # Workspace configuration
 ```
@@ -65,7 +65,7 @@ including thresholds, entry files and ignore patterns, is set in
 
 The default thresholds are 300 modules for `bloat` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
-`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicate-exports` reports every export with a second name, so its threshold (the number of names) defaults to 2.
+`cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2.
 
 Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
@@ -168,12 +168,12 @@ As in knip, these don't count: a name with an `@alias` tag in the comment
 before it, re-exports and imports from the project passed on as the original, renames with
 `export { a as b }`, and `export default a` when `a` is exported with
 `export { a }`. Unlike knip, the original export may come after the name
-that repeats it. See the [checker's README](crates/oxiclean_duplicate_exports/README.md#what-counts)
+that repeats it. See the [checker's README](crates/oxiclean_duplicates/README.md#what-counts)
 for every case.
 
 **Usage:**
 ```bash
-oxiclean duplicate-exports --root ./my-project
+oxiclean duplicates --root ./my-project
 ```
 
 **Example Output:**

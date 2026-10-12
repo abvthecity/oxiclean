@@ -13,7 +13,7 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// # Errors
 /// Fails if the project root can't be found, the config file is invalid, or
 /// no entry files are found.
-pub fn run_duplicate_exports_check(cfg: &Config) -> Result<CheckResult> {
+pub fn run_duplicates_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting duplicate exports check");
     let analysis = cfg.common.analyze()?;
     let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;

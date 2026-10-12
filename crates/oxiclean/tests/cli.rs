@@ -417,20 +417,20 @@ fn cycles_json_and_sarif_list_every_import() {
 }
 
 #[test]
-fn duplicate_exports_in_every_format() {
+fn duplicates_in_every_format() {
     let t = workspace_fixture();
     write(
         t.path(),
         "packages/web/src/b.ts",
         "export const b = 1;\nexport const bee = b;\n/** @alias */\nexport default b;",
     );
-    let (code, out) = run(t.path(), &["duplicate-exports"]);
+    let (code, out) = run(t.path(), &["duplicates"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("Duplicate exports detected"), "{out}");
     assert!(out.contains("export 'b' (exported as 2 names)"), "{out}");
     assert!(out.contains("src/b.ts:2 also exports it as 'bee'"), "{out}");
 
-    let (_, out) = run_stdout(t.path(), &["duplicate-exports", "--format", "json"]);
+    let (_, out) = run_stdout(t.path(), &["duplicates", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let finding = &v["findings"][0];
     assert_eq!(v["findings"].as_array().unwrap().len(), 1);
@@ -443,9 +443,9 @@ fn duplicate_exports_in_every_format() {
     );
     assert_eq!(finding["names"][1], serde_json::json!({ "name": "bee", "line": 2 }));
 
-    let (_, out) = run_stdout(t.path(), &["duplicate-exports", "--format", "sarif"]);
+    let (_, out) = run_stdout(t.path(), &["duplicates", "--format", "sarif"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     let result = &v["runs"][0]["results"][0];
-    assert_eq!(result["ruleId"], "duplicate-exports");
+    assert_eq!(result["ruleId"], "duplicates");
     assert_eq!(result["relatedLocations"][0]["physicalLocation"]["region"]["startLine"], 2);
 }

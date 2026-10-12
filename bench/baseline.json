@@ -38,7 +38,7 @@
   {
     "target": "nextjs",
     "commit": "d8c1c1b0002db8ccb63b58095f338e8bf423fa99",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 1074,
     "files": 2344,
@@ -86,7 +86,7 @@
   {
     "target": "expo",
     "commit": "fe4a2c8e7875d56283ab314a9b4a0da6b6df159d",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 761,
     "files": 4656,
@@ -134,7 +134,7 @@
   {
     "target": "mui",
     "commit": "41c9cb4030274f3bde585d136949f447674e728b",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 516,
     "files": 13301,
@@ -182,7 +182,7 @@
   {
     "target": "vite",
     "commit": "3b72997d42e7dd2b31898d0e68461e3025e836b6",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 43,
     "files": 367,
@@ -230,7 +230,7 @@
   {
     "target": "playwright",
     "commit": "d9f2fd3e2232ace8e317a84eda6cb86e25bcf49c",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 57,
     "files": 765,
@@ -278,7 +278,7 @@
   {
     "target": "lit",
     "commit": "01dbc6673cdc211543932afd0ca04e223e567366",
-    "check": "duplicate-exports",
+    "check": "duplicates",
     "installed": false,
     "elapsed_ms": 75,
     "files": 754,

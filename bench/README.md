@@ -41,27 +41,27 @@ unresolved imports.
 | Next.js | bloat | ~1.0s | 2,344 | 164 | 88.6% |
 | Next.js | depth | ~1.0s | 2,344 | 202 | 88.6% |
 | Next.js | cycles | ~1.0s | 2,344 | 68 | 88.6% |
-| Next.js | duplicate-exports | ~1.1s | 2,344 | 10 | 88.6% |
+| Next.js | duplicates | ~1.1s | 2,344 | 10 | 88.6% |
 | Expo | bloat | ~0.7s | 4,656 | 868 | 74.7% |
 | Expo | depth | ~0.7s | 4,656 | 1,586 | 74.7% |
 | Expo | cycles | ~0.7s | 4,656 | 46 | 74.7% |
-| Expo | duplicate-exports | ~0.8s | 4,656 | 18 | 74.7% |
+| Expo | duplicates | ~0.8s | 4,656 | 18 | 74.7% |
 | MUI | bloat | ~0.5s | 13,301 | 690 | 68.3% |
 | MUI | depth | ~0.5s | 13,301 | 3,788 | 68.3% |
 | MUI | cycles | ~0.5s | 13,301 | 4 | 68.3% |
-| MUI | duplicate-exports | ~0.5s | 13,301 | 2 | 68.3% |
+| MUI | duplicates | ~0.5s | 13,301 | 2 | 68.3% |
 | Vite | bloat | ~40ms | 367 | 0 | 72.6% |
 | Vite | depth | ~50ms | 367 | 0 | 72.6% |
 | Vite | cycles | ~50ms | 367 | 49 | 72.6% |
-| Vite | duplicate-exports | ~45ms | 367 | 1 | 72.6% |
+| Vite | duplicates | ~45ms | 367 | 1 | 72.6% |
 | Playwright | bloat | ~50ms | 765 | 75 | 87.5% |
 | Playwright | depth | ~55ms | 765 | 53 | 87.5% |
 | Playwright | cycles | ~60ms | 765 | 76 | 87.5% |
-| Playwright | duplicate-exports | ~55ms | 765 | 5 | 87.5% |
+| Playwright | duplicates | ~55ms | 765 | 5 | 87.5% |
 | Lit | bloat | ~70ms | 754 | 0 | 49.7% |
 | Lit | depth | ~70ms | 754 | 0 | 49.7% |
 | Lit | cycles | ~60ms | 754 | 20 | 49.7% |
-| Lit | duplicate-exports | ~75ms | 754 | 2 | 49.7% |
+| Lit | duplicates | ~75ms | 754 | 2 | 49.7% |
 
 Results are deterministic, so any change in violations comes from a code change.
 Times vary by about 20% between runs on shared machines; compare against a
@@ -102,7 +102,7 @@ imports breaks.
   `next/dist/compiled/...` paths. oxiclean resolves those to the sources,
   which are copied unchanged into `dist`; knip does not follow them.
 
-### Duplicate exports (`duplicate-exports` vs knip `duplicates`)
+### Duplicate exports (`duplicates`, same name in knip)
 
 | Target | oxiclean | knip | Speed-up | Findings (oxiclean / knip) | knip only | oxiclean only |
 |---|---|---|---|---|---|---|
