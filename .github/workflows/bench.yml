@@ -1,18 +1,9 @@
 name: Bench
 
-# Runs scripts/bench.sh and scripts/bench-knip.sh against the monorepos pinned
-# in bench/targets.tsv. Not a required check: it runs on main, nightly, on
-# demand, and on pull requests that change the benchmark itself.
+# Runs scripts/bench.sh against the monorepos pinned in bench/targets.tsv.
+# Manual only (Actions > Bench > Run workflow). The knip comparison
+# (scripts/bench-knip.sh) takes over 30 minutes here, so run it locally.
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    paths:
-      - .github/workflows/bench.yml
-      - scripts/bench*.sh
-      - bench/**
-  schedule:
-    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       install:
@@ -21,7 +12,7 @@ on:
         default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -35,7 +26,7 @@ jobs:
   bench:
     name: Bench
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -47,6 +38,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Set up Node.js
+        if: inputs.install
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -57,9 +49,9 @@ jobs:
         with:
           version: 10
 
-      # The pinned checkouts and knip only change when the targets or the
-      # knip version do. Installed node_modules are left out: they are several
-      # GB across the six targets.
+      # The pinned checkouts only change when bench/targets.tsv does.
+      # Installed node_modules are left out: they are several GB across the
+      # six targets.
       - name: Restore bench repos
         id: repos
         uses: actions/cache/restore@v4
@@ -67,19 +59,11 @@ jobs:
           path: |
             target/bench-repos
             !target/bench-repos/*/node_modules
-          key: bench-repos-${{ hashFiles('bench/targets.tsv', 'scripts/bench-knip.sh') }}
+          key: bench-repos-${{ hashFiles('bench/targets.tsv') }}
 
       - name: Run bench
         shell: bash
         run: scripts/bench.sh ${{ inputs.install && '--install' || '' }} | tee bench.txt
-
-      # knip takes about 3 minutes per run on Next.js, so one run per check
-      # keeps this step near 12 minutes instead of 35.
-      - name: Run knip comparison
-        shell: bash
-        env:
-          OXICLEAN_BENCH_RUNS: 1
-        run: scripts/bench-knip.sh | tee bench-knip.txt
 
       - name: Save bench repos
         if: always() && steps.repos.outputs.cache-hit != 'true'
@@ -98,10 +82,6 @@ jobs:
             echo '```'
             cat bench.txt 2>/dev/null || echo "bench did not finish"
             echo '```'
-            echo "## oxiclean vs. knip"
-            echo '```'
-            cat bench-knip.txt 2>/dev/null || echo "knip comparison did not finish"
-            echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
@@ -109,8 +89,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bench-results
-          path: |
-            bench.txt
-            bench-knip.txt
-            target/bench-repos/.knip/results
+          path: bench.txt
           if-no-files-found: ignore
