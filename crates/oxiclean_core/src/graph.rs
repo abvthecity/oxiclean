@@ -186,6 +186,10 @@ pub struct BuildOptions {
     /// exports need them, since types are exported and imported there too.
     /// The files they add count as analysed.
     pub resolve_passive: bool,
+    /// Read each file's exports and what it uses from its imports into
+    /// [`Module::exports`] and [`Module::uses`]. Off by default, as only the
+    /// checks of exports need them.
+    pub read_exports: bool,
 }
 
 impl BuildOptions {
@@ -204,6 +208,12 @@ impl BuildOptions {
     #[must_use]
     pub fn resolve_passive(mut self, yes: bool) -> Self {
         self.resolve_passive = yes;
+        self
+    }
+
+    #[must_use]
+    pub fn read_exports(mut self, yes: bool) -> Self {
+        self.read_exports = yes;
         self
     }
 }
@@ -393,6 +403,11 @@ impl ModuleGraph {
     /// Every module in the graph, in the order they were found.
     pub fn modules(&self) -> impl ExactSizeIterator<Item = &Module> {
         self.modules.iter()
+    }
+
+    /// Every module with its id, in the order of [`Self::modules`].
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (ModuleId, &Module)> {
+        self.modules.iter().enumerate().map(|(i, m)| (ModuleId(len_u32(i)), m))
     }
 
     /// Files that could not be read or parsed, sorted by path.

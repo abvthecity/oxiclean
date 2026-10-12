@@ -17,7 +17,9 @@ pub fn run_duplicates_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting duplicate exports check");
     // Declaration files and the files reached only through type imports
     // export too.
-    let analysis = cfg.common.analyze_with(BuildOptions::default().resolve_passive(true))?;
+    let analysis = cfg
+        .common
+        .analyze_with(BuildOptions::default().resolve_passive(true).read_exports(true))?;
     let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy))
 }

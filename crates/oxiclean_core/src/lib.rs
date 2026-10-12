@@ -32,7 +32,6 @@ pub use analysis::{Analysis, CommonArgs};
 pub use collector::{CollectorConfig, collect_entries};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
-pub use entry_points::package_entry_points;
 pub use error::{Error, Result};
 pub use exports::{Export, ExportForm, ExportKind, Forwarded};
 pub use graph::{

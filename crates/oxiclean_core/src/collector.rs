@@ -4,7 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use tracing::{debug, trace};
 
 use crate::{
-    constants::JS_TS_EXTENSIONS,
+    constants::{JS_TS_EXTENSIONS, is_declaration},
     error::{Error, Result},
 };
 
@@ -75,13 +75,13 @@ pub fn collect_entries(cfg: &CollectorConfig) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Every file under `root` outside `node_modules` and `.git`, sorted by
-/// path, for the checks of exports to pick test and declaration files from.
-/// `.gitignore` files are honoured as in [`collect_entries`].
+/// The files under `root` outside `node_modules` and `.git` that `keep`
+/// accepts, given their path relative to `root`. `.gitignore` files are
+/// honoured as in [`collect_entries`].
 ///
 /// # Errors
 /// Fails if the directory walk fails.
-pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn collect_files(root: &Path, keep: impl Fn(&Path) -> bool) -> Result<Vec<PathBuf>> {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .require_git(false)
@@ -90,11 +90,15 @@ pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for res in walker {
         let dent = res.map_err(|source| Error::Walk { path: root.to_path_buf(), source })?;
-        if dent.file_type().is_some_and(|t| t.is_file()) || dent.path().is_file() {
+        let is_file = match dent.file_type() {
+            Some(t) if t.is_symlink() => dent.path().is_file(),
+            Some(t) => t.is_file(),
+            None => false,
+        };
+        if is_file && keep(dent.path().strip_prefix(root).unwrap_or(dent.path())) {
             files.push(dent.into_path());
         }
     }
-    files.sort();
     Ok(files)
 }
 
@@ -104,7 +108,7 @@ pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>> {
 pub(crate) fn is_test_file(rel: &Path) -> bool {
     let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { return false };
     let Some(ext) = rel.extension().and_then(|e| e.to_str()) else { return false };
-    if !JS_TS_EXTENSIONS.contains(&ext) || is_declaration_name(name) {
+    if !JS_TS_EXTENSIONS.contains(&ext) || is_declaration(rel) {
         return false;
     }
     let in_tests_dir = rel
@@ -113,10 +117,6 @@ pub(crate) fn is_test_file(rel: &Path) -> bool {
         .flat_map(Path::components)
         .any(|c| c == Component::Normal("__tests__".as_ref()));
     in_tests_dir || name.contains(".test.") || name.contains(".spec.")
-}
-
-fn is_declaration_name(name: &str) -> bool {
-    name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
 }
 
 /// The `--entry-glob` filter: real globs plus plain substrings.
@@ -170,7 +170,7 @@ fn is_source_file(p: &Path) -> bool {
         return false;
     }
     let is_test = name.contains(".test.") || name.contains(".spec.");
-    !is_declaration_name(name) && !is_test
+    !is_declaration(p) && !is_test
 }
 
 /// Whether any parent directory of `rel` is named `src`. Compares whole path

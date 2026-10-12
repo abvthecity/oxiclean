@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::trace;
 
-use crate::{Project, constants::RESOLVE_EXTENSIONS, resolver::package_target_files};
+use crate::{
+    Project,
+    constants::RESOLVE_EXTENSIONS,
+    resolver::{package_target_files, strip_compiled_extension},
+};
 
 /// package.json fields that name one file each.
 const FILE_FIELDS: &[&str] = &["main", "module", "source", "browser", "types", "typings"];
@@ -25,7 +29,7 @@ const ENTRY_NAMES: &[&str] = &["index", "main", "cli"];
 /// - the JS/TS files its `scripts` name, such as `node scripts/build.js`;
 /// - `index`, `main` and `cli` files in the package directory or its `src`.
 #[must_use]
-pub fn package_entry_points(project: &Project) -> Vec<PathBuf> {
+pub(crate) fn package_entry_points(project: &Project) -> Vec<PathBuf> {
     let mut dirs: Vec<&Path> = vec![project.root.as_path()];
     dirs.extend(project.workspace_packages().into_iter().map(|(_, dir)| dir));
     let mut files: Vec<PathBuf> =
@@ -37,7 +41,8 @@ pub fn package_entry_points(project: &Project) -> Vec<PathBuf> {
 
 fn entries_of(project: &Project, dir: &Path) -> Vec<PathBuf> {
     let mut targets = Vec::new();
-    if let Some(pkg) = project.package_json(dir) {
+    let pkg = project.package_json(dir);
+    if let Some(pkg) = &pkg {
         for field in FILE_FIELDS {
             if let Some(Value::String(s)) = pkg.get(*field) {
                 targets.push(s.clone());
@@ -54,11 +59,15 @@ fn entries_of(project: &Project, dir: &Path) -> Vec<PathBuf> {
             string_leaves(exports, &mut targets);
         }
     }
+    // Conditions often name one file several ways (`types` and `default`);
+    // look each up once, as a `*` pattern walks the directory.
+    targets.sort_by(|a, b| strip_compiled_extension(a).cmp(strip_compiled_extension(b)));
+    targets.dedup_by(|a, b| {
+        a.contains('*') && strip_compiled_extension(a) == strip_compiled_extension(b)
+    });
     let mut files: Vec<PathBuf> =
         targets.iter().flat_map(|t| package_target_files(project, dir, t)).collect();
-    if let Some(Value::Object(scripts)) =
-        project.package_json(dir).as_deref().and_then(|p| p.get("scripts"))
-    {
+    if let Some(Value::Object(scripts)) = pkg.as_deref().and_then(|p| p.get("scripts")) {
         let scripts = scripts.values().filter_map(Value::as_str);
         files.extend(scripts.flat_map(|s| script_files(dir, s)));
     }

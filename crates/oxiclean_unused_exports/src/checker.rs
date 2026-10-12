@@ -54,8 +54,8 @@ fn run(cfg: &Config, which: Unused) -> Result<CheckResult> {
     // well, and the files only they reach are analysed. Files no entry
     // reaches are not analysed at all: they are unused files, not files
     // with unused exports.
-    let analysis =
-        cfg.common.analyze_package_entries(BuildOptions::default().resolve_passive(true))?;
+    let options = BuildOptions::default().resolve_passive(true).read_exports(true);
+    let analysis = cfg.common.analyze_package_entries(options)?;
     let policy = analysis.policy(which.rule(), DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy, which))
 }
@@ -63,7 +63,7 @@ fn run(cfg: &Config, which: Unused) -> Result<CheckResult> {
 /// Reports each export of the kind `which` asks for that nothing uses. See
 /// [`unused_exports`] for what counts as a use. Build the analysis with
 /// [`BuildOptions::resolve_passive`], or uses through type-only imports are
-/// missed.
+/// missed, and with [`BuildOptions::read_exports`], or nothing is used.
 #[must_use]
 pub fn check(analysis: &Analysis, policy: &RulePolicy, which: Unused) -> CheckResult {
     if policy.min_threshold().is_none() {
@@ -105,23 +105,21 @@ pub fn unused_exports<'g>(
     graph: &'g ModuleGraph,
     entries: &[ModuleId],
 ) -> Vec<(ModuleId, &'g Export)> {
-    let mut usage = Usage::new(graph);
+    let mut usage = Tracker::new(graph);
     for &entry in entries {
         usage.queue.push(Task::All(entry));
     }
-    for (i, module) in graph.modules().enumerate() {
-        let from = usage.id(i);
+    for (from, module) in graph.iter() {
         for u in &module.uses.usages {
             let Some(target) = usage.target(from, &u.request) else { continue };
             let task = match &u.used {
                 Used::Name(name) => Task::Name(target, name),
                 Used::Member { name, member } => Task::Member(target, name, member),
-                Used::All => Task::All(target),
-                Used::Loader
-                    if graph.module(target).exports.iter().any(|e| e.name == "default") =>
-                {
+                Used::Loader if usage.index(target).by_name.contains_key("default") => {
                     Task::Name(target, "default")
                 }
+                // A loader of a module without a default export, `Used::All`,
+                // and anything `Used` may add later use every export.
                 _ => Task::All(target),
             };
             usage.queue.push(task);
@@ -131,8 +129,8 @@ pub fn unused_exports<'g>(
 
     let entry_set: HashSet<ModuleId> = entries.iter().copied().collect();
     let mut unused = Vec::new();
-    for (i, module) in graph.modules().enumerate() {
-        let id = usage.id(i);
+    for (id, module) in graph.iter() {
+        let i = id.index();
         if entry_set.contains(&id) || module.in_node_modules() || usage.all[i] {
             continue;
         }
@@ -175,13 +173,14 @@ enum Task<'g> {
     Star(ModuleId),
 }
 
-struct Usage<'g> {
+/// What the worklist has found used so far.
+struct Tracker<'g> {
     graph: &'g ModuleGraph,
     /// Each module's imports, by request, to the module they load. Built on
     /// first use.
     targets: Vec<Option<HashMap<&'g str, ModuleId>>>,
-    /// The module ids, by position in [`ModuleGraph::modules`].
-    ids: Vec<ModuleId>,
+    /// Each module's exports by name and by local binding. Built on first use.
+    indexes: Vec<Option<ExportIndex<'g>>>,
     all: Vec<bool>,
     star: Vec<bool>,
     names: Vec<HashSet<&'g str>>,
@@ -191,14 +190,22 @@ struct Usage<'g> {
     queue: Vec<Task<'g>>,
 }
 
-impl<'g> Usage<'g> {
+/// A module's exports, indexed so that generated files with thousands of
+/// exports don't make each lookup a scan.
+#[derive(Default)]
+struct ExportIndex<'g> {
+    by_name: HashMap<&'g str, Vec<&'g Export>>,
+    /// Names of the module's own exports by the local binding they export.
+    by_local: HashMap<&'g str, Vec<&'g str>>,
+}
+
+impl<'g> Tracker<'g> {
     fn new(graph: &'g ModuleGraph) -> Self {
         let n = graph.len();
-        let ids = graph.modules().filter_map(|m| graph.id(&m.path)).collect();
         Self {
             graph,
             targets: vec![None; n],
-            ids,
+            indexes: std::iter::repeat_with(|| None).take(n).collect(),
             all: vec![false; n],
             star: vec![false; n],
             names: vec![HashSet::new(); n],
@@ -208,8 +215,25 @@ impl<'g> Usage<'g> {
         }
     }
 
-    fn id(&self, index: usize) -> ModuleId {
-        self.ids[index]
+    fn index(&mut self, m: ModuleId) -> &ExportIndex<'g> {
+        let graph = self.graph;
+        self.indexes[m.index()].get_or_insert_with(|| {
+            let mut index = ExportIndex::default();
+            for e in &graph.module(m).exports {
+                index.by_name.entry(e.name.as_str()).or_default().push(e);
+                if e.forwarded.is_none()
+                    && let Some(local) = &e.local
+                {
+                    index.by_local.entry(local.as_str()).or_default().push(&e.name);
+                }
+            }
+            index
+        })
+    }
+
+    /// The exports of `m` called `name`.
+    fn named(&mut self, m: ModuleId, name: &str) -> Vec<&'g Export> {
+        self.index(m).by_name.get(name).cloned().unwrap_or_default()
     }
 
     /// The module `request` loads from `from`.
@@ -249,11 +273,11 @@ impl<'g> Usage<'g> {
         if let Some(d) = module.declaration {
             self.queue.push(Task::Name(d, name));
         }
-        let mut own = false;
-        for e in module.exports.iter().filter(|e| e.name == name) {
-            own = true;
+        let own = self.named(m, name);
+        for &e in &own {
             self.export_used(m, e);
         }
+        let own = !own.is_empty();
         // `export *` passes on what the module doesn't export itself.
         if !own && name != "default" {
             for request in &module.uses.reexport_all {
@@ -276,9 +300,8 @@ impl<'g> Usage<'g> {
         if let Some(d) = module.declaration {
             self.queue.push(Task::Member(d, name, member));
         }
-        let mut own = false;
-        for e in module.exports.iter().filter(|e| e.name == name) {
-            own = true;
+        let own = self.named(m, name);
+        for &e in &own {
             match &e.forwarded {
                 Some(f) if passes_on(e) => {
                     if let Some(t) = self.target(m, &f.from) {
@@ -291,7 +314,7 @@ impl<'g> Usage<'g> {
                 _ => self.signature_used(m, e),
             }
         }
-        if !own && name != "default" {
+        if own.is_empty() && name != "default" {
             for request in &module.uses.reexport_all {
                 if let Some(t) = self.target(m, request) {
                     self.queue.push(Task::Member(t, name, member));
@@ -361,13 +384,9 @@ impl<'g> Usage<'g> {
         if matches!(e.kind, ExportKind::Type | ExportKind::Interface | ExportKind::Enum) {
             return;
         }
-        let module = self.graph.module(m);
         for r in &e.signature_refs {
-            for x in &module.exports {
-                if x.forwarded.is_none() && x.local.as_deref() == Some(r.as_str()) {
-                    self.queue.push(Task::Name(m, &x.name));
-                }
-            }
+            let names = self.index(m).by_local.get(r.as_str()).cloned().unwrap_or_default();
+            self.queue.extend(names.into_iter().map(|name| Task::Name(m, name)));
         }
     }
 }

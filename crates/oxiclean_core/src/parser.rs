@@ -75,6 +75,13 @@ pub struct ParsedImports {
 /// # Errors
 /// Fails if the file can't be read.
 pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
+    parse_file(file, true)
+}
+
+/// [`parse_imports`], leaving [`ParsedImports::exports`] and
+/// [`ParsedImports::uses`] empty unless `with_exports`: checks that only
+/// follow imports skip the extra walks over the AST.
+pub(crate) fn parse_file(file: &Path, with_exports: bool) -> Result<ParsedImports> {
     trace!("Parsing file for imports: {}", file.display());
     let src =
         fs::read_to_string(file).with_context(|| format!("Failed to read {}", file.display()))?;
@@ -86,8 +93,11 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
 
     let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
-    let exports = exports::collect(&program, &|offset| collector.line(offset));
-    let uses = uses::collect(&program);
+    let (exports, uses) = if with_exports {
+        (exports::collect(&program, &|offset| collector.line(offset)), uses::collect(&program))
+    } else {
+        (Vec::new(), ModuleUses::default())
+    };
     let mut specs = collector.specs;
     // A declaration file only describes types, so its imports load nothing.
     if is_declaration(file) {

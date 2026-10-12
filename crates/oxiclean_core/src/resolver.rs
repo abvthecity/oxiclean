@@ -334,9 +334,10 @@ fn source_for_build_target(target: &str) -> Option<String> {
     Some(format!("src/{}", strip_compiled_extension(rest)))
 }
 
-fn strip_compiled_extension(path: &str) -> &str {
-    [".d.ts", ".d.mts", ".d.cts", ".js", ".mjs", ".cjs", ".jsx"]
+pub(crate) fn strip_compiled_extension(path: &str) -> &str {
+    DECLARATION_SUFFIXES
         .iter()
+        .chain(&[".js", ".mjs", ".cjs", ".jsx"])
         .find_map(|ext| path.strip_suffix(ext))
         .unwrap_or(path)
 }
@@ -386,14 +387,18 @@ fn files_matching_stem(dir: &Path, stem: &str) -> Vec<PathBuf> {
         return Vec::new();
     };
     let matcher = glob.compile_matcher();
-    let walker = ignore::WalkBuilder::new(dir)
+    // Only the directory before the first `*` can hold matches.
+    let literal = &stem[..stem.find('*').unwrap_or(stem.len())];
+    let start = dir.join(&literal[..literal.rfind('/').unwrap_or(0)]);
+    let walker = ignore::WalkBuilder::new(start)
         .require_git(false)
         .filter_entry(|e| e.file_name() != "node_modules" && e.file_name() != ".git")
         .build();
     let mut files: Vec<PathBuf> = walker
         .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
-        .filter(|p| p.is_file() && p.strip_prefix(dir).is_ok_and(|rel| matcher.is_match(rel)))
+        .filter(|p| p.strip_prefix(dir).is_ok_and(|rel| matcher.is_match(rel)))
         .filter_map(canonical)
         .collect();
     files.sort();

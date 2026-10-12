@@ -8,12 +8,13 @@ use tracing::{debug, info, warn};
 
 use crate::{
     CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, collect_entries,
-    collector::{collect_project_files, is_test_file},
+    collector::{collect_files, is_test_file},
     config::find_git_root,
     constants::is_declaration,
+    entry_points::package_entry_points,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
-    package_entry_points, parse_imports,
+    parser::parse_file,
     report::{CheckResult, Finding, sort_findings},
     resolve,
     settings::file_globs,
@@ -69,7 +70,8 @@ impl CommonArgs {
 
     /// Like [`Self::analyze_with`], for the checks of exports. Unless the
     /// config sets `entries`, the entries are the files each package offers
-    /// to others ([`package_entry_points`]), test files, and declaration
+    /// to others (package.json `main`, `exports`, `bin` and `scripts`, and
+    /// `index`, `main` and `cli` files), test files, and declaration
     /// files in a tsconfig's directory, as in knip,
     /// rather than every file in `src`: an entry's exports always count as
     /// used, so with every file an entry nothing would be reported.
@@ -99,27 +101,7 @@ impl CommonArgs {
 
         let mut entry_paths =
             if config.entries.is_empty() && defaults == DefaultEntries::PackageEntryPoints {
-                let mut paths = package_entry_points(&project);
-                debug!("Found {} package entry points", paths.len());
-                if paths.is_empty() {
-                    warn!(
-                        "No package entry points (package.json main, exports or bin, or an index, \
-                     main or cli file) found; set \"entries\" in the config file"
-                    );
-                }
-                // As in knip, declaration files a tsconfig covers are
-                // entries too: they declare types for code oxiclean can't see.
-                for file in collect_project_files(&root)? {
-                    let rel = file.strip_prefix(&root).unwrap_or(&file);
-                    if is_test_file(rel)
-                        || is_declaration(&file) && project.tsconfig_for(&file).is_some()
-                    {
-                        paths.push(file);
-                    }
-                }
-                paths.sort();
-                paths.dedup();
-                paths
+                package_default_entries(&project, &root)?
             } else {
                 collect_entries(&CollectorConfig {
                     root: root.clone(),
@@ -143,7 +125,7 @@ impl CommonArgs {
         let graph = ModuleGraph::build(
             &entry_paths,
             |file: &Path| {
-                parse_imports(file).map(|parsed| ParsedFile {
+                parse_file(file, extra.read_exports).map(|parsed| ParsedFile {
                     imports: parsed
                         .specs
                         .into_iter()
@@ -166,6 +148,27 @@ impl CommonArgs {
         let resolution = ResolutionStats::from_cache(&resolve_cache);
         Ok(Analysis { root, graph, entries, resolution, project, config, config_path })
     }
+}
+
+/// The entries of the checks of exports when the config sets none: each
+/// package's entry points, test files, and, as in knip, declaration files a
+/// tsconfig covers, which declare types for code oxiclean can't see.
+fn package_default_entries(project: &Project, root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = package_entry_points(project);
+    debug!("Found {} package entry points", paths.len());
+    if paths.is_empty() {
+        warn!(
+            "No package entry points (package.json main, exports or bin, or an index, main or \
+             cli file) found; set \"entries\" in the config file"
+        );
+    }
+    paths.extend(collect_files(root, |rel| {
+        is_test_file(rel)
+            || (is_declaration(rel) && project.tsconfig_for(&root.join(rel)).is_some())
+    })?);
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 /// Which files are entries when the config sets no `entries`.
