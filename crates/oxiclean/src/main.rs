@@ -10,7 +10,7 @@ use colored::Colorize;
 use log::debug;
 use oxiclean_core::{
     CheckResult,
-    report::{self, ReportContext, ReportStyle},
+    report::{self, OutputFormat, ReportContext, ReportMeta, ReportStyle},
 };
 
 #[derive(Parser)]
@@ -19,6 +19,10 @@ use oxiclean_core::{
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Subcommand)]
@@ -35,16 +39,16 @@ fn main() -> Result<ExitCode> {
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
     let start = Instant::now();
-    let (result, style, threshold) = match &cli.command {
+    let (result, style, rule) = match &cli.command {
         Commands::ImportBloat(cfg) => (
             oxiclean_import_bloat::run_import_bloat_check(cfg)?,
             oxiclean_import_bloat::REPORT_STYLE,
-            cfg.threshold,
+            oxiclean_import_bloat::RULE,
         ),
         Commands::ImportDepth(cfg) => (
             oxiclean_import_depth::run_import_depth_check(cfg)?,
             oxiclean_import_depth::REPORT_STYLE,
-            cfg.threshold,
+            oxiclean_import_depth::RULE,
         ),
     };
     let elapsed_ms = start.elapsed().as_millis();
@@ -55,21 +59,27 @@ fn main() -> Result<ExitCode> {
     // stdout is line-buffered; a BufWriter avoids a syscall per line.
     // See https://github.com/rust-lang/rust/issues/60673
     let mut stdout = BufWriter::new(std::io::stdout().lock());
-    print_report(&mut stdout, &result, &style, threshold, elapsed_ms, ctx)?;
+    let meta = ReportMeta { rule, style: &style, version: env!("CARGO_PKG_VERSION"), elapsed_ms };
+    match cli.format {
+        OutputFormat::Text => print_report(&mut stdout, &result, &style, elapsed_ms, ctx)?,
+        OutputFormat::Json => report::write_json(&mut stdout, meta, &result)?,
+        OutputFormat::Sarif => report::write_sarif(&mut stdout, meta, &result)?,
+    }
     stdout.flush()?;
 
-    // A non-zero exit fails CI when anything crossed the threshold.
-    Ok(if result.findings.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    // A non-zero exit fails CI when a finding with error severity crossed its
+    // threshold; warnings alone don't.
+    Ok(if result.error_count() == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
 fn print_report(
     out: &mut impl Write,
     result: &CheckResult,
     style: &ReportStyle,
-    threshold: usize,
     elapsed_ms: u128,
     ctx: ReportContext<'_>,
 ) -> std::io::Result<()> {
+    let threshold = result.threshold;
     if result.findings.is_empty() {
         report::print_ok(out, style, threshold)?;
     } else {

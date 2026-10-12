@@ -7,13 +7,14 @@ use dashmap::DashMap;
 use log::{debug, info};
 
 use crate::{
-    CollectorConfig, Project, ResolutionStats, SpecKind, collect_entries,
+    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, SpecKind, collect_entries,
     config::find_git_root,
     error::{Error, Result},
     graph::{BuildOptions, ModuleGraph, ModuleId, ParsedFile, RawImport},
     parse_imports,
     report::{CheckResult, Finding, sort_findings},
     resolve,
+    settings::{file_globs, name_globs},
 };
 
 /// Command-line options every checker accepts.
@@ -36,6 +37,15 @@ pub struct CommonArgs {
     /// because lazily loaded modules are split into separate chunks.
     #[cfg_attr(feature = "cli", arg(long))]
     pub include_dynamic: bool,
+
+    /// Config file to use instead of `oxiclean.toml` in the root
+    #[cfg_attr(feature = "cli", arg(long, value_name = "FILE"))]
+    pub config: Option<PathBuf>,
+
+    /// Only analyse entries in this workspace package. Globs such as
+    /// "@scope/*" are allowed. Repeat to give several.
+    #[cfg_attr(feature = "cli", arg(long = "package", value_name = "NAME"))]
+    pub packages: Vec<String>,
 }
 
 impl CommonArgs {
@@ -57,11 +67,24 @@ impl CommonArgs {
         self
     }
 
+    #[must_use]
+    pub fn config(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn package(mut self, name: impl Into<String>) -> Self {
+        self.packages.push(name.into());
+        self
+    }
+
     /// Resolves the root, collects entry files and builds the module graph.
     ///
     /// # Errors
-    /// Fails if the root can't be found or read, a glob is invalid, or no
-    /// entry files are found.
+    /// Fails if the root can't be found or read, the config file is invalid,
+    /// a glob is invalid, no package matches `--package`, or no entry files
+    /// are found.
     pub fn analyze(&self) -> Result<Analysis> {
         let root = match &self.root {
             Some(r) => {
@@ -71,13 +94,32 @@ impl CommonArgs {
         };
         info!("Using root directory: {}", root.display());
 
+        let (config, config_path) = ConfigFile::discover(&root, self.config.as_deref())?;
+        if let Some(p) = &config_path {
+            info!("Using config file: {}", p.display());
+        }
+
         let project = Project::load(&root);
         debug!("Found {} workspace packages", project.workspace_package_count());
 
-        let entry_paths = collect_entries(&CollectorConfig {
+        // Entry globs on the command line replace the config file's.
+        let entry_globs =
+            if self.entry_globs.is_empty() { &config.entry_globs } else { &self.entry_globs };
+        let mut entry_paths = collect_entries(&CollectorConfig {
             root: root.clone(),
-            entry_globs: self.entry_globs.clone(),
+            entry_globs: entry_globs.clone(),
         })?;
+
+        let ignore = file_globs(&config.ignore).map_err(|message| Error::Config {
+            path: config_path.clone().unwrap_or_default(),
+            message,
+        })?;
+        entry_paths.retain(|p| !ignore.is_match(p.strip_prefix(&root).unwrap_or(p)));
+
+        if !self.packages.is_empty() {
+            let dirs = package_dirs(&project, &self.packages)?;
+            entry_paths.retain(|p| dirs.iter().any(|d| p.starts_with(d)));
+        }
         if entry_paths.is_empty() {
             return Err(Error::NoEntries(root));
         }
@@ -95,6 +137,7 @@ impl CommonArgs {
                         .map(|s| RawImport {
                             dynamic: matches!(s.kind, SpecKind::Dynamic),
                             request: s.request,
+                            line: s.line,
                         })
                         .collect(),
                     error: parsed.error,
@@ -103,13 +146,30 @@ impl CommonArgs {
             |from: &Path, request: &str| {
                 resolve(&project, from, request, &resolve_cache).ok().flatten()
             },
-            BuildOptions::default().follow_dynamic(self.include_dynamic),
+            BuildOptions::default()
+                .follow_dynamic(self.include_dynamic || config.include_dynamic == Some(true)),
         );
 
         let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();
         let resolution = ResolutionStats::from_cache(&resolve_cache);
-        Ok(Analysis { root, graph, entries, resolution })
+        Ok(Analysis { root, graph, entries, resolution, project, config, config_path })
     }
+}
+
+/// Directories of the workspace packages matching `patterns`.
+fn package_dirs(project: &Project, patterns: &[String]) -> Result<Vec<PathBuf>> {
+    let globs = name_globs(patterns)
+        .map_err(|message| Error::Config { path: PathBuf::from("--package"), message })?;
+    let dirs: Vec<PathBuf> = project
+        .workspace_packages()
+        .into_iter()
+        .filter(|(name, _)| globs.is_match(name))
+        .map(|(_, dir)| dir.to_path_buf())
+        .collect();
+    if dirs.is_empty() {
+        return Err(Error::NoSuchPackage(patterns.to_vec()));
+    }
+    Ok(dirs)
 }
 
 /// The prepared input for a checker.
@@ -123,13 +183,50 @@ pub struct Analysis {
     pub entries: Vec<ModuleId>,
     /// How many imports resolved while building the graph.
     pub resolution: ResolutionStats,
+    /// tsconfig and workspace information.
+    pub project: Project,
+    /// The config file's settings, or the defaults when there is none.
+    pub config: ConfigFile,
+    /// Where the config file was read from.
+    pub config_path: Option<PathBuf>,
 }
 
 impl Analysis {
-    /// Packages a checker's findings, sorted deterministically, with the
-    /// statistics of this analysis.
+    /// The config file's settings for `rule`. `cli_threshold`, when given,
+    /// replaces every threshold in the file.
+    ///
+    /// # Errors
+    /// Fails if the config file has an invalid glob.
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        cli_threshold: Option<usize>,
+    ) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold, cli_threshold)
+    }
+
+    /// Applies `policy` to a checker's candidate findings, dropping those it
+    /// disables, ignores or that fall below their file's threshold, and
+    /// packages the rest, sorted deterministically, with the statistics of
+    /// this analysis.
     #[must_use]
-    pub fn finish(&self, mut findings: Vec<Finding>) -> CheckResult {
+    pub fn finish(&self, policy: &RulePolicy, findings: Vec<Finding>) -> CheckResult {
+        let mut findings: Vec<Finding> = findings
+            .into_iter()
+            .filter_map(|mut f| {
+                let package = self.project.package_for(&f.file);
+                let rel = f.file.strip_prefix(&self.root).unwrap_or(&f.file);
+                let rule = policy.resolve(rel, package);
+                if !rule.reports(f.value) {
+                    return None;
+                }
+                f.threshold = rule.threshold;
+                f.severity = rule.severity;
+                f.package = package.map(str::to_string);
+                Some(f)
+            })
+            .collect();
         sort_findings(&mut findings);
         CheckResult {
             findings,
@@ -137,6 +234,7 @@ impl Analysis {
             files_analyzed: self.graph.len(),
             parse_failures: self.graph.failures().to_vec(),
             resolution: self.resolution,
+            threshold: policy.base().threshold,
         }
     }
 }

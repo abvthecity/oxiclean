@@ -5,7 +5,7 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{Parser as OxcParser, ParserReturn};
-use oxc_span::SourceType;
+use oxc_span::{SourceType, Span};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -65,7 +65,7 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
     let ParserReturn { program, errors, panicked, .. } =
         OxcParser::new(&allocator, &src, st).parse();
 
-    let mut collector = ImportCollector::default();
+    let mut collector = ImportCollector::new(&src);
     collector.visit_program(&program);
     let specs = collector.specs;
 
@@ -80,15 +80,25 @@ pub fn parse_imports(file: &Path) -> Result<ParsedImports> {
 
 /// Walks the whole AST collecting module requests, including re-exports and
 /// `require()`/`import()` calls nested inside functions or conditionals.
-#[derive(Default)]
 struct ImportCollector {
     specs: Vec<Specifier>,
+    /// Byte offset at which each line starts, for turning spans into lines.
+    line_starts: Vec<u32>,
 }
 
 impl ImportCollector {
-    fn push(&mut self, request: &str, kind: SpecKind) {
+    fn new(src: &str) -> Self {
+        let line_starts = std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(i, _)| u32::try_from(i + 1).unwrap_or(u32::MAX)))
+            .collect();
+        Self { specs: Vec::new(), line_starts }
+    }
+
+    fn push(&mut self, request: &str, kind: SpecKind, span: Span) {
         trace!("Found {:?} import: '{}'", kind, request);
-        self.specs.push(Specifier { request: request.to_string(), kind });
+        let line = self.line_starts.partition_point(|&start| start <= span.start);
+        let line = u32::try_from(line).unwrap_or(u32::MAX);
+        self.specs.push(Specifier { request: request.to_string(), kind, line });
     }
 }
 
@@ -108,13 +118,13 @@ impl<'a> Visit<'a> for ImportCollector {
                 })
         });
         if has_runtime_import {
-            self.push(&decl.source.value, SpecKind::Static);
+            self.push(&decl.source.value, SpecKind::Static, decl.span);
         }
     }
 
     fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
         if !decl.export_kind.is_type() {
-            self.push(&decl.source.value, SpecKind::Static);
+            self.push(&decl.source.value, SpecKind::Static, decl.span);
         }
     }
 
@@ -124,7 +134,7 @@ impl<'a> Visit<'a> for ImportCollector {
                 && (decl.specifiers.is_empty()
                     || decl.specifiers.iter().any(|s| !s.export_kind.is_type()));
             if has_runtime_export {
-                self.push(&source.value, SpecKind::Static);
+                self.push(&source.value, SpecKind::Static, decl.span);
             }
         }
         walk::walk_export_named_declaration(self, decl);
@@ -135,17 +145,17 @@ impl<'a> Visit<'a> for ImportCollector {
         if !decl.import_kind.is_type()
             && let TSModuleReference::ExternalModuleReference(ext) = &decl.module_reference
         {
-            self.push(&ext.expression.value, SpecKind::Static);
+            self.push(&ext.expression.value, SpecKind::Static, decl.span);
         }
     }
 
     fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
         if let Expression::StringLiteral(sl) = &expr.source {
-            self.push(&sl.value, SpecKind::Dynamic);
+            self.push(&sl.value, SpecKind::Dynamic, expr.span);
         } else if let Expression::TemplateLiteral(tl) = &expr.source
             && let Some(quasi) = tl.single_quasi()
         {
-            self.push(&quasi, SpecKind::Dynamic);
+            self.push(&quasi, SpecKind::Dynamic, expr.span);
         }
         walk::walk_import_expression(self, expr);
     }
@@ -156,7 +166,7 @@ impl<'a> Visit<'a> for ImportCollector {
             && call.arguments.len() == 1
             && let Some(Expression::StringLiteral(sl)) = call.arguments[0].as_expression()
         {
-            self.push(&sl.value, SpecKind::Static);
+            self.push(&sl.value, SpecKind::Static, call.span);
         }
         walk::walk_call_expression(self, call);
     }
@@ -202,6 +212,20 @@ mod tests {
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].request, "./foo");
         assert!(matches!(imports[0].kind, SpecKind::Static));
+    }
+
+    #[test]
+    fn test_import_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let cache = DashMap::new();
+        let file = create_test_file(
+            temp_dir.path(),
+            "test.js",
+            "// header\nimport a from './a';\n\nconst b = require('./b');\nexport * from './c';",
+        );
+        let lines: Vec<(String, u32)> =
+            imports_for(&file, &cache).unwrap().into_iter().map(|s| (s.request, s.line)).collect();
+        assert_eq!(lines, vec![("./a".into(), 2), ("./b".into(), 4), ("./c".into(), 5)]);
     }
 
     #[test]

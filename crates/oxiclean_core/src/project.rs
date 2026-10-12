@@ -153,6 +153,24 @@ impl Project {
         self.workspace_packages.len()
     }
 
+    /// Workspace packages as (name, directory) pairs, sorted by name.
+    pub fn workspace_packages(&self) -> Vec<(&str, &Path)> {
+        let mut v: Vec<(&str, &Path)> =
+            self.workspace_packages.iter().map(|(n, d)| (n.as_str(), d.as_path())).collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Name of the workspace package whose directory is the nearest ancestor
+    /// of `file`, if any.
+    pub fn package_for(&self, file: &Path) -> Option<&str> {
+        self.workspace_packages
+            .iter()
+            .filter(|(_, dir)| file.starts_with(dir))
+            .max_by_key(|(_, dir)| dir.components().count())
+            .map(|(name, _)| name.as_str())
+    }
+
     /// Parsed package.json in `dir`, cached across calls.
     pub fn package_json(&self, dir: &Path) -> Option<Arc<serde_json::Value>> {
         if let Some(v) = self.package_json_cache.get(dir) {
@@ -335,7 +353,8 @@ fn discover_workspace_packages(root: &Path, package_dirs: &[PathBuf]) -> HashMap
     packages
 }
 
-/// Workspace globs from pnpm-workspace.yaml and/or package.json `workspaces`.
+/// Workspace globs from pnpm-workspace.yaml and package.json `workspaces`
+/// (npm, yarn and bun), falling back to lerna.json `packages`.
 fn workspace_patterns(root: &Path) -> Vec<String> {
     let mut patterns = Vec::new();
 
@@ -345,6 +364,20 @@ fn workspace_patterns(root: &Path) -> Vec<String> {
             let trimmed = line.trim();
             if !line.starts_with(' ') && !line.starts_with('-') && !trimmed.is_empty() {
                 in_packages = trimmed.starts_with("packages:");
+                // Flow style: `packages: ['apps/*', 'packages/*']`
+                if let Some(list) = trimmed
+                    .strip_prefix("packages:")
+                    .map(str::trim)
+                    .and_then(|l| l.strip_prefix('['))
+                    .and_then(|l| l.split(']').next())
+                {
+                    patterns.extend(
+                        list.split(',')
+                            .map(|i| i.trim().trim_matches(|c| c == '\'' || c == '"'))
+                            .filter(|i| !i.is_empty())
+                            .map(str::to_string),
+                    );
+                }
                 continue;
             }
             if in_packages && let Some(item) = trimmed.strip_prefix('-') {
@@ -364,6 +397,15 @@ fn workspace_patterns(root: &Path) -> Vec<String> {
         if let Some(list) = list {
             patterns.extend(list.iter().filter_map(|p| p.as_str()).map(str::to_string));
         }
+    }
+
+    // Lerna's own list, for repos that predate package manager workspaces
+    if patterns.is_empty()
+        && let Ok(txt) = fs::read_to_string(root.join("lerna.json"))
+        && let Some(list) = parse_jsonc(&txt).and_then(|v| v.get("packages").cloned())
+        && let Some(list) = list.as_array()
+    {
+        patterns.extend(list.iter().filter_map(|p| p.as_str()).map(str::to_string));
     }
 
     patterns
@@ -488,5 +530,28 @@ mod tests {
         write(root, "apps/group/api/package.json", r#"{"name":"api"}"#);
         let p = Project::load(root);
         assert_eq!(p.workspace_package_count(), 2);
+    }
+
+    #[test]
+    fn test_pnpm_flow_style_and_lerna() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root, "pnpm-workspace.yaml", "packages: ['apps/*', \"libs/*\"]\n");
+        write(&root, "apps/web/package.json", r#"{"name":"web"}"#);
+        write(&root, "libs/ui/package.json", r#"{"name":"@acme/ui"}"#);
+        let p = Project::load(&root);
+        assert_eq!(p.workspace_package_count(), 2);
+        assert_eq!(p.package_for(&root.join("libs/ui/src/a.ts")), Some("@acme/ui"));
+        assert_eq!(p.package_for(&root.join("other/a.ts")), None);
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root, "lerna.json", r#"{ "packages": ["packages/*"], }"#);
+        write(&root, "packages/a/package.json", r#"{"name":"a"}"#);
+        write(&root, "packages/a/nested/package.json", r#"{"name":"nested"}"#);
+        let p = Project::load(&root);
+        assert_eq!(p.workspace_packages(), vec![("a", root.join("packages/a").as_path())]);
+        // Only workspace members count, so the nested package.json is part of `a`.
+        assert_eq!(p.package_for(&root.join("packages/a/nested/x.ts")), Some("a"));
     }
 }

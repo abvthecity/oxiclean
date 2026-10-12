@@ -2,6 +2,8 @@
 pub struct Specifier {
     pub request: String,
     pub kind: SpecKind,
+    /// 1-based line of the import in its file.
+    pub line: u32,
 }
 
 impl Specifier {

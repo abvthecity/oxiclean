@@ -63,8 +63,12 @@ Both tools accept the same options for choosing what to analyse:
 | `--root <DIR>` | Project root. Defaults to the git root of the current directory. |
 | `--entry-glob <GLOB>` | Only treat files matching this glob (relative to the root) as entries, e.g. `"src/pages/**/*.tsx"`. `*` stays within one directory; `**` crosses directories. A pattern without glob characters matches any path containing it. Repeat to give several. Without it, every JS/TS file inside a `src` directory is an entry. |
 | `--include-dynamic` | Also follow dynamic `import()` calls. They are skipped by default because lazily loaded modules are split into separate chunks. |
+| `--threshold <N>` | Flag findings at or above N. Replaces every threshold in the config file. |
+| `--package <NAME>` | Only analyse entries in this workspace package. Globs such as `"@scope/*"` work. Repeat to give several. |
+| `--config <FILE>` | Read this config file instead of `oxiclean.toml` in the root. |
+| `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 
-Both exit with status 1 when anything crosses the threshold, so they can gate CI. Files that fail to parse are listed at the end of the report.
+Both exit with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
 ### Import Bloat Checker
 
@@ -126,6 +130,65 @@ src/pages/Dashboard.tsx
 
 Both metrics provide complementary insights into code complexity.
 
+## Configuration
+
+Put an `oxiclean.toml` in the project root to configure rules without
+repeating flags. Every key is optional.
+
+```toml
+# Files that are never entries and never reported, relative to the root
+ignore = ["**/fixtures/**", "apps/playground/**"]
+# Used when --entry-glob isn't given
+entry-globs = ["packages/*/src/**/*.{ts,tsx}"]
+include-dynamic = false
+
+[rules.import-bloat]
+threshold = 300
+severity = "error"         # "error" fails the run; "warn" only reports
+ignore = ["scripts/**"]    # files this rule doesn't report on
+
+[rules.import-depth]
+enabled = false
+
+# Settings for some workspace packages or paths. Overrides apply in order, so
+# later ones win. `packages` matches package names (globs allowed) and `files`
+# matches paths relative to the root; when both are given, a file must match both.
+[[overrides]]
+packages = ["@acme/legacy-*"]
+[overrides.rules.import-bloat]
+threshold = 1000
+severity = "warn"
+
+[[overrides]]
+packages = ["@acme/web"]
+[overrides.rules.import-depth]
+enabled = true
+threshold = 12
+```
+
+Unknown keys and rule names are errors, so a typo can't silently do nothing.
+Flags given on the command line win over the file: `--entry-glob` replaces
+`entry-globs`, and `--threshold` replaces every threshold, overrides included.
+
+## Output formats
+
+`--format text` (the default) prints the report shown above.
+
+`--format json` prints one JSON document with a `summary` (files analysed,
+error and warning counts, import resolution) and every finding with its
+`rule`, `severity`, `file` (relative to the root, with `/`), `line`,
+`package`, `request`, `resolved`, `value`, `threshold` and a `message`.
+
+`--format sarif` prints a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+log, which GitHub code scanning and other tools can show inline on pull requests:
+
+```yaml
+- run: oxiclean import-bloat --format sarif > oxiclean.sarif || true
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: oxiclean.sarif
+```
+
 ## Debugging & Logging
 
 Oxiclean uses the `log` crate with `env_logger` for debug output. Enable logging via the `RUST_LOG` environment variable:
@@ -166,11 +229,15 @@ so packages in a monorepo can define the same alias differently.
 
 ## Monorepos
 
-Workspace packages declared in `pnpm-workspace.yaml` or the root `package.json`
-`workspaces` field resolve to their source files, even before `node_modules`
-is installed. When a package's `main` or `exports` points at build output that
+Workspace packages declared in `pnpm-workspace.yaml`, the root `package.json`
+`workspaces` field (npm, yarn and bun) or, failing those, `lerna.json` resolve
+to their source files, even before `node_modules` is installed. When a package's `main` or `exports` points at build output that
 doesn't exist yet (for example `build/index.js`), the matching file under
 `src/` is used instead.
+
+Use `--package` to check one package at a time, and `[[overrides]]` in
+`oxiclean.toml` to give packages their own thresholds. JSON and SARIF output
+name the package each finding belongs to.
 
 ## What counts as an import
 

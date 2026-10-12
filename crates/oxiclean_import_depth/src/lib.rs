@@ -13,16 +13,16 @@
 //! use std::path::Path;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let cfg = Config { common: CommonArgs::with_root("/path/to/project"), threshold: 10 };
+//! let cfg = Config { common: CommonArgs::with_root("/path/to/project"), threshold: Some(10) };
 //! let result = run_import_depth_check(&cfg)?;
 //!
 //! let root = Path::new("/path/to/project");
 //! let ctx = report::ReportContext { root, cwd: root };
 //! let mut stdout = std::io::stdout().lock();
 //! if result.findings.is_empty() {
-//!     report::print_ok(&mut stdout, &REPORT_STYLE, cfg.threshold)?;
+//!     report::print_ok(&mut stdout, &REPORT_STYLE, result.threshold)?;
 //! } else {
-//!     report::print_findings(&mut stdout, &result.findings, &REPORT_STYLE, cfg.threshold, ctx)?;
+//!     report::print_findings(&mut stdout, &result.findings, &REPORT_STYLE, result.threshold, ctx)?;
 //! }
 //! # Ok(())
 //! # }
@@ -32,5 +32,5 @@ mod checker;
 mod config;
 
 pub use checker::{check, run_import_depth_check};
-pub use config::{Config, REPORT_STYLE};
+pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, Finding, FindingKind};

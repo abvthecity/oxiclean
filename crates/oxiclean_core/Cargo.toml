@@ -28,8 +28,10 @@ oxc_parser.workspace = true
 oxc_span.workspace = true
 path-clean.workspace = true
 rayon.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 
 [lib]
 name = "oxiclean_core"

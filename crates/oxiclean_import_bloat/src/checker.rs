@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use log::info;
-use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, ModuleId, Result};
+use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, ModuleId, Result, RulePolicy};
 
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 
 /// Runs the import bloat check described by `cfg`.
 ///
@@ -11,15 +11,21 @@ use crate::config::Config;
 /// Fails if the project root can't be found, an entry glob is invalid, or no
 /// entry files are found.
 pub fn run_import_bloat_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting import bloat check (threshold {})", cfg.threshold);
+    info!("Starting import bloat check");
     let analysis = cfg.common.analyze()?;
-    Ok(check(&analysis, cfg.threshold))
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, cfg.threshold)?;
+    Ok(check(&analysis, &policy))
 }
 
 /// Flags each entry whose whole graph, and each direct import of an entry whose
-/// own graph, reaches `threshold` unique modules.
+/// own graph, reaches its file's threshold of unique modules
+/// under `policy`.
 #[must_use]
-pub fn check(analysis: &Analysis, threshold: usize) -> CheckResult {
+pub fn check(analysis: &Analysis, policy: &RulePolicy) -> CheckResult {
+    let Some(threshold) = policy.min_threshold() else {
+        info!("{} is disabled", RULE);
+        return analysis.finish(policy, Vec::new());
+    };
     let graph = &analysis.graph;
 
     let mut queries: Vec<ModuleId> = analysis.entries.clone();
@@ -38,27 +44,28 @@ pub fn check(analysis: &Analysis, threshold: usize) -> CheckResult {
         for edge in &module.edges {
             let count = counts[&edge.target];
             if seen.insert(edge.target) && count >= threshold {
-                findings.push(Finding {
-                    file: module.path.clone(),
-                    kind: FindingKind::Import {
+                findings.push(Finding::new(
+                    module.path.clone(),
+                    FindingKind::Import {
                         request: edge.request.clone(),
                         resolved: graph.module(edge.target).path.clone(),
+                        line: edge.line,
                     },
-                    value: count,
-                });
+                    count,
+                ));
             }
         }
         if counts[&entry] >= threshold {
-            findings.push(Finding {
-                file: module.path.clone(),
-                kind: FindingKind::WholeGraph,
-                value: counts[&entry],
-            });
+            findings.push(Finding::new(
+                module.path.clone(),
+                FindingKind::WholeGraph,
+                counts[&entry],
+            ));
         }
     }
 
     info!("Import bloat check complete. Found {} findings", findings.len());
-    analysis.finish(findings)
+    analysis.finish(policy, findings)
 }
 
 #[cfg(test)]
@@ -75,7 +82,10 @@ mod tests {
     }
 
     fn run(root: &Path, entry_glob: &str, threshold: usize) -> CheckResult {
-        let cfg = Config { common: CommonArgs::with_root(root).entry_glob(entry_glob), threshold };
+        let cfg = Config {
+            common: CommonArgs::with_root(root).entry_glob(entry_glob),
+            threshold: Some(threshold),
+        };
         run_import_bloat_check(&cfg).unwrap()
     }
 
@@ -142,7 +152,7 @@ mod tests {
             common: CommonArgs::with_root(t.path())
                 .entry_glob("src/index.js")
                 .include_dynamic(true),
-            threshold: 1,
+            threshold: Some(1),
         };
         let result = run_import_bloat_check(&cfg).unwrap();
         assert_eq!(summary(&result), vec![("<entry>".into(), 3), ("./lazy".into(), 2)]);

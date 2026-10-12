@@ -1,4 +1,5 @@
-//! Findings and the terminal reporter shared by every checker.
+//! Findings and the reporters shared by every checker: terminal text, JSON
+//! and SARIF.
 
 use std::{
     collections::BTreeMap,
@@ -8,7 +9,10 @@ use std::{
 
 use colored::Colorize;
 
-use crate::{graph::ParseFailure, resolver::ResolutionStats};
+mod machine;
+pub use machine::{OutputFormat, ReportMeta, message, write_json, write_sarif};
+
+use crate::{graph::ParseFailure, resolver::ResolutionStats, settings::Severity};
 
 /// What a finding points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +24,8 @@ pub enum FindingKind {
         request: String,
         /// The file the import resolved to.
         resolved: PathBuf,
+        /// 1-based line of the import, or 0 when unknown.
+        line: u32,
     },
     /// The file's whole import graph.
     WholeGraph,
@@ -27,12 +33,36 @@ pub enum FindingKind {
 
 /// One threshold violation reported by a checker.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Finding {
     /// Absolute path of the file the finding is about.
     pub file: PathBuf,
     pub kind: FindingKind,
     /// The measured value (module count, depth, ...).
     pub value: usize,
+    /// The threshold that applied to this file.
+    pub threshold: usize,
+    pub severity: Severity,
+    /// The workspace package the file belongs to.
+    pub package: Option<String>,
+}
+
+impl Finding {
+    /// A finding with error severity and no threshold or package yet;
+    /// [`crate::Analysis::finish`] fills those in from the config.
+    #[must_use]
+    pub fn new(file: PathBuf, kind: FindingKind, value: usize) -> Self {
+        Self { file, kind, value, threshold: 0, severity: Severity::Error, package: None }
+    }
+
+    /// 1-based line the finding points at, or 0 for the whole file.
+    #[must_use]
+    pub fn line(&self) -> u32 {
+        match self.kind {
+            FindingKind::Import { line, .. } => line,
+            FindingKind::WholeGraph => 0,
+        }
+    }
 }
 
 /// The output of a checker run.
@@ -49,6 +79,16 @@ pub struct CheckResult {
     pub parse_failures: Vec<ParseFailure>,
     /// How many imports resolved.
     pub resolution: ResolutionStats,
+    /// The rule's threshold outside any override, for the report heading.
+    pub threshold: usize,
+}
+
+impl CheckResult {
+    /// Number of findings with error severity; a run with any fails.
+    #[must_use]
+    pub fn error_count(&self) -> usize {
+        self.findings.iter().filter(|f| f.severity == Severity::Error).count()
+    }
 }
 
 /// Sorts by file, whole-graph findings first, then by descending value and
@@ -77,6 +117,8 @@ fn request(f: &Finding) -> &str {
 /// Wording that differs between checkers.
 #[derive(Debug, Clone, Copy)]
 pub struct ReportStyle {
+    /// One line describing what the rule flags, for SARIF rule metadata.
+    pub description: &'static str,
     /// e.g. "Import bloat detected".
     pub heading: &'static str,
     /// Unit of the threshold in the heading, e.g. "modules".
@@ -150,9 +192,10 @@ pub fn print_findings<W: Write>(
         match file_findings.iter().find(|f| f.kind == FindingKind::WholeGraph) {
             Some(whole) => writeln!(
                 writer,
-                "{} ({})",
+                "{} ({}){}",
                 display_path.blue(),
-                (style.value_label)(whole.value).red().bold()
+                (style.value_label)(whole.value).red().bold(),
+                warn_tag(whole)
             )?,
             None => writeln!(writer, "{}", display_path.blue().bold())?,
         }
@@ -164,16 +207,25 @@ pub fn print_findings<W: Write>(
             let prefix = if idx == last { "└──" } else { "├──" };
             writeln!(
                 writer,
-                "{}  import '{}' ({})",
+                "{}  import '{}' ({}){}",
                 prefix.dimmed(),
                 request(f),
-                (style.value_label)(f.value).red()
+                (style.value_label)(f.value).red(),
+                warn_tag(f)
             )?;
         }
         writeln!(writer)?;
     }
 
     print_summary(writer, findings, style, ctx)
+}
+
+/// Marks findings that don't fail the run.
+fn warn_tag(f: &Finding) -> String {
+    match f.severity {
+        Severity::Warn => format!(" {}", "[warn]".yellow()),
+        Severity::Error => String::new(),
+    }
 }
 
 fn print_summary<W: Write>(
@@ -192,6 +244,10 @@ fn print_summary<W: Write>(
     writeln!(writer, "{}", "─".repeat(60).dimmed())?;
     writeln!(writer, "{}", "Summary".bold())?;
     writeln!(writer, "  Total violations: {}", violations.len().to_string().yellow().bold())?;
+    let warnings = violations.iter().filter(|f| f.severity == Severity::Warn).count();
+    if warnings > 0 {
+        writeln!(writer, "  Warnings (don't fail the run): {}", warnings.to_string().yellow())?;
+    }
     writeln!(writer, "  {}: {} {}", style.max_label, max.to_string().red().bold(), style.max_unit)?;
 
     let top = &violations[..violations.len().min(5)];
@@ -333,14 +389,19 @@ mod tests {
     }
 
     fn import(file: &str, request: &str, value: usize) -> Finding {
-        Finding {
-            file: PathBuf::from(file),
-            kind: FindingKind::Import { request: request.into(), resolved: PathBuf::from(request) },
+        Finding::new(
+            PathBuf::from(file),
+            FindingKind::Import {
+                request: request.into(),
+                resolved: PathBuf::from(request),
+                line: 1,
+            },
             value,
-        }
+        )
     }
 
     const STYLE: ReportStyle = ReportStyle {
+        description: "Imports that pull in too many modules",
         heading: "Import bloat detected",
         threshold_unit: "modules",
         value_label: |n| format!("{n} modules"),
@@ -353,7 +414,7 @@ mod tests {
     fn findings_are_sorted_deterministically() {
         let mut fs = vec![
             import("/p/b.ts", "./x", 5),
-            Finding { file: "/p/a.ts".into(), kind: FindingKind::WholeGraph, value: 9 },
+            Finding::new("/p/a.ts".into(), FindingKind::WholeGraph, 9),
             import("/p/a.ts", "./y", 3),
             import("/p/a.ts", "./z", 7),
         ];
