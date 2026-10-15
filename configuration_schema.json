@@ -15,26 +15,10 @@
     "entries": {
       "description": "Globs of entry files, relative to the root (e.g.\n\"apps/*/src/pages/**/*.tsx\"). `*` stays within one directory and `**`\ncrosses directories; a pattern without glob characters matches any path\ncontaining it. When empty, every JS/TS file inside a `src` directory is\nan entry; the unused export and member checks start from each\npackage's entry points instead (package.json `main`, `exports`, `bin` and\n`scripts`, `index` files, tests and declaration files).",
       "type": "array",
-      "default": [],
       "items": {
         "type": "string"
-      }
-    },
-    "ignoreDependencies": {
-      "description": "Names of packages, globs such as \"@types/*\" allowed, that the unused\ndependency checks never report, as knip's `ignoreDependencies`.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
-    },
-    "ignorePatterns": {
-      "description": "Globs of files, relative to the root, that are never entries and never\nreported.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
+      },
+      "default": []
     },
     "includeDynamic": {
       "description": "Also follow dynamic `import()` calls. They are skipped by default\nbecause lazily loaded modules are split into separate chunks.",
@@ -46,12 +30,21 @@
       "type": "boolean",
       "default": false
     },
-    "overrides": {
-      "description": "Settings for some workspace packages or files. Later overrides win.",
+    "ignorePatterns": {
+      "description": "Globs of files, relative to the root, that are never entries and never\nreported.",
       "type": "array",
       "items": {
-        "$ref": "#/$defs/Override"
-      }
+        "type": "string"
+      },
+      "default": []
+    },
+    "ignoreDependencies": {
+      "description": "Names of packages, globs such as \"@types/*\" allowed, that the unused\ndependency checks never report, as knip's `ignoreDependencies`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     },
     "plugins": {
       "description": "Turns plugins on or off. A plugin that isn't listed is on when its\ntool is used: when a package.json lists one of its packages, or\nalways for file formats and TypeScript.",
@@ -60,125 +53,23 @@
     "rules": {
       "description": "Settings per rule. A rule that isn't listed runs with its defaults.",
       "$ref": "#/$defs/Rules"
+    },
+    "overrides": {
+      "description": "Settings for some workspace packages or files. Later overrides win.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Override"
+      }
     }
   },
   "additionalProperties": false,
   "$defs": {
-    "AllowWarnDeny": {
-      "description": "`off` (or `allow`) turns a rule off, `warn` reports without failing the\nrun, and `error` (or `deny`) fails it.",
-      "type": "string",
-      "enum": [
-        "off",
-        "allow",
-        "warn",
-        "error",
-        "deny"
-      ]
-    },
-    "DependencyField": {
-      "description": "A package.json field `dependencies` can check.",
-      "type": "string",
-      "enum": [
-        "dependencies",
-        "devDependencies"
-      ]
-    },
-    "Override": {
-      "description": "Rule settings for the files of some workspace packages or paths.",
-      "type": "object",
-      "properties": {
-        "files": {
-          "description": "Globs of files, relative to the root.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "packages": {
-          "description": "Workspace package names; globs such as \"@scope/*\" are allowed.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "rules": {
-          "$ref": "#/$defs/Rules"
-        }
-      },
-      "additionalProperties": false
-    },
     "PluginSettings": {
       "description": "Plugins: what oxiclean knows about a file format or a tool. `true`\nturns one on and `false` off; one left out is on when its tool is used.",
       "type": "object",
       "properties": {
-        "astro": {
-          "description": "Astro components' frontmatter and `<script>` blocks. Always on by\ndefault.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "babel": {
-          "description": "The presets and plugins Babel's config files and `babel` name.\nAlways on by default.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "css": {
-          "description": "Stylesheets (`.css`, `.scss`, `.sass`, `.less`): `@import`, `@use`,\n`@forward` and Tailwind's `@plugin`, `@config` and `@reference`.\nAlways on by default.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "eslint": {
-          "description": "The packages ESLint's `.eslintrc*` files and `eslintConfig` name in\n`extends`, `plugins`, `parser` and import resolvers. Always on by\ndefault.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "expo": {
-          "description": "Expo: config plugins in `app.json` and `app.config.*`, a `main` such\nas `expo-router/entry`, and Expo Router's routes in `app`, which are\nentries. On when a package.json lists `expo`.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
         "html": {
           "description": "HTML pages: `<script>` blocks and `<script src>`; pages that load the\nproject's scripts are entries. Always on by default.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "husky": {
-          "description": "The commands husky's hooks in `.husky` and package.json\n`simple-git-hooks` run, read as scripts. On when a package.json\nlists `husky` or `simple-git-hooks`.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "jest": {
-          "description": "What Jest's config names: presets, environments, transforms,\nreporters and the like are used, and setup files are entries. On\nwhen a package.json lists `jest`.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "lint-staged": {
-          "description": "The commands lint-staged's config runs, read as scripts. On when a\npackage.json lists `lint-staged`.",
           "type": [
             "boolean",
             "null"
@@ -193,8 +84,56 @@
           ],
           "default": null
         },
-        "next": {
-          "description": "Next.js pages, App Router files (`page`, `layout`, `route` and the\nlike), middleware and instrumentation are entries. On when a\npackage.json lists `next`.",
+        "vue": {
+          "description": "Vue single-file components' `<script>` blocks. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "svelte": {
+          "description": "Svelte components' `<script>` blocks. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "astro": {
+          "description": "Astro components' frontmatter and `<script>` blocks. Always on by\ndefault.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "css": {
+          "description": "Stylesheets (`.css`, `.scss`, `.sass`, `.less`): `@import`, `@use`,\n`@forward` and Tailwind's `@plugin`, `@config` and `@reference`.\nAlways on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "typescript": {
+          "description": "The packages tsconfig files name in `extends`, `types`,\n`jsxImportSource` and `plugins`. Always on by default.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "eslint": {
+          "description": "The packages ESLint's `.eslintrc*` files and `eslintConfig` name in\n`extends`, `plugins`, `parser` and import resolvers. Always on by\ndefault.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "babel": {
+          "description": "The presets and plugins Babel's config files and `babel` name.\nAlways on by default.",
           "type": [
             "boolean",
             "null"
@@ -217,24 +156,8 @@
           ],
           "default": null
         },
-        "storybook": {
-          "description": "Storybook: the addons and framework `.storybook/main.*` names are\nused, and stories (`*.stories.*`) and `.storybook`'s `main`,\n`preview` and `manager` are entries. On when a package.json lists\n`storybook`.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "svelte": {
-          "description": "Svelte components' `<script>` blocks. Always on by default.",
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "default": null
-        },
-        "typescript": {
-          "description": "The packages tsconfig files name in `extends`, `types`,\n`jsxImportSource` and `plugins`. Always on by default.",
+        "jest": {
+          "description": "What Jest's config names: presets, environments, transforms,\nreporters and the like are used, and setup files are entries. On\nwhen a package.json lists `jest`.",
           "type": [
             "boolean",
             "null"
@@ -249,8 +172,40 @@
           ],
           "default": null
         },
-        "vue": {
-          "description": "Vue single-file components' `<script>` blocks. Always on by default.",
+        "next": {
+          "description": "Next.js pages, App Router files (`page`, `layout`, `route` and the\nlike), middleware and instrumentation are entries. On when a\npackage.json lists `next`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "expo": {
+          "description": "Expo: config plugins in `app.json` and `app.config.*`, a `main` such\nas `expo-router/entry`, and Expo Router's routes in `app`, which are\nentries. On when a package.json lists `expo`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "storybook": {
+          "description": "Storybook: the addons and framework `.storybook/main.*` names are\nused, and stories (`*.stories.*`) and `.storybook`'s `main`,\n`preview` and `manager` are entries. On when a package.json lists\n`storybook`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "husky": {
+          "description": "The commands husky's hooks in `.husky` and package.json\n`simple-git-hooks` run, read as scripts. On when a package.json\nlists `husky` or `simple-git-hooks`.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "lint-staged": {
+          "description": "The commands lint-staged's config runs, read as scripts. On when a\npackage.json lists `lint-staged`.",
           "type": [
             "boolean",
             "null"
@@ -260,123 +215,12 @@
       },
       "additionalProperties": false
     },
-    "RuleOptions": {
-      "description": "Options shared by every rule.",
-      "type": "object",
-      "properties": {
-        "fields": {
-          "description": "For `dependencies`: the package.json fields to check. Both by\ndefault.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "$ref": "#/$defs/DependencyField"
-          }
-        },
-        "ignorePatterns": {
-          "description": "Globs of files, relative to the root, this rule does not report on.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
-        },
-        "threshold": {
-          "description": "Report values at or above this.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "default": null,
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "RuleSetting": {
-      "description": "A rule's severity, optionally with options.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AllowWarnDeny"
-        },
-        {
-          "type": "array",
-          "maxItems": 2,
-          "minItems": 2,
-          "prefixItems": [
-            {
-              "$ref": "#/$defs/AllowWarnDeny"
-            },
-            {
-              "$ref": "#/$defs/RuleOptions"
-            }
-          ]
-        }
-      ]
-    },
     "Rules": {
       "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
       "type": "object",
       "properties": {
-        "ambient-types": {
-          "description": "Programs without `compilerOptions.types` that load `@types` packages\nneither their package.json nor the root one declares. Default\nthreshold: 1 package.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "barrels": {
-          "description": "Barrel files, modules that mostly re-export others, that pull in\ntoo many modules when imported. Default threshold: 25 modules.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "bloat": {
           "description": "Imports and entries that pull in too many unique modules.\nDefault threshold: 300 modules.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "catalog": {
-          "description": "Entries of pnpm's `catalog` and `catalogs` in pnpm-workspace.yaml\nthat no package.json refers to with `catalog:`, as knip's `catalog`.\nDefault threshold: 1.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "cycles": {
-          "description": "Files that import each other, directly or indirectly, at runtime.\nType-only imports don't count. Default threshold: 1 file, so every\ncycle is reported.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "dependencies": {
-          "description": "Packages a package.json lists in `dependencies` or `devDependencies`\nthat no file imports and no script runs, as knip's `dependencies` and\n`devDependencies`. The `fields` option picks which of the two to\ncheck. A package in both is reported in `devDependencies`. Default\nthreshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
@@ -397,8 +241,8 @@
             }
           ]
         },
-        "duplicate-versions": {
-          "description": "Packages `package-lock.json` or `pnpm-lock.yaml` installs at more\nthan one version. Default threshold: 2 versions.",
+        "cycles": {
+          "description": "Files that import each other, directly or indirectly, at runtime.\nType-only imports don't count. Default threshold: 1 file, so every\ncycle is reported.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
@@ -419,6 +263,83 @@
             }
           ]
         },
+        "unused-exports": {
+          "description": "Exports that no other file imports, as knip's `exports`. Entry files'\nexports and exports tagged `@public`, `@beta` or `@alias` don't\ncount. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-types": {
+          "description": "Exported types, interfaces and enums that no other file imports, as\nknip's `types`. The same exceptions apply. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-enum-members": {
+          "description": "Members of used enums that nothing uses, as knip's `enumMembers`.\nMembers tagged `@public`, `@beta` or `@alias` don't count. Default\nthreshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unused-namespace-members": {
+          "description": "What used namespaces export that nothing uses, as knip's\n`namespaceMembers`. The same exceptions apply. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dependencies": {
+          "description": "Packages a package.json lists in `dependencies` or `devDependencies`\nthat no file imports and no script runs, as knip's `dependencies` and\n`devDependencies`. The `fields` option picks which of the two to\ncheck. A package in both is reported in `devDependencies`. Default\nthreshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "catalog": {
+          "description": "Entries of pnpm's `catalog` and `catalogs` in pnpm-workspace.yaml\nthat no package.json refers to with `catalog:`, as knip's `catalog`.\nDefault threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "barrels": {
+          "description": "Barrel files, modules that mostly re-export others, that pull in\ntoo many modules when imported. Default threshold: 25 modules.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "heavy-dependencies": {
           "description": "Third-party packages that pull in too many modules, counted through\n`node_modules`, reported on the package.json that lists them.\nDefault threshold: 100 modules.",
           "anyOf": [
@@ -430,30 +351,8 @@
             }
           ]
         },
-        "isolated-declarations": {
-          "description": "Programs that emit declarations and already have, or are a few\nannotations from, the explicit types `isolatedDeclarations` needs;\nand Deno packages with `exports` whose public API has JSR slow\ntypes. Has no threshold.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "large-literals": {
-          "description": "Object and array literals, and `.json` files programs import, with\nso many values that inferring their types slows `tsc`. Default\nthreshold: 10000 values.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "overlap": {
-          "description": "Files that more than one tsconfig program type-checks, from configs\nin different directories where neither extends the other. Default\nthreshold: 1 file.",
+        "duplicate-versions": {
+          "description": "Packages `package-lock.json` or `pnpm-lock.yaml` installs at more\nthan one version. Default threshold: 2 versions.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
@@ -465,6 +364,17 @@
         },
         "program-files": {
           "description": "Files a tsconfig program type-checks that nobody needs checked:\nbuild output in a tsconfig's `outDir` or `declarationDir`, and\nminified or very large JavaScript that `allowJs` pulls in. Default\nthreshold: 1 file.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overlap": {
+          "description": "Files that more than one tsconfig program type-checks, from configs\nin different directories where neither extends the other. Default\nthreshold: 1 file.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
@@ -496,6 +406,39 @@
             }
           ]
         },
+        "ambient-types": {
+          "description": "Programs without `compilerOptions.types` that load `@types` packages\nneither their package.json nor the root one declares. Default\nthreshold: 1 package.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolated-declarations": {
+          "description": "Programs that emit declarations and already have, or are a few\nannotations from, the explicit types `isolatedDeclarations` needs;\nand Deno packages with `exports` whose public API has JSR slow\ntypes. Has no threshold.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "large-literals": {
+          "description": "Object and array literals, and `.json` files programs import, with\nso many values that inferring their types slows `tsc`. Default\nthreshold: 10000 values.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "type-bloat": {
           "description": "Package imports whose declaration files, beyond the `@types`\npackages a program loads anyway, run to so many lines that parsing\nand binding them slows `tsc`. Default threshold: 100000 lines.",
           "anyOf": [
@@ -506,50 +449,107 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuleSetting": {
+      "description": "A rule's severity, optionally with options.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllowWarnDeny"
         },
-        "unused-enum-members": {
-          "description": "Members of used enums that nothing uses, as knip's `enumMembers`.\nMembers tagged `@public`, `@beta` or `@alias` don't count. Default\nthreshold: 1.",
-          "anyOf": [
+        {
+          "type": "array",
+          "prefixItems": [
             {
-              "$ref": "#/$defs/RuleSetting"
+              "$ref": "#/$defs/AllowWarnDeny"
             },
             {
-              "type": "null"
+              "$ref": "#/$defs/RuleOptions"
             }
-          ]
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ]
+    },
+    "AllowWarnDeny": {
+      "description": "`off` (or `allow`) turns a rule off, `warn` reports without failing the\nrun, and `error` (or `deny`) fails it.",
+      "type": "string",
+      "enum": [
+        "off",
+        "allow",
+        "warn",
+        "error",
+        "deny"
+      ]
+    },
+    "RuleOptions": {
+      "description": "Options shared by every rule.",
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "description": "Report values at or above this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "default": null
         },
-        "unused-exports": {
-          "description": "Exports that no other file imports, as knip's `exports`. Entry files'\nexports and exports tagged `@public`, `@beta` or `@alias` don't\ncount. Default threshold: 1.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "ignorePatterns": {
+          "description": "Globs of files, relative to the root, this rule does not report on.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         },
-        "unused-namespace-members": {
-          "description": "What used namespaces export that nothing uses, as knip's\n`namespaceMembers`. The same exceptions apply. Default threshold: 1.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "fields": {
+          "description": "For `dependencies`: the package.json fields to check. Both by\ndefault.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DependencyField"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DependencyField": {
+      "description": "A package.json field `dependencies` can check.",
+      "type": "string",
+      "enum": [
+        "dependencies",
+        "devDependencies"
+      ]
+    },
+    "Override": {
+      "description": "Rule settings for the files of some workspace packages or paths.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Globs of files, relative to the root.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         },
-        "unused-types": {
-          "description": "Exported types, interfaces and enums that no other file imports, as\nknip's `types`. The same exceptions apply. Default threshold: 1.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuleSetting"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "packages": {
+          "description": "Workspace package names; globs such as \"@scope/*\" are allowed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "rules": {
+          "$ref": "#/$defs/Rules"
         }
       },
       "additionalProperties": false

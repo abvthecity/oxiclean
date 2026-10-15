@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "customConditions": ["internal"],
+    "paths": { "vendor-sdk": ["./vendor/sdk/index.d.ts"] },
+    "types": ["@scope/globals"],
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

@@ -46,6 +46,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::{Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE},
+    declarations::is_typescript,
     tsconfig::{TsConfigFile, TsConfigs},
     typescript::typescript_version,
 };
@@ -117,12 +118,6 @@ fn emits_declarations(program: &TsConfigFile) -> bool {
     program.flag("declaration") == Some(true) || program.flag("composite") == Some(true)
 }
 
-/// Whether `file` is TypeScript source, which declarations are made from.
-fn is_source(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e)) && !name.contains(".d.")
-}
-
 /// Findings for the programs that emit declarations.
 fn programs(
     project: &Project,
@@ -143,7 +138,7 @@ fn programs(
             continue;
         }
         let starts: Vec<PathBuf> =
-            program.root_files.iter().filter(|f| is_source(f)).cloned().collect();
+            program.root_files.iter().filter(|f| is_typescript(f)).cloned().collect();
         if starts.is_empty() {
             continue;
         }
@@ -238,7 +233,7 @@ fn jsr_package(dir: &Path) -> Option<JsrPackage> {
     let entries: Vec<PathBuf> = entries
         .into_iter()
         .map(path_clean::clean)
-        .filter(|e| is_source(e) && e.is_file())
+        .filter(|e| is_typescript(e) && e.is_file())
         .collect();
     if entries.is_empty() {
         return None;
@@ -270,7 +265,7 @@ fn walk(
             let imports: &[String] = if follow == Follow::All { &report.imports } else { &[] };
             for request in report.reexports.iter().chain(imports).filter(|r| r.starts_with('.')) {
                 if let Ok(Some(local)) = resolve(project, f, request, cache)
-                    && is_source(&local)
+                    && is_typescript(&local)
                     && !local.components().any(|c| c.as_os_str() == "node_modules")
                     && seen.insert(local.clone())
                 {

@@ -37,7 +37,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::{Config, DEFAULT_THRESHOLD, REFERENCES_RULE},
-    declarations::{package_entry, paths_target},
+    declarations::{Mode, is_typescript, package_file, paths_target},
     tsconfig::{TsConfigFile, TsConfigs, relative, slashes},
 };
 
@@ -489,15 +489,9 @@ fn source_imports(
 /// `name` in `dir` when it imports it, rather than built `.d.ts` files.
 /// As in `tsc`, `paths` come first, then the package's own entry points.
 fn reaches_source(project: &Project, program: &TsConfigFile, name: &str, dir: &Path) -> bool {
-    let found =
-        paths_target(project, program, name).or_else(|| package_entry(project, program, dir));
-    found.is_some_and(|f| f.starts_with(dir) && is_source(&f))
-}
-
-/// Whether `file` is TypeScript source rather than a declaration file.
-fn is_source(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e)) && !name.contains(".d.")
+    let found = paths_target(project, program, name)
+        .or_else(|| package_file(project, &Mode::of(project, program), dir, ""));
+    found.is_some_and(|f| f.starts_with(dir) && is_typescript(&f))
 }
 
 #[cfg(test)]

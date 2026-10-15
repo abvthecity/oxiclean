@@ -18,6 +18,9 @@
 //! program's module resolution reads it, else `typesVersions`, `types`,
 //! `typings` and `main`. Each program's source is followed through its
 //! local imports.
+//!
+//! Imports inside declaration files are resolved without the program's
+//! `paths`, which `tsc` applies there too; packages rarely rely on them.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -45,7 +48,10 @@ use tracing::{debug, info, warn};
 use crate::{
     ambient_types::{loads_all_types, visible_types},
     config::{Config, TYPE_BLOAT_DEFAULT_THRESHOLD, TYPE_BLOAT_RULE},
-    declarations::{Mode, package_file, paths_target, resolve_types},
+    declarations::{
+        Mode, in_node_modules, is_declaration, is_relative, is_source, package_file, paths_target,
+        resolve_file_only, resolve_types, types_package_name,
+    },
     tsconfig::{TsConfigFile, TsConfigs},
 };
 
@@ -63,6 +69,15 @@ enum Request {
 struct DeclFile {
     lines: usize,
     requests: Vec<Request>,
+}
+
+/// What an import costs: its line, and the lines and files of declarations
+/// it adds.
+#[derive(Debug, Clone, Copy)]
+struct Cost {
+    line: u32,
+    lines: usize,
+    files: usize,
 }
 
 /// One import of a package from a program's source.
@@ -89,19 +104,20 @@ pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
     let configs = TsConfigs::load(project);
     let programs: Vec<&TsConfigFile> =
         configs.programs().filter(|p| !p.partial && !p.root_files.is_empty()).collect();
-    let graph = DeclGraph::new(project);
+    let graph = DeclGraph::new(project, &programs);
     let sources = read_sources(project, &programs);
 
     // The largest cost of each import, over the programs that check it.
-    let mut costs: BTreeMap<(PathBuf, String), (u32, usize, usize)> = BTreeMap::new();
+    let mut costs: BTreeMap<(PathBuf, String), Cost> = BTreeMap::new();
     for program in &programs {
-        let mode = Mode::of(program);
-        let baseline = graph.closure(&mode, &ambient_entries(project, program, &mode));
+        let mode = Mode::of(project, program);
+        let id = graph.mode_id(&mode);
+        let baseline = graph.closure(id, &ambient_entries(project, program, &mode));
         for import in program_imports(project, program, &mode, &sources) {
             let entry = paths_target(project, program, import.request)
                 .or_else(|| resolve_types(project, &mode, import.file, import.request));
             let Some(entry) = entry.filter(|e| is_declaration(e)) else { continue };
-            let reach = graph.closure(&mode, &[entry]);
+            let reach = graph.closure(id, &[entry]);
             let (lines, files) = reach
                 .iter()
                 .filter(|f| !baseline.contains(*f))
@@ -110,20 +126,21 @@ pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
                 continue;
             }
             let key = (import.file.to_path_buf(), import.request.to_string());
-            let cost = costs.entry(key).or_insert((import.line, lines, files));
-            if lines > cost.1 {
-                *cost = (import.line, lines, files);
+            let found = Cost { line: import.line, lines, files };
+            let cost = costs.entry(key).or_insert(found);
+            if lines > cost.lines {
+                *cost = found;
             }
         }
     }
     let findings = costs
         .into_iter()
-        .map(|((file, request), (line, lines, files))| {
+        .map(|((file, request), Cost { line, lines, files })| {
             let (name, _) = split_package_request(&request);
             let message = format!(
                 "loads {lines} lines of declarations in {files} files that tsc parses and binds in every program that imports it; import what you use from a narrower entry, such as a subpath of {name} or a smaller package"
             );
-            let issue = Issue::new("heavy-types", request.clone(), message, line);
+            let issue = Issue::new("heavy-types", request, message, line);
             Finding::new(file, FindingKind::Issue(issue), lines)
         })
         .collect::<Vec<_>>();
@@ -146,7 +163,7 @@ fn read_sources(
         .cloned()
         .collect();
     let mut frontier: Vec<PathBuf> = seen.iter().cloned().collect();
-    let mode = Mode { exports: false, conditions: Vec::new() };
+    let mode = Mode::local();
     while !frontier.is_empty() {
         let read: Vec<(PathBuf, Vec<oxiclean_core::Specifier>, Vec<PathBuf>)> = frontier
             .into_par_iter()
@@ -160,7 +177,7 @@ fn read_sources(
                 };
                 let local = specs
                     .iter()
-                    .filter(|s| s.request.starts_with('.'))
+                    .filter(|s| is_relative(&s.request))
                     .filter_map(|s| resolve_types(project, &mode, &f, &s.request))
                     .filter(|l| is_source(l) && !in_node_modules(l))
                     .collect();
@@ -197,7 +214,7 @@ fn program_imports<'a>(
     while let Some(file) = stack.pop() {
         let Some(specs) = sources.get(file) else { continue };
         for s in specs {
-            if s.request.starts_with('.') || s.request.starts_with('/') {
+            if is_relative(&s.request) {
                 let next = resolve_types(project, mode, file, &s.request)
                     .and_then(|l| sources.get_key_value(&l).map(|(p, _)| p.as_path()));
                 if let Some(next) = next
@@ -230,7 +247,7 @@ fn ambient_entries(project: &Project, program: &TsConfigFile, mode: &Mode) -> Ve
         .filter_map(|name| {
             dirs.iter().find_map(|d| {
                 let modules = d.join("node_modules");
-                package_file(project, mode, &modules.join("@types").join(name), "")
+                package_file(project, mode, &modules.join(types_package_name(name)), "")
                     .or_else(|| package_file(project, mode, &modules.join(name), ""))
             })
         })
@@ -241,14 +258,33 @@ fn ambient_entries(project: &Project, program: &TsConfigFile, mode: &Mode) -> Ve
 /// program.
 struct DeclGraph<'p> {
     project: &'p Project,
+    /// The distinct modes of the programs; caches key on their index.
+    modes: Vec<Mode>,
     files: DashMap<PathBuf, Arc<DeclFile>>,
-    resolved: DashMap<(Mode, PathBuf, Request), Option<PathBuf>>,
-    closures: DashMap<(Mode, PathBuf), Arc<HashSet<PathBuf>>>,
+    resolved: DashMap<(usize, PathBuf, Request), Option<PathBuf>>,
+    closures: DashMap<(usize, PathBuf), Arc<HashSet<PathBuf>>>,
 }
 
 impl<'p> DeclGraph<'p> {
-    fn new(project: &'p Project) -> Self {
-        Self { project, files: DashMap::new(), resolved: DashMap::new(), closures: DashMap::new() }
+    fn new(project: &'p Project, programs: &[&TsConfigFile]) -> Self {
+        let mut modes: Vec<Mode> = Vec::new();
+        for program in programs {
+            let mode = Mode::of(project, program);
+            if !modes.contains(&mode) {
+                modes.push(mode);
+            }
+        }
+        Self {
+            project,
+            modes,
+            files: DashMap::new(),
+            resolved: DashMap::new(),
+            closures: DashMap::new(),
+        }
+    }
+
+    fn mode_id(&self, mode: &Mode) -> usize {
+        self.modes.iter().position(|m| m == mode).unwrap_or_default()
     }
 
     fn lines(&self, file: &Path) -> usize {
@@ -256,9 +292,9 @@ impl<'p> DeclGraph<'p> {
     }
 
     /// The declaration files `entries` load, `entries` included.
-    fn closure(&self, mode: &Mode, entries: &[PathBuf]) -> Arc<HashSet<PathBuf>> {
+    fn closure(&self, mode: usize, entries: &[PathBuf]) -> Arc<HashSet<PathBuf>> {
         if let [entry] = entries
-            && let Some(done) = self.closures.get(&(mode.clone(), entry.clone()))
+            && let Some(done) = self.closures.get(&(mode, entry.clone()))
         {
             return Arc::clone(&done);
         }
@@ -267,41 +303,44 @@ impl<'p> DeclGraph<'p> {
         while !frontier.is_empty() {
             let next: Vec<PathBuf> = frontier
                 .par_iter()
-                .flat_map_iter(|f| {
+                .flat_map(|f| {
                     let file = self.read(f);
                     file.requests
-                        .iter()
+                        .par_iter()
                         .filter_map(|r| self.resolve(mode, f, r))
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            frontier = next.into_iter().filter(|n| seen.insert(n.clone())).collect();
+            frontier.clear();
+            frontier.extend(next.into_iter().filter(|n| seen.insert(n.clone())));
         }
         let seen = Arc::new(seen);
         if let [entry] = entries {
-            self.closures.insert((mode.clone(), entry.clone()), Arc::clone(&seen));
+            self.closures.insert((mode, entry.clone()), Arc::clone(&seen));
         }
         seen
     }
 
-    fn resolve(&self, mode: &Mode, from: &Path, request: &Request) -> Option<PathBuf> {
+    fn resolve(&self, mode: usize, from: &Path, request: &Request) -> Option<PathBuf> {
         let dir = from.parent().unwrap_or(from).to_path_buf();
-        let key = (mode.clone(), dir, request.clone());
+        let key = (mode, dir, request.clone());
         if let Some(hit) = self.resolved.get(&key) {
             return hit.clone();
         }
         let found = match request {
-            Request::Module(m) => resolve_types(self.project, mode, from, m),
-            Request::Path(p) => {
-                let target = key.1.join(p);
-                target.is_file().then(|| path_clean::clean(target))
-            }
+            Request::Module(m) => resolve_types(self.project, &self.modes[mode], from, m),
+            // `tsc` adds an extension to a path that has none.
+            Request::Path(p) => resolve_file_only(&path_clean::clean(key.1.join(p))),
         }
         .filter(|f| is_declaration(f));
         self.resolved.insert(key, found.clone());
         found
     }
 
+    /// `file`, parsed once. Two threads could both miss and parse the same
+    /// file, but each frontier holds a file once and closures run one at a
+    /// time, so they don't; `entry()` would hold the shard lock while
+    /// parsing.
     fn read(&self, file: &Path) -> Arc<DeclFile> {
         if let Some(hit) = self.files.get(file) {
             return Arc::clone(&hit);
@@ -340,8 +379,17 @@ fn read_declarations(file: &Path) -> DeclFile {
 /// directives at the top of `src`.
 fn references(src: &str) -> Vec<Request> {
     let mut out = Vec::new();
+    let mut in_block = false;
     for line in src.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with("/*") || line.starts_with('*') {
+        if in_block {
+            in_block = !line.contains("*/");
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("/*") {
+            in_block = !rest.contains("*/");
+            continue;
+        }
+        if line.is_empty() {
             continue;
         }
         let Some(rest) = line.strip_prefix("///") else {
@@ -417,25 +465,6 @@ impl<'a> Visit<'a> for Requests {
     }
 }
 
-/// Whether `file` is TypeScript or JavaScript source, not a declaration.
-fn is_source(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"].iter().any(|e| name.ends_with(e))
-        && !is_declaration(file)
-}
-
-/// Whether `file` is a declaration file, as `tsc` decides: `.d.ts`,
-/// `.d.mts`, `.d.cts`, or any `.ts` file with `.d.` in its name.
-fn is_declaration(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".d.mts", ".d.cts"].iter().any(|e| name.ends_with(e))
-        || (name.ends_with(".ts") && name.contains(".d."))
-}
-
-fn in_node_modules(file: &Path) -> bool {
-    file.components().any(|c| c.as_os_str() == "node_modules")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,5 +476,11 @@ mod tests {
             references(src),
             [Request::Module("node".into()), Request::Path("./globals.d.ts".into())]
         );
+    }
+
+    #[test]
+    fn reads_references_after_any_block_comment() {
+        let src = "/*\n  Licensed under MIT\n*/\n/** one line */\n/// <reference types=\"node\" />\nexport {};";
+        assert_eq!(references(src), [Request::Module("node".into())]);
     }
 }

@@ -128,7 +128,7 @@ pub const LARGE_LITERALS_STYLE: ReportStyle = ReportStyle {
 pub const TYPE_BLOAT_RULE: &str = "type-bloat";
 
 /// Imports that load this many lines of declarations are reported: in
-/// `tsc` 5.9, parsing and binding them takes about a second.
+/// `tsc` 5.9, parsing and binding them takes about a quarter of a second.
 pub const TYPE_BLOAT_DEFAULT_THRESHOLD: usize = 100_000;
 
 /// How type bloat findings are worded in the terminal report.

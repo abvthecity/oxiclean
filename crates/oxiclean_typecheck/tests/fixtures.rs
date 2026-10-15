@@ -334,6 +334,21 @@ fn type_bloat_pnpm() {
     );
 }
 
+/// `paths` to a declaration file that references another without an
+/// extension, and `customConditions` choosing a package's larger entry;
+/// not reported: a scoped package typed by `@types/scope__globals`, which
+/// the program's `types` loads anyway. The values match `tsc --listFiles`.
+#[test]
+fn type_bloat_paths_and_conditions() {
+    assert_eq!(
+        type_bloat("bloat-paths"),
+        [
+            "src/index.ts:2 heavy-types cond-pkg (701)",
+            "src/index.ts:1 heavy-types vendor-sdk (602)",
+        ]
+    );
+}
+
 /// npm: a package typed only by its `@types` package, which pulls in more
 /// with `/// <reference path>`; not reported: a small package and a
 /// built-in module.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use oxiclean_core::Project;
 use serde_json::Value;
 
-use crate::tsconfig::TsConfigFile;
+use crate::{tsconfig::TsConfigFile, typescript::typescript_version};
 
 /// The file `program`'s `paths` map `name` to: the targets of the exact
 /// key, else of the wildcard key with the longest prefix, in order. None
@@ -35,35 +35,9 @@ pub(crate) fn paths_target(
         .find_map(|t| resolve_typed(project, Path::new(&t.replacen('*', star, 1))))
 }
 
-/// The file `tsc` reads for the package in `dir`: its `exports` `.`
-/// entry when the program's module resolution reads `exports`, else
-/// `types` or `typings`, else `main`, else `index`. `module` is never read.
-pub(crate) fn package_entry(
-    project: &Project,
-    program: &TsConfigFile,
-    dir: &Path,
-) -> Option<PathBuf> {
-    let Some(pkg) = project.package_json(dir) else {
-        return resolve_typed(project, &dir.join("index"));
-    };
-    if let Some(exports) = pkg.get("exports").filter(|_| reads_exports(program)) {
-        let root = match exports {
-            Value::Object(map) if map.keys().any(|k| k.starts_with('.')) => map.get(".")?,
-            other => other,
-        };
-        let target = condition_target(root, &conditions(program))?;
-        return resolve_typed(project, &dir.join(target));
-    }
-    ["types", "typings", "main"]
-        .iter()
-        .find_map(|k| pkg.get(k)?.as_str())
-        .and_then(|t| resolve_typed(project, &dir.join(t)))
-        .or_else(|| resolve_typed(project, &dir.join("index")))
-}
-
 /// Whether `program`'s module resolution reads package.json `exports`:
 /// `node16`, `nodenext` and `bundler` do, `node10` and `classic` don't.
-pub(crate) fn reads_exports(program: &TsConfigFile) -> bool {
+fn reads_exports(program: &TsConfigFile) -> bool {
     let option = |k: &str| program.options.get(k).and_then(Value::as_str).map(str::to_lowercase);
     match option("moduleResolution").as_deref() {
         Some("node16" | "nodenext" | "bundler") => true,
@@ -76,7 +50,7 @@ pub(crate) fn reads_exports(program: &TsConfigFile) -> bool {
 }
 
 /// The `exports` conditions `tsc` matches for `program`.
-pub(crate) fn conditions(program: &TsConfigFile) -> Vec<String> {
+fn conditions(program: &TsConfigFile) -> Vec<String> {
     let mut out: Vec<String> =
         ["types", "import", "require", "node", "default"].iter().map(ToString::to_string).collect();
     if let Some(Value::Array(custom)) = program.options.get("customConditions") {
@@ -158,18 +132,78 @@ pub(crate) fn resolve_file_only(path: &Path) -> Option<PathBuf> {
         .find(|c| c.is_file())
 }
 
-/// How a program resolves packages: whether it reads `exports`, and with
-/// which conditions.
+/// How a program resolves packages: whether it reads `exports`, with
+/// which conditions, and the TypeScript version `typesVersions` is matched
+/// against.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Mode {
     pub(crate) exports: bool,
     pub(crate) conditions: Vec<String>,
+    pub(crate) typescript: (u64, u64),
 }
 
 impl Mode {
-    pub(crate) fn of(program: &TsConfigFile) -> Self {
-        Self { exports: reads_exports(program), conditions: conditions(program) }
+    /// The mode of `program`. When the installed TypeScript can't be found
+    /// it's taken to be the newest, which matches the ranges packages
+    /// usually list first.
+    pub(crate) fn of(project: &Project, program: &TsConfigFile) -> Self {
+        Self {
+            exports: reads_exports(program),
+            conditions: conditions(program),
+            typescript: typescript_version(project, &program.dir).unwrap_or((u64::MAX, 0)),
+        }
     }
+
+    /// Resolution without `exports`, for following a program's local
+    /// imports.
+    pub(crate) fn local() -> Self {
+        Self { exports: false, conditions: Vec::new(), typescript: (u64::MAX, 0) }
+    }
+}
+
+/// Whether `request` names a file rather than a package: `.`, `..`, or a
+/// path starting with `./`, `../` or `/`.
+pub(crate) fn is_relative(request: &str) -> bool {
+    request.starts_with("./")
+        || request.starts_with("../")
+        || request == "."
+        || request == ".."
+        || request.starts_with('/')
+}
+
+/// The `@types` package that types `name`: `@types/name`, or
+/// `@types/scope__pkg` for `@scope/pkg`.
+pub(crate) fn types_package_name(name: &str) -> String {
+    match name.strip_prefix('@') {
+        Some(scoped) => format!("@types/{}", scoped.replacen('/', "__", 1)),
+        None => format!("@types/{name}"),
+    }
+}
+
+/// Whether `file` is a declaration file, as `tsc` decides: `.d.ts`,
+/// `.d.mts`, `.d.cts`, or any `.ts` file with `.d.` in its name, such as
+/// `a.d.json.ts`.
+pub(crate) fn is_declaration(file: &Path) -> bool {
+    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    [".d.mts", ".d.cts"].iter().any(|e| name.ends_with(e))
+        || (name.ends_with(".ts") && name.contains(".d."))
+}
+
+/// Whether `file` is TypeScript source rather than a declaration file.
+pub(crate) fn is_typescript(file: &Path) -> bool {
+    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e)) && !is_declaration(file)
+}
+
+/// Whether `file` is TypeScript or JavaScript source, which `tsc` infers
+/// types in.
+pub(crate) fn is_source(file: &Path) -> bool {
+    is_typescript(file)
+        || file.extension().is_some_and(|e| ["js", "jsx", "mjs", "cjs"].iter().any(|j| e == *j))
+}
+
+pub(crate) fn in_node_modules(file: &Path) -> bool {
+    file.components().any(|c| c.as_os_str() == "node_modules")
 }
 
 /// The file `tsc` loads for `request` imported from `from`, or `None`
@@ -183,22 +217,14 @@ pub(crate) fn resolve_types(
     request: &str,
 ) -> Option<PathBuf> {
     let dir = from.parent()?;
-    if request.starts_with("./")
-        || request.starts_with("../")
-        || request == "."
-        || request == ".."
-        || request.starts_with('/')
-    {
+    if is_relative(request) {
         return resolve_typed(project, &path_clean::clean(dir.join(request)));
     }
     if oxiclean_core::is_builtin(request) {
         return None;
     }
     let (name, sub) = oxiclean_core::split_package_request(request);
-    let types_name = match name.strip_prefix('@') {
-        Some(scoped) => format!("@types/{}", scoped.replacen('/', "__", 1)),
-        None => format!("@types/{name}"),
-    };
+    let types_name = types_package_name(name);
     // A package without types of its own, such as `react`, is typed by its
     // `@types` package.
     let typed = |f: &PathBuf| {
@@ -240,14 +266,14 @@ pub(crate) fn package_file(
             .and_then(|p| ["types", "typings", "main"].iter().find_map(|k| p.get(k)?.as_str()));
         let mapped = entry.and_then(|e| {
             let e = e.strip_prefix("./").unwrap_or(e);
-            pkg.as_ref().and_then(|p| types_versions(p, e))
+            pkg.as_ref().and_then(|p| types_versions(p, mode.typescript, e))
         });
         return mapped
             .and_then(|m| resolve_typed(project, &dir.join(m)))
             .or_else(|| entry.and_then(|t| resolve_typed(project, &dir.join(t))))
             .or_else(|| resolve_typed(project, &dir.join("index")));
     }
-    let mapped = pkg.as_ref().and_then(|p| types_versions(p, sub));
+    let mapped = pkg.as_ref().and_then(|p| types_versions(p, mode.typescript, sub));
     mapped
         .and_then(|m| resolve_typed(project, &dir.join(m)))
         .or_else(|| resolve_typed(project, &dir.join(sub)))
@@ -276,19 +302,142 @@ fn export_entry<'a>(exports: &'a Value, key: &'a str) -> Option<(&'a Value, &'a 
         .map(|(_, v, star)| (v, star))
 }
 
-/// Where the first `typesVersions` entry maps the subpath `sub`.
-fn types_versions(pkg: &Value, sub: &str) -> Option<String> {
+/// Where `typesVersions` maps the subpath `sub` for TypeScript
+/// `version`: in the first entry whose range matches, the exact key, else
+/// the `*` pattern with the longest prefix.
+fn types_versions(pkg: &Value, version: (u64, u64), sub: &str) -> Option<String> {
     let Value::Object(versions) = pkg.get("typesVersions")? else { return None };
-    let Value::Object(map) = versions.values().next()? else { return None };
+    let Value::Object(map) = versions.iter().find(|(range, _)| version_matches(range, version))?.1
+    else {
+        return None;
+    };
+    let target = |v: &Value| v.as_array()?.first()?.as_str().map(str::to_string);
+    if let Some(exact) = map.get(sub) {
+        return target(exact);
+    }
     map.iter()
         .filter_map(|(k, v)| {
-            let star = match k.split_once('*') {
-                None => (k == sub).then_some("")?,
-                Some((prefix, suffix)) => sub.strip_prefix(prefix)?.strip_suffix(suffix)?,
-            };
-            let target = v.as_array()?.first()?.as_str()?;
-            Some((k.len(), target.replace('*', star)))
+            let (prefix, suffix) = k.split_once('*')?;
+            let star = sub.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            Some((prefix.len(), target(v)?.replace('*', star)))
         })
         .max_by_key(|(len, _)| *len)
         .map(|(_, t)| t)
+}
+
+/// Whether the npm range `range` (such as `>=4.2`, `<5 || >=5.2`, `*`)
+/// includes TypeScript `version`, compared on major and minor.
+fn version_matches(range: &str, version: (u64, u64)) -> bool {
+    range.split("||").any(|alt| {
+        alt.split_whitespace().all(|cmp| {
+            let (op, v) = match cmp.find(|c: char| c.is_ascii_digit() || c == '*') {
+                Some(at) => cmp.split_at(at),
+                None => return false,
+            };
+            let mut parts = v.split('.').map(|p| p.parse::<u64>().ok());
+            let Some(Some(major)) = parts.next() else { return v == "*" };
+            let minor = parts.next().flatten();
+            let bound = (major, minor.unwrap_or(0));
+            match op {
+                ">=" => version >= bound,
+                ">" => match minor {
+                    Some(_) => version > bound,
+                    None => version.0 > major,
+                },
+                "<=" => match minor {
+                    Some(_) => version <= bound,
+                    None => version.0 <= major,
+                },
+                "<" => version < bound,
+                "" | "=" | "^" | "~" => {
+                    version.0 == major && minor.is_none_or(|m| version.1 == m)
+                        || (op == "^" && version.0 == major && version >= bound)
+                }
+                _ => false,
+            }
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn export_entry_prefers_exact_then_longest_prefix() {
+        let exports =
+            json!({ ".": "./i.js", "./a/*": "./a/*.js", "./a/b/*": "./b/*.js", "./x": "./x.js" });
+        assert_eq!(export_entry(&exports, "."), Some((&json!("./i.js"), "")));
+        assert_eq!(export_entry(&exports, "./x"), Some((&json!("./x.js"), "")));
+        assert_eq!(export_entry(&exports, "./a/b/c"), Some((&json!("./b/*.js"), "c")));
+        assert_eq!(export_entry(&exports, "./a/c"), Some((&json!("./a/*.js"), "c")));
+        assert_eq!(export_entry(&exports, "./nope"), None);
+        let conditions_only = json!({ "types": "./i.d.ts" });
+        assert_eq!(export_entry(&conditions_only, "."), Some((&conditions_only, "")));
+        assert_eq!(export_entry(&conditions_only, "./x"), None);
+    }
+
+    #[test]
+    fn types_versions_matches_range_then_exact_key() {
+        let pkg = json!({ "typesVersions": {
+            "<4.0": { "*": ["ts3/*"] },
+            ">=4.0": { "*": ["ts4/*"], "a": ["exact.d.ts"], "a/*": ["a/*"] }
+        }});
+        assert_eq!(types_versions(&pkg, (5, 9), "a").as_deref(), Some("exact.d.ts"));
+        assert_eq!(types_versions(&pkg, (5, 9), "a/b").as_deref(), Some("a/b"));
+        assert_eq!(types_versions(&pkg, (5, 9), "c").as_deref(), Some("ts4/c"));
+        assert_eq!(types_versions(&pkg, (3, 9), "c").as_deref(), Some("ts3/c"));
+        let none = json!({ "typesVersions": { "<3.0": { "*": ["old/*"] } } });
+        assert_eq!(types_versions(&none, (5, 0), "c"), None);
+    }
+
+    #[test]
+    fn matches_npm_ranges() {
+        for (range, version, expected) in [
+            ("*", (5, 0), true),
+            (">=4.2", (4, 2), true),
+            (">=4.2", (4, 1), false),
+            ("<5", (4, 9), true),
+            ("<5", (5, 0), false),
+            ("<=4", (4, 9), true),
+            (">4", (4, 9), false),
+            (">=3.1 <4", (3, 5), true),
+            (">=3.1 <4", (4, 0), false),
+            ("<3 || >=5.2", (5, 3), true),
+            ("<3 || >=5.2", (4, 0), false),
+            ("4.1", (4, 1), true),
+            ("4", (4, 7), true),
+        ] {
+            assert_eq!(version_matches(range, version), expected, "{range} {version:?}");
+        }
+    }
+
+    #[test]
+    fn condition_target_takes_first_known_condition() {
+        let conditions: Vec<String> =
+            ["types", "import", "default"].iter().map(ToString::to_string).collect();
+        let entry = json!({ "browser": "./b.js", "types@>=5": "./t.d.ts", "default": "./d.js" });
+        assert_eq!(condition_target(&entry, &conditions), Some("./t.d.ts"));
+        let nested = json!([{ "worker": "./w.js" }, { "import": { "types": "./i.d.ts" } }]);
+        assert_eq!(condition_target(&nested, &conditions), Some("./i.d.ts"));
+    }
+
+    #[test]
+    fn names_types_packages_and_kinds_of_files() {
+        assert_eq!(types_package_name("react"), "@types/react");
+        assert_eq!(types_package_name("@scope/pkg"), "@types/scope__pkg");
+        for (name, declaration) in [
+            ("a.d.ts", true),
+            ("a.d.mts", true),
+            ("a.d.json.ts", true),
+            ("a.ts", false),
+            ("d.ts", false),
+        ] {
+            assert_eq!(is_declaration(Path::new(name)), declaration, "{name}");
+        }
+        assert!(is_source(Path::new("a.mjs")) && !is_source(Path::new("a.d.ts")));
+        assert!(!is_typescript(Path::new("a.js")));
+        assert!(is_relative("./a") && is_relative("..") && !is_relative(".pkg"));
+    }
 }

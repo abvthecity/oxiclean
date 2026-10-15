@@ -49,6 +49,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     config::{Config, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE},
+    declarations::{in_node_modules, is_source, is_typescript},
     tsconfig::{TsConfigFile, TsConfigs},
     typescript::typescript_version,
 };
@@ -373,38 +374,13 @@ fn types_json(program: &TsConfigFile, version: Option<(u64, u64)>) -> bool {
     }
 }
 
-/// Whether `file` is source `tsc` infers types in: not a declaration file.
-fn is_source(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"].iter().any(|e| name.ends_with(e))
-        && !is_declaration(&name)
-}
-
-/// Whether `file` is TypeScript source.
-fn is_typescript(file: &Path) -> bool {
-    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e)) && !is_declaration(&name)
-}
-
 /// Whether `file` is JavaScript, where `tsc` follows `require` calls.
 fn is_javascript(file: &Path) -> bool {
     file.extension().is_some_and(|e| ["js", "jsx", "mjs", "cjs"].iter().any(|j| e == *j))
 }
 
-/// Whether a file called `name` is a declaration file, as `tsc` decides:
-/// `a.d.ts`, `a.d.mts`, `a.d.cts`, or any `.ts` file with `.d.` in its
-/// name, such as `a.d.json.ts`.
-fn is_declaration(name: &str) -> bool {
-    [".d.mts", ".d.cts"].iter().any(|e| name.ends_with(e))
-        || (name.ends_with(".ts") && name.contains(".d."))
-}
-
 fn is_json(file: &Path) -> bool {
     file.extension().is_some_and(|e| e == "json")
-}
-
-fn in_node_modules(file: &Path) -> bool {
-    file.components().any(|c| c.as_os_str() == "node_modules")
 }
 
 /// Whether `<name>.d.json.ts` declares `json`'s type, which `tsc` then
@@ -832,12 +808,13 @@ mod tests {
 
     #[test]
     fn knows_declaration_files() {
+        use crate::declarations::is_declaration;
         // `tsc` reads `foo.d.utils.ts` as a declaration file too.
         for name in ["a.d.ts", "a.d.mts", "a.d.cts", "a.d.json.ts", "foo.d.utils.ts"] {
-            assert!(is_declaration(name), "{name}");
+            assert!(is_declaration(Path::new(name)), "{name}");
         }
         for name in ["a.ts", "a.d.b.tsx", "d.ts", "a.d.js"] {
-            assert!(!is_declaration(name), "{name}");
+            assert!(!is_declaration(Path::new(name)), "{name}");
         }
     }
 
