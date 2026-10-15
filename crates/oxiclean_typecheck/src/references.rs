@@ -53,16 +53,18 @@ pub fn run_references_check(cfg: &Config) -> Result<CheckResult> {
     Ok(workspace.finish(&policy, findings, configs.configs.len()))
 }
 
-/// Where a program imports a workspace package first.
-#[derive(Debug, Clone)]
+/// Where a program imports a workspace package first, and whether the
+/// import reaches the package's source.
+#[derive(Debug)]
 struct ImportSite {
     file: PathBuf,
     line: u32,
+    source: bool,
 }
 
 /// The findings for `configs` in `project`.
 #[must_use]
-pub fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
+pub(crate) fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
     let imports = package_imports(project, configs);
     let uses_references = configs
         .configs
@@ -71,7 +73,9 @@ pub fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut missing = BTreeSet::new();
     if uses_references {
-        findings.extend(reference_mismatches(project, configs, &imports, &mut missing));
+        let (mismatches, reported) = reference_mismatches(project, configs, &imports);
+        findings.extend(mismatches);
+        missing = reported;
         findings.extend(reference_targets(configs));
         findings.extend(reference_cycles(configs));
     }
@@ -121,9 +125,14 @@ fn package_imports(
             let mut map: BTreeMap<String, ImportSite> = BTreeMap::new();
             for f in &p.root_files {
                 for (name, line) in by_file.get(f.as_path()).into_iter().flatten() {
-                    if Some(name.as_str()) != own {
-                        map.entry(name.clone())
-                            .or_insert_with(|| ImportSite { file: f.clone(), line: *line });
+                    if Some(name.as_str()) != own && !map.contains_key(name) {
+                        let source = project
+                            .workspace_package(name)
+                            .is_some_and(|dir| reaches_source(project, p, name, dir));
+                        map.insert(
+                            name.clone(),
+                            ImportSite { file: f.clone(), line: *line, source },
+                        );
                     }
                 }
             }
@@ -140,13 +149,14 @@ fn in_build(program: &TsConfigFile, referenced: &BTreeSet<&Path>) -> bool {
         || program.flag("composite") == Some(true)
 }
 
-/// Missing and stale references of the programs that build with them.
-fn reference_mismatches(
+/// Missing and stale references of the programs that build with them,
+/// with the (program, package) pairs reported missing.
+fn reference_mismatches<'a>(
     project: &Project,
-    configs: &TsConfigs,
-    imports: &HashMap<PathBuf, BTreeMap<String, ImportSite>>,
-    missing: &mut BTreeSet<(PathBuf, String)>,
-) -> Vec<Finding> {
+    configs: &'a TsConfigs,
+    imports: &'a HashMap<PathBuf, BTreeMap<String, ImportSite>>,
+) -> (Vec<Finding>, BTreeSet<(&'a Path, &'a str)>) {
+    let mut missing = BTreeSet::new();
     let referenced: BTreeSet<&Path> = configs
         .configs
         .iter()
@@ -165,12 +175,10 @@ fn reference_mismatches(
             // to check, whatever builds them; one that reaches source needs
             // a reference to read the `.d.ts` instead.
             let Some(target) = reference_target(configs, dir) else { continue };
-            if program.references.iter().any(|r| r.target.starts_with(dir))
-                || !reaches_source(project, program, name, dir)
-            {
+            if program.references.iter().any(|r| r.target.starts_with(dir)) || !site.source {
                 continue;
             }
-            missing.insert((program.path.clone(), name.clone()));
+            missing.insert((program.path.as_path(), name.as_str()));
             let path = if target.name() == "tsconfig.json" {
                 relative(&program.dir, dir)
             } else {
@@ -226,7 +234,7 @@ fn reference_mismatches(
             findings.push(Finding::new(program.path.clone(), FindingKind::Issue(issue), 1));
         }
     }
-    findings
+    (findings, missing)
 }
 
 /// The config a reference to the package in `dir` should point at: a
@@ -236,10 +244,8 @@ fn reference_target<'a>(configs: &'a TsConfigs, dir: &Path) -> Option<&'a TsConf
     let mut buildable = configs
         .configs
         .iter()
-        .filter(|c| c.dir == dir && c.flag("composite") == Some(true) && !c.root_files.is_empty())
-        .peekable();
-    let first = *buildable.peek()?;
-    Some(buildable.find(|c| c.name() == "tsconfig.json").unwrap_or(first))
+        .filter(|c| c.dir == dir && c.flag("composite") == Some(true) && !c.root_files.is_empty());
+    buildable.clone().find(|c| c.name() == "tsconfig.json").or_else(|| buildable.next())
 }
 
 /// References to configs that don't exist, and referenced configs that
@@ -300,18 +306,18 @@ fn reference_cycles(configs: &TsConfigs) -> Vec<Finding> {
     sequence(&deps, &all)
         .cycles
         .into_iter()
-        .map(|cycle| {
+        .filter_map(|cycle| {
             let members: Vec<&TsConfigFile> = cycle.iter().map(|&i| &configs.configs[i]).collect();
-            let first = members[0];
+            let [first, rest @ ..] = members.as_slice() else { return None };
             let mut names: Vec<String> =
                 members.iter().map(|m| relative(&first.dir, &m.path)).collect();
-            names.push(names[0].clone());
+            names.push(relative(&first.dir, &first.path));
             let message = format!(
                 "references form a cycle that `tsc -b` can't order: {}",
                 names.join(" -> ")
             );
             let line = first.line_of(&["references"]);
-            let related = members[1..]
+            let related = rest
                 .iter()
                 .map(|m| {
                     Related::new(m.path.clone(), m.line_of(&["references"]), "part of the cycle")
@@ -321,7 +327,7 @@ fn reference_cycles(configs: &TsConfigs) -> Vec<Finding> {
             key.sort();
             let issue =
                 Issue::new("reference-cycle", key.join(","), message, line).with_related(related);
-            Finding::new(first.path.clone(), FindingKind::Issue(issue), members.len())
+            Some(Finding::new(first.path.clone(), FindingKind::Issue(issue), members.len()))
         })
         .collect()
 }
@@ -331,31 +337,35 @@ fn source_imports(
     project: &Project,
     configs: &TsConfigs,
     imports: &HashMap<PathBuf, BTreeMap<String, ImportSite>>,
-    missing: &BTreeSet<(PathBuf, String)>,
+    missing: &BTreeSet<(&Path, &str)>,
 ) -> Vec<Finding> {
-    // Package name -> the consumer programs that reach its source, other
-    // than those that reference it or already have a missing reference
-    // reported.
-    let mut consumers: BTreeMap<&str, BTreeMap<&str, &TsConfigFile>> = BTreeMap::new();
+    // Package name -> its directory and the consumer programs that reach
+    // its source, other than those that reference it or already have a
+    // missing reference reported. The value counts these configs.
+    let mut consumers: BTreeMap<&str, (&Path, BTreeMap<&str, &TsConfigFile>)> = BTreeMap::new();
     for program in configs.programs() {
         let Some(imported) = imports.get(&program.path) else { continue };
         let consumer = project.package_for(&program.path).unwrap_or(".");
-        for name in imported.keys() {
+        for (name, site) in imported {
             let Some(dir) = project.workspace_package(name) else { continue };
             let referenced = program.references.iter().any(|r| r.target.starts_with(dir));
-            if !referenced
-                && !missing.contains(&(program.path.clone(), name.clone()))
-                && reaches_source(project, program, name, dir)
+            if site.source
+                && !referenced
+                && !missing.contains(&(program.path.as_path(), name.as_str()))
             {
-                consumers.entry(name.as_str()).or_default().entry(consumer).or_insert(program);
+                consumers
+                    .entry(name.as_str())
+                    .or_insert_with(|| (dir, BTreeMap::new()))
+                    .1
+                    .entry(consumer)
+                    .or_insert(program);
             }
         }
     }
     consumers
         .into_iter()
-        .filter(|(_, by)| by.len() >= 2)
-        .filter_map(|(name, by)| {
-            let dir = project.workspace_package(name)?;
+        .filter(|(_, (_, by))| by.len() >= 2)
+        .map(|(name, (dir, by))| {
             let file = configs
                 .configs
                 .iter()
@@ -372,7 +382,7 @@ fn source_imports(
                 .map(|p| Related::new(p.path.clone(), 0, format!("type-checks {name}'s source")))
                 .collect();
             let issue = Issue::new("source-imports", name, message, 0).with_related(related);
-            Some(Finding::new(file, FindingKind::Issue(issue), by.len()))
+            Finding::new(file, FindingKind::Issue(issue), by.len())
         })
         .collect()
 }
@@ -418,9 +428,12 @@ fn paths_into_source(program: &TsConfigFile, name: &str, dir: &Path) -> bool {
         let Some(star) = star else { return false };
         targets.as_array().into_iter().flatten().filter_map(Value::as_str).any(|t| {
             let t = t.replacen('*', star, 1);
-            t.starts_with(&dir)
-                && !t.contains(".d.")
-                && (is_source(&t) || !t[dir.len()..].contains('.'))
+            // A file in `dir`: TypeScript source, or a path with no
+            // extension that resolves to one.
+            Path::new(&t).strip_prefix(&dir).is_ok_and(|rest| {
+                let name = rest.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                !is_declaration(&name) && (is_source(&name) || !name.contains('.'))
+            })
         })
     })
 }
@@ -429,5 +442,38 @@ fn paths_into_source(program: &TsConfigFile, name: &str, dir: &Path) -> bool {
 /// declaration file.
 fn is_source(target: &str) -> bool {
     let t = target.trim_end_matches('*');
-    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| t.ends_with(e)) && !t.contains(".d.")
+    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| t.ends_with(e)) && !is_declaration(t)
+}
+
+/// Whether `target` names a declaration file: `.d.ts`, `.d.mts`,
+/// `.d.cts`, or an arbitrary-extension `.d.<ext>.ts`.
+fn is_declaration(target: &str) -> bool {
+    let name = target.rsplit('/').next().unwrap_or(target);
+    name.contains(".d.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn paths_match_whole_directories() {
+        let t = TempDir::new().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        let paths = r#"{ "compilerOptions": { "paths": {
+            "ui": ["./packages/ui-kit/src/index.ts"],
+            "kit": ["./packages/ui-kit/src"],
+            "types": ["./packages/ui-kit/dist/index.d.ts"]
+        } } }"#;
+        fs::write(root.join("tsconfig.json"), paths).unwrap();
+        let configs = TsConfigs::load(&Project::load(&root));
+        let program = configs.programs().next().unwrap();
+        let (ui, kit) = (root.join("packages/ui"), root.join("packages/ui-kit"));
+        assert!(!paths_into_source(program, "ui", &ui));
+        assert!(paths_into_source(program, "ui", &kit));
+        assert!(paths_into_source(program, "kit", &kit));
+        assert!(!paths_into_source(program, "types", &kit));
+    }
 }

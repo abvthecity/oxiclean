@@ -328,8 +328,10 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
     if let Some(d) = merged.options.get("paths")
         && let Value::Object(map) = &d.value
     {
-        let base =
-            options.get("baseUrl").and_then(Value::as_str).map_or(d.dir.clone(), PathBuf::from);
+        let base = options
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map_or_else(|| d.dir.clone(), PathBuf::from);
         let resolved: Map<String, Value> = map
             .iter()
             .map(|(k, targets)| {
