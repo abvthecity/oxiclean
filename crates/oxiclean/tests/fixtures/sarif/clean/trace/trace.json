@@ -1,0 +1,5 @@
+[
+{"pid":1,"tid":1,"ph":"M","cat":"__metadata","ts":0,"name":"process_name","args":{"name":"tsc"}},
+{"pid":1,"tid":1,"ph":"B","cat":"check","ts":1000,"name":"checkSourceFile","args":{"path":"/home/ci/clean/src/main.ts"}},
+{"pid":1,"tid":1,"ph":"E","cat":"check","ts":3000,"name":"checkSourceFile","args":{"path":"/home/ci/clean/src/main.ts"}}
+]

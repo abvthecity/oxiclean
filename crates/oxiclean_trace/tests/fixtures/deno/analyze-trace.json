@@ -1,0 +1,359 @@
+{
+  "results": [
+    {
+      "project": {
+        "tracePath": "<trace>/trace.json",
+        "typesPath": "<trace>/types.json",
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types.json"
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Check file <root>/packages/api/src/main.ts",
+            "timeMs": 95,
+            "path": "<root>/packages/api/src/main.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 88,
+                "path": "<root>/packages/api/src/main.ts",
+                "startLine": 5,
+                "startChar": 14,
+                "endLine": 46,
+                "endChar": 31,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 85,
+                    "path": "<root>/packages/api/src/main.ts",
+                    "startLine": 5,
+                    "startChar": 21,
+                    "endLine": 46,
+                    "endChar": 10,
+                    "children": [
+                      {
+                        "description": "Check expression",
+                        "timeMs": 85,
+                        "path": "<root>/packages/api/src/main.ts",
+                        "startLine": 5,
+                        "startChar": 21,
+                        "endLine": 45,
+                        "endChar": 31,
+                        "children": [
+                          {
+                            "description": "Check expression",
+                            "timeMs": 84,
+                            "path": "<root>/packages/api/src/main.ts",
+                            "startLine": 5,
+                            "startChar": 21,
+                            "endLine": 45,
+                            "endChar": 10,
+                            "children": [
+                              {
+                                "description": "Check expression",
+                                "timeMs": 84,
+                                "path": "<root>/packages/api/src/main.ts",
+                                "startLine": 5,
+                                "startChar": 21,
+                                "endLine": 44,
+                                "endChar": 31,
+                                "children": [
+                                  {
+                                    "description": "Check expression",
+                                    "timeMs": 83,
+                                    "path": "<root>/packages/api/src/main.ts",
+                                    "startLine": 5,
+                                    "startChar": 21,
+                                    "endLine": 44,
+                                    "endChar": 10,
+                                    "children": [
+                                      {
+                                        "description": "Check expression",
+                                        "timeMs": 83,
+                                        "path": "<root>/packages/api/src/main.ts",
+                                        "startLine": 5,
+                                        "startChar": 21,
+                                        "endLine": 43,
+                                        "endChar": 31,
+                                        "children": [
+                                          {
+                                            "description": "Check expression",
+                                            "timeMs": 83,
+                                            "path": "<root>/packages/api/src/main.ts",
+                                            "startLine": 5,
+                                            "startChar": 21,
+                                            "endLine": 43,
+                                            "endChar": 10,
+                                            "children": [
+                                              {
+                                                "description": "Check expression",
+                                                "timeMs": 82,
+                                                "path": "<root>/packages/api/src/main.ts",
+                                                "startLine": 5,
+                                                "startChar": 21,
+                                                "endLine": 42,
+                                                "endChar": 31,
+                                                "children": [
+                                                  {
+                                                    "description": "Check expression",
+                                                    "timeMs": 82,
+                                                    "path": "<root>/packages/api/src/main.ts",
+                                                    "startLine": 5,
+                                                    "startChar": 21,
+                                                    "endLine": 42,
+                                                    "endChar": 10,
+                                                    "children": [
+                                                      {
+                                                        "description": "Check expression",
+                                                        "timeMs": 82,
+                                                        "path": "<root>/packages/api/src/main.ts",
+                                                        "startLine": 5,
+                                                        "startChar": 21,
+                                                        "endLine": 41,
+                                                        "endChar": 31,
+                                                        "children": [
+                                                          {
+                                                            "description": "Check expression",
+                                                            "timeMs": 81,
+                                                            "path": "<root>/packages/api/src/main.ts",
+                                                            "startLine": 5,
+                                                            "startChar": 21,
+                                                            "endLine": 41,
+                                                            "endChar": 10,
+                                                            "children": [
+                                                              {
+                                                                "description": "Check expression",
+                                                                "timeMs": 81,
+                                                                "path": "<root>/packages/api/src/main.ts",
+                                                                "startLine": 5,
+                                                                "startChar": 21,
+                                                                "endLine": 40,
+                                                                "endChar": 31,
+                                                                "children": [
+                                                                  {
+                                                                    "description": "Check expression",
+                                                                    "timeMs": 80,
+                                                                    "path": "<root>/packages/api/src/main.ts",
+                                                                    "startLine": 5,
+                                                                    "startChar": 21,
+                                                                    "endLine": 40,
+                                                                    "endChar": 10,
+                                                                    "children": [
+                                                                      {
+                                                                        "description": "Check expression",
+                                                                        "timeMs": 80,
+                                                                        "path": "<root>/packages/api/src/main.ts",
+                                                                        "startLine": 5,
+                                                                        "startChar": 21,
+                                                                        "endLine": 39,
+                                                                        "endChar": 31,
+                                                                        "children": [
+                                                                          {
+                                                                            "description": "Check expression",
+                                                                            "timeMs": 79,
+                                                                            "path": "<root>/packages/api/src/main.ts",
+                                                                            "startLine": 5,
+                                                                            "startChar": 21,
+                                                                            "endLine": 39,
+                                                                            "endChar": 10,
+                                                                            "children": [
+                                                                              {
+                                                                                "description": "Check expression",
+                                                                                "timeMs": 79,
+                                                                                "path": "<root>/packages/api/src/main.ts",
+                                                                                "startLine": 5,
+                                                                                "startChar": 21,
+                                                                                "endLine": 38,
+                                                                                "endChar": 31,
+                                                                                "children": [
+                                                                                  {
+                                                                                    "description": "Check expression",
+                                                                                    "timeMs": 78,
+                                                                                    "path": "<root>/packages/api/src/main.ts",
+                                                                                    "startLine": 5,
+                                                                                    "startChar": 21,
+                                                                                    "endLine": 38,
+                                                                                    "endChar": 10,
+                                                                                    "children": [
+                                                                                      {
+                                                                                        "description": "Check expression",
+                                                                                        "timeMs": 78,
+                                                                                        "path": "<root>/packages/api/src/main.ts",
+                                                                                        "startLine": 5,
+                                                                                        "startChar": 21,
+                                                                                        "endLine": 37,
+                                                                                        "endChar": 31,
+                                                                                        "children": [
+                                                                                          {
+                                                                                            "description": "Check expression",
+                                                                                            "timeMs": 77,
+                                                                                            "path": "<root>/packages/api/src/main.ts",
+                                                                                            "startLine": 5,
+                                                                                            "startChar": 21,
+                                                                                            "endLine": 37,
+                                                                                            "endChar": 10,
+                                                                                            "children": [
+                                                                                              {
+                                                                                                "description": "Check expression",
+                                                                                                "timeMs": 77,
+                                                                                                "path": "<root>/packages/api/src/main.ts",
+                                                                                                "startLine": 5,
+                                                                                                "startChar": 21,
+                                                                                                "endLine": 36,
+                                                                                                "endChar": 31,
+                                                                                                "children": [
+                                                                                                  {
+                                                                                                    "description": "Check expression",
+                                                                                                    "timeMs": 77,
+                                                                                                    "path": "<root>/packages/api/src/main.ts",
+                                                                                                    "startLine": 5,
+                                                                                                    "startChar": 21,
+                                                                                                    "endLine": 36,
+                                                                                                    "endChar": 10,
+                                                                                                    "children": [
+                                                                                                      {
+                                                                                                        "description": "Check expression",
+                                                                                                        "timeMs": 77,
+                                                                                                        "path": "<root>/packages/api/src/main.ts",
+                                                                                                        "startLine": 5,
+                                                                                                        "startChar": 21,
+                                                                                                        "endLine": 35,
+                                                                                                        "endChar": 31,
+                                                                                                        "children": [
+                                                                                                          {
+                                                                                                            "description": "Check expression",
+                                                                                                            "timeMs": 76,
+                                                                                                            "path": "<root>/packages/api/src/main.ts",
+                                                                                                            "startLine": 5,
+                                                                                                            "startChar": 21,
+                                                                                                            "endLine": 35,
+                                                                                                            "endChar": 10,
+                                                                                                            "children": [
+                                                                                                              {
+                                                                                                                "description": "Check expression",
+                                                                                                                "timeMs": 76,
+                                                                                                                "path": "<root>/packages/api/src/main.ts",
+                                                                                                                "startLine": 5,
+                                                                                                                "startChar": 21,
+                                                                                                                "endLine": 34,
+                                                                                                                "endChar": 31,
+                                                                                                                "children": [
+                                                                                                                  {
+                                                                                                                    "description": "Check expression",
+                                                                                                                    "timeMs": 75,
+                                                                                                                    "path": "<root>/packages/api/src/main.ts",
+                                                                                                                    "startLine": 5,
+                                                                                                                    "startChar": 21,
+                                                                                                                    "endLine": 34,
+                                                                                                                    "endChar": 10,
+                                                                                                                    "children": [
+                                                                                                                      {
+                                                                                                                        "description": "Check expression",
+                                                                                                                        "timeMs": 75,
+                                                                                                                        "path": "<root>/packages/api/src/main.ts",
+                                                                                                                        "startLine": 5,
+                                                                                                                        "startChar": 21,
+                                                                                                                        "endLine": 33,
+                                                                                                                        "endChar": 31,
+                                                                                                                        "children": [
+                                                                                                                          {
+                                                                                                                            "description": "Check expression",
+                                                                                                                            "timeMs": 74,
+                                                                                                                            "path": "<root>/packages/api/src/main.ts",
+                                                                                                                            "startLine": 5,
+                                                                                                                            "startChar": 21,
+                                                                                                                            "endLine": 33,
+                                                                                                                            "endChar": 10,
+                                                                                                                            "children": [
+                                                                                                                              {
+                                                                                                                                "description": "Check expression",
+                                                                                                                                "timeMs": 74,
+                                                                                                                                "path": "<root>/packages/api/src/main.ts",
+                                                                                                                                "startLine": 5,
+                                                                                                                                "startChar": 21,
+                                                                                                                                "endLine": 32,
+                                                                                                                                "endChar": 31,
+                                                                                                                                "children": []
+                                                                                                                              }
+                                                                                                                            ]
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            ]
+                                                                                          }
+                                                                                        ]
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                ]
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    ]
+                                                                  }
+                                                                ]
+                                                              }
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "duplicatePackages": [
+          {
+            "name": "zod",
+            "instances": [
+              {
+                "path": "<root>/node_modules/.deno/zod@3.23.8/node_modules/zod",
+                "version": "3.23.8"
+              },
+              {
+                "path": "<root>/node_modules/.deno/zod@3.22.4/node_modules/zod",
+                "version": "3.22.4"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

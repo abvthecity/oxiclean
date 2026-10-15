@@ -1,0 +1,30 @@
+[package]
+name = "oxiclean_trace"
+description = "Reads the output of tsc --generateTrace: hot spots and duplicate packages, as @typescript/analyze-trace reports them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+clap.workspace = true
+memchr = "2.7"
+oxiclean_core = { version = "0.1.0", path = "../oxiclean_core", features = ["cli"] }
+oxiclean_typecheck = { version = "0.1.0", path = "../oxiclean_typecheck" }
+rayon.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+tracing.workspace = true
+
+[lib]
+name = "oxiclean_trace"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[lints]
+workspace = true

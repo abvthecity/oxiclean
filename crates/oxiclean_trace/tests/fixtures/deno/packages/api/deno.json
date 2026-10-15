@@ -1,0 +1,9 @@
+{
+  "name": "@scope/api",
+  "version": "1.0.0",
+  "exports": "./src/main.ts",
+  "imports": {
+    "zod": "npm:zod@^3.23.8",
+    "zod-form": "npm:zod-form@^1.0.0"
+  }
+}

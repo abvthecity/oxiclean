@@ -60,6 +60,10 @@
       "items": {
         "$ref": "#/$defs/Override"
       }
+    },
+    "trace": {
+      "description": "Settings for the `trace` command, which reads the output of\n`tsc --generateTrace`.",
+      "$ref": "#/$defs/TraceSettings"
     }
   },
   "additionalProperties": false,
@@ -216,7 +220,7 @@
       "additionalProperties": false
     },
     "Rules": {
-      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`. A rule the file doesn't set is on, at `error`,\nexcept `heavy-dependencies`, which is at `warn`. Each command runs a\ngroup of rules, and runs only the ones that are on.",
+      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`. A rule the file doesn't set is on, at `error`,\nexcept `heavy-dependencies`, `hot-spots` and `duplicate-packages`,\nwhich are at `warn`. Each command runs a\ngroup of rules, and runs only the ones that are on.",
       "type": "object",
       "properties": {
         "bloat": {
@@ -460,6 +464,28 @@
               "type": "null"
             }
           ]
+        },
+        "hot-spots": {
+          "description": "Spans of a `tsc --generateTrace` trace where checking took long, as\n`@typescript/analyze-trace` reports them, joined to what\n`complex-types` flags. The threshold is analyze-trace's\n`forceMillis`, and the `skipMillis` option its `skipMillis`.\nDefault threshold: 500 ms. Default severity: `warn`; a hot spot on\na type `complex-types` flags is at least as severe as that finding.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duplicate-packages": {
+          "description": "Packages a trace shows `tsc` loading from more than one directory.\nDefault threshold: 2 directories. Default severity: `warn`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -527,6 +553,16 @@
           "items": {
             "$ref": "#/$defs/DependencyField"
           }
+        },
+        "skipMillis": {
+          "description": "For `hot-spots`: spans of the trace shorter than this many\nmilliseconds are never reported, as analyze-trace's `skipMillis`.\nDefault: 100. Read only from `rules`, as the whole trace is read\nwith one setting; in `overrides` it is ignored, with a warning.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "default": null
         }
       },
       "additionalProperties": false
@@ -561,6 +597,21 @@
         },
         "rules": {
           "$ref": "#/$defs/Rules"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TraceSettings": {
+      "description": "Settings for the `trace` command.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "The directory `tsc --generateTrace <dir>` wrote, relative to the\nroot, read when `oxiclean trace` is given none. oxiclean never runs\n`tsc` itself.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "additionalProperties": false

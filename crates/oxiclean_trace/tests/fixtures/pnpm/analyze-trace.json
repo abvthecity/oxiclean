@@ -1,0 +1,110 @@
+{
+  "results": [
+    {
+      "project": {
+        "configFilePath": "<root>/packages/ui/tsconfig.json",
+        "tracePath": "<trace>/trace.12347-1.json",
+        "typesPath": "<trace>/types.12347-1.json",
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types.12347-1.json"
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Check file <root>/packages/ui/src/variants.ts",
+            "timeMs": 99,
+            "path": "<root>/packages/ui/src/variants.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 97,
+                "path": "<root>/packages/ui/src/variants.ts",
+                "startLine": 5,
+                "startChar": 14,
+                "endLine": 5,
+                "endChar": 94,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 68,
+                    "path": "<root>/packages/ui/src/variants.ts",
+                    "startLine": 5,
+                    "startChar": 49,
+                    "endLine": 5,
+                    "endChar": 94,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/ui/src/use.ts",
+            "timeMs": 89,
+            "path": "<root>/packages/ui/src/use.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 24,
+                "path": "<root>/packages/ui/src/use.ts",
+                "startLine": 5,
+                "startChar": 14,
+                "endLine": 5,
+                "endChar": 84,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 22,
+                    "path": "<root>/packages/ui/src/use.ts",
+                    "startLine": 5,
+                    "startChar": 19,
+                    "endLine": 5,
+                    "endChar": 84,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/ui/src/classes.ts",
+            "timeMs": 54,
+            "path": "<root>/packages/ui/src/classes.ts",
+            "children": []
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "configFilePath": "<root>/packages/app/tsconfig.json",
+        "tracePath": "<trace>/trace.12347-2.json",
+        "typesPath": "<trace>/types.12347-2.json",
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types.12347-2.json"
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Emit declarations file",
+            "timeMs": 12,
+            "path": "<root>/packages/app/dist/index.d.ts",
+            "children": [],
+            "emittedImports": [
+              {
+                "name": "\"@acme/ui\"",
+                "count": 12
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

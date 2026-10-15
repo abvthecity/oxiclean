@@ -1,0 +1,79 @@
+{
+  "results": [
+    {
+      "project": {
+        "tracePath": "<trace>/trace.json",
+        "typesPath": "<trace>/types.json",
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types.json"
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Check file <root>/packages/web/src/i18n.ts",
+            "timeMs": 100,
+            "path": "<root>/packages/web/src/i18n.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 73,
+                "path": "<root>/packages/web/src/i18n.ts",
+                "startLine": 4,
+                "startChar": 14,
+                "endLine": 4,
+                "endChar": 56,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 71,
+                    "path": "<root>/packages/web/src/i18n.ts",
+                    "startLine": 4,
+                    "startChar": 18,
+                    "endLine": 4,
+                    "endChar": 56,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/web/src/paths.ts",
+            "timeMs": 44,
+            "path": "<root>/packages/web/src/paths.ts",
+            "children": [
+              {
+                "description": "Compare types 90 and 32",
+                "timeMs": 19,
+                "children": [
+                  {
+                    "description": "Compare types 90 and 10",
+                    "timeMs": 17,
+                    "children": [],
+                    "types": [
+                      null,
+                      null
+                    ]
+                  }
+                ],
+                "types": [
+                  null,
+                  null
+                ]
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/web/src/app.ts",
+            "timeMs": 16,
+            "path": "<root>/packages/web/src/app.ts",
+            "children": []
+          }
+        ]
+      }
+    }
+  ]
+}

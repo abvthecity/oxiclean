@@ -17,8 +17,8 @@ use std::{
 use serde_json::Value;
 
 /// Each rule with the command that runs it. Add new rules here with a
-/// fixture under `tests/fixtures/sarif/<rule>` on which the command finds
-/// at least one finding of that rule.
+/// fixture (see [`fixture`]) on which the command finds at least one
+/// finding of that rule.
 const RULES: &[(&str, &str)] = &[
     ("bloat", "bloat"),
     ("bloat", "barrels"),
@@ -42,6 +42,8 @@ const RULES: &[(&str, &str)] = &[
     ("typecheck", "large-literals"),
     ("typecheck", "type-bloat"),
     ("typecheck", "complex-types"),
+    ("trace", "hot-spots"),
+    ("trace", "duplicate-packages"),
 ];
 
 /// The commands, each once.
@@ -53,6 +55,20 @@ fn commands() -> Vec<&'static str> {
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+/// The fixture of `rule`: `tests/fixtures/sarif/<rule>`, except for the
+/// `trace` rules, whose fixtures hold real traces and are shared with
+/// oxiclean_trace's tests.
+fn fixture(rule: &str) -> PathBuf {
+    let trace = |name: &str| {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxiclean_trace/tests/fixtures").join(name)
+    };
+    match rule {
+        "hot-spots" => trace("bun"),
+        "duplicate-packages" => trace("npm"),
+        _ => fixtures().join("sarif").join(rule),
+    }
 }
 
 /// Runs `oxiclean <command> --format sarif` on `root` and parses stdout.
@@ -208,7 +224,7 @@ fn check_code_scanning(command: &str, rule: &str, root: &Path, doc: &Value) {
 fn every_rule_emits_conformant_sarif() {
     let validator = validator();
     for (command, rule) in RULES {
-        let root = fixtures().join("sarif").join(rule);
+        let root = fixture(rule);
         let doc = sarif(command, &root);
         let results = doc["runs"][0]["results"].as_array().unwrap();
         assert!(

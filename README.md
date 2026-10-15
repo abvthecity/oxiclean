@@ -29,6 +29,10 @@ oxiclean depth --root ./my-project
 oxiclean cycles --root ./my-project
 oxiclean duplicates --root ./my-project
 
+# Read a trace tsc already wrote (tsc --generateTrace trace): slow spans of
+# type checking and packages loaded from more than one directory
+oxiclean trace trace --root ./my-project
+
 # Apply the fixes the findings offer
 oxiclean typecheck --fix --root ./my-project
 
@@ -58,6 +62,7 @@ oxiclean/
 │   ├── oxiclean_dependencies/       # Unused dependency detection library
 │   ├── oxiclean_duplicates/         # Duplicate export detection library
 │   ├── oxiclean_typecheck/          # tsconfig and lint setup checks
+│   ├── oxiclean_trace/              # tsc --generateTrace analysis
 │   ├── oxiclean_unused_exports/     # Unused export and type detection library
 │   └── oxiclean_depth/              # Import depth analysis library
 └── Cargo.toml                       # Workspace configuration
@@ -79,10 +84,12 @@ on or off. A rule that is `"off"` doesn't run at all, so turning off
 | `depth` | `depth` |
 | `cycles` | `cycles` |
 | `duplicates` | `duplicates` |
+| `trace [DIR]` | `hot-spots`, `duplicate-packages` |
 
 Every rule is on by default with `error` severity, except
-`heavy-dependencies`, which defaults to `warn`: a heavy package is worth a
-look but may be worth its weight. A severity in the config file wins over
+`heavy-dependencies`, `hot-spots` and `duplicate-packages`, which default
+to `warn`: a heavy package is worth a look but may be worth its weight, and
+trace timings vary from run to run. A severity in the config file wins over
 the default. Rules of one command share their work where they can: the
 `unused` rules share one module graph and one pass over its uses, `bloat`
 and `barrels` share a graph, and the `typecheck` rules read the tsconfig
@@ -633,6 +640,80 @@ These checks skip tsconfigs in test input directories (`fixtures`,
 for tests, not programs anyone runs. Deno doesn't read tsconfig files, so
 in a Deno workspace only `isolated-declarations` (for JSR slow types) and
 `large-literals` find anything, unless it keeps a tsconfig for editors.
+
+### Trace
+
+`oxiclean trace [DIR]` reads the trace that `tsc --generateTrace DIR`
+(or `tsc -b --generateTrace DIR`) already wrote; it never runs `tsc`. It
+reads `trace.json` and `types.json`, or `legend.json` with one
+`trace.N.json` and `types.N.json` per program of a build. `DIR` defaults
+to `trace.dir` in `.oxicleanrc.json`, relative to the root:
+
+```jsonc
+{
+  "trace": { "dir": "trace" },
+  "rules": {
+    // analyze-trace's --forceMillis and --skipMillis
+    "hot-spots": ["warn", { "threshold": 500, "skipMillis": 100 }],
+    "duplicate-packages": "warn"
+  }
+}
+```
+
+`hot-spots` is a port of
+[`@typescript/analyze-trace`](https://github.com/microsoft/typescript-analyze-trace)'s
+hot-spot tree: spans of checking files, checking expressions and
+declarations, comparing types, determining variance and emitting
+declarations that took at least `threshold` ms, or at least 60% of the
+span they're in, with spans shorter than `skipMillis` dropped as the trace
+is read. Positions are shown as `(line, char)` like analyze-trace's, and
+types are named from `types.json`. A span that was still running when the
+trace ended (tsc ran out of memory, or the file was cut short) runs to the
+end of the trace. A hot spot inside a type that `complex-types` reports
+says so, links to that finding and is at least as severe as it (an
+`error` by default): the estimate and the measurement agree. Each hot
+spot is held to the threshold of the file it's reported on, so
+`overrides` can raise or lower it per package or path; a span under its
+threshold is still reported when it takes most of a span that is.
+`skipMillis` applies to the whole trace, so it is read only from
+`rules`.
+
+`duplicate-packages` reports packages `tsc` loaded from more than one
+directory, under `node_modules` in npm, Yarn, Bun and pnpm layouts and
+Deno's `node_modules/.deno`, with each copy's version and whether
+deduping or aligning versions would fix it. analyze-trace reads only
+`findSourceFile` events, which recent `tsc` versions often leave out for
+`node_modules`, so oxiclean also reads `createSourceFile`.
+
+Paths in the trace may come from another machine (a CI runner, or
+Windows), a symlinked checkout or a lowercased path: oxiclean learns the
+directory the trace was recorded in, from a `tsc --build` legend's
+tsconfig files or else the files the trace checked, and finds every path
+under the root through it, so an unrelated `src/index.ts` elsewhere is
+never taken for the root's. Spans in files outside the root are reported
+on the nearest enclosing span in a file inside it, else on the trace file
+or the root's package.json; oxiclean reads only regular files under the
+root. Copies of a package that are one directory through symlinks are
+one copy.
+
+```
+⚠ Hot spots in the trace (threshold: 10 ms)
+
+packages/server/src/config.ts
+├──  Check file packages/server/src/config.ts took 309ms (309ms) [warn]
+└──  line 3: Check variable declaration from (line 3, char 14) to (line 3, char 35) took 277ms; this confirms the complex-types finding at packages/server/src/config.ts:3 (tuple-arithmetic, about 80200 types) (277ms)
+        packages/server/src/config.ts: inside Check file packages/server/src/config.ts
+        packages/server/src/config.ts:3: complex-types: `Range<400>` builds 400 tuples, each one element longer than the last (about 80200 types), which the other use in this file reuses; write the union out, or use number and check it at runtime
+
+⚠ Packages tsc loads more than once (threshold: 2 directories)
+
+node_modules/@acme/shared/package.json
+└──  tsc loads `@acme/shared` from 2 directories: 1.0.0 at node_modules/@acme/shared, 1.0.0 at packages/server/node_modules/@acme/shared; the same version installed twice; dedupe the lockfile, or hoist the package (2 directories) [warn]
+```
+
+`scripts/analyze-trace-parity.sh` compares the two tools on fresh traces
+of the fixtures and of a real repo; it runs from the manually triggered
+`analyze-trace parity` workflow, not in CI.
 
 ### Difference Between Tools
 

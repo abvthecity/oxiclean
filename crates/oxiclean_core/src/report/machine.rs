@@ -40,8 +40,14 @@ const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 /// `path` relative to `root` with `/` separators, or as given when it is
 /// outside the root.
 fn rel(path: &Path, root: &Path) -> String {
-    let p = path.strip_prefix(root).unwrap_or(path);
-    p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+    match path.strip_prefix(root) {
+        Ok(p) => {
+            p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+        }
+        // Joining the components of an absolute path would double its
+        // leading separator.
+        Err(_) => path.to_string_lossy().replace('\\', "/"),
+    }
 }
 
 /// One sentence describing `f`. Paths in it are relative to `root`.
@@ -500,6 +506,13 @@ mod tests {
         max_unit: "modules",
         ok_message: "No bloat detected.",
     };
+
+    #[test]
+    fn paths_outside_the_root_keep_one_leading_slash() {
+        let root = Path::new("/repo");
+        assert_eq!(rel(Path::new("/repo/src/a.ts"), root), "src/a.ts");
+        assert_eq!(rel(Path::new("/elsewhere/a.ts"), root), "/elsewhere/a.ts");
+    }
 
     fn result() -> CommandResult {
         let root = PathBuf::from("/repo");

@@ -103,6 +103,20 @@ pub struct ConfigFile {
     pub rules: Rules,
     /// Settings for some workspace packages or files. Later overrides win.
     pub overrides: Vec<Override>,
+    /// Settings for the `trace` command, which reads the output of
+    /// `tsc --generateTrace`.
+    pub trace: TraceSettings,
+}
+
+/// Settings for the `trace` command.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TraceSettings {
+    /// The directory `tsc --generateTrace <dir>` wrote, relative to the
+    /// root, read when `oxiclean trace` is given none. oxiclean never runs
+    /// `tsc` itself.
+    pub dir: Option<String>,
 }
 
 /// Plugins: what oxiclean knows about a file format or a tool. `true`
@@ -230,7 +244,8 @@ impl PluginSettings {
 
 /// Every rule oxiclean knows. Each is set to a severity, or to
 /// `[severity, options]`. A rule the file doesn't set is on, at `error`,
-/// except `heavy-dependencies`, which is at `warn`. Each command runs a
+/// except `heavy-dependencies`, `hot-spots` and `duplicate-packages`,
+/// which are at `warn`. Each command runs a
 /// group of rules, and runs only the ones that are on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -324,6 +339,16 @@ pub struct Rules {
     /// union intersection products, recursive key paths, tuple arithmetic
     /// and long builder chains. Default threshold: 1000 types.
     pub complex_types: Option<RuleSetting>,
+    /// Spans of a `tsc --generateTrace` trace where checking took long, as
+    /// `@typescript/analyze-trace` reports them, joined to what
+    /// `complex-types` flags. The threshold is analyze-trace's
+    /// `forceMillis`, and the `skipMillis` option its `skipMillis`.
+    /// Default threshold: 500 ms. Default severity: `warn`; a hot spot on
+    /// a type `complex-types` flags is at least as severe as that finding.
+    pub hot_spots: Option<RuleSetting>,
+    /// Packages a trace shows `tsc` loading from more than one directory.
+    /// Default threshold: 2 directories. Default severity: `warn`.
+    pub duplicate_packages: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -353,6 +378,8 @@ impl Rules {
             "large-literals" => self.large_literals.as_ref(),
             "type-bloat" => self.type_bloat.as_ref(),
             "complex-types" => self.complex_types.as_ref(),
+            "hot-spots" => self.hot_spots.as_ref(),
+            "duplicate-packages" => self.duplicate_packages.as_ref(),
             _ => None,
         }
     }
@@ -381,6 +408,8 @@ impl Rules {
             &self.large_literals,
             &self.type_bloat,
             &self.complex_types,
+            &self.hot_spots,
+            &self.duplicate_packages,
         ]
         .into_iter()
         .flatten()
@@ -422,6 +451,11 @@ pub struct RuleOptions {
     /// For `dependencies`: the package.json fields to check. Both by
     /// default.
     pub fields: Option<Vec<DependencyField>>,
+    /// For `hot-spots`: spans of the trace shorter than this many
+    /// milliseconds are never reported, as analyze-trace's `skipMillis`.
+    /// Default: 100. Read only from `rules`, as the whole trace is read
+    /// with one setting; in `overrides` it is ignored, with a warning.
+    pub skip_millis: Option<usize>,
 }
 
 /// A package.json field `dependencies` can check.
@@ -523,6 +557,15 @@ impl ConfigFile {
         Ok((Self::load(&path)?, Some(path)))
     }
 
+    /// The options `rule` is set with outside the overrides, if any.
+    #[must_use]
+    pub fn rule_options(&self, rule: &str) -> Option<&RuleOptions> {
+        match self.rules.get(rule)? {
+            RuleSetting::WithOptions(_, options) => Some(options),
+            RuleSetting::Severity(_) => None,
+        }
+    }
+
     /// The JSON schema of the config file, pretty-printed.
     #[must_use]
     pub fn json_schema() -> String {
@@ -572,7 +615,8 @@ impl ConfigFile {
 
     /// The settings of `rule`, with `default_threshold` and
     /// `default_severity` where the file sets none. Each rule passes its
-    /// own defaults: most are `error`, while `heavy-dependencies` is `warn`.
+    /// own defaults: most are `error`, while `heavy-dependencies`,
+    /// `hot-spots` and `duplicate-packages` are `warn`.
     ///
     /// # Errors
     /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.

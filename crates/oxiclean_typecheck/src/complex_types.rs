@@ -322,12 +322,16 @@ struct Site {
     /// hold.
     ty: Option<Ty>,
     line: u32,
+    /// Byte offset of the end of the declaration or type.
+    end: u32,
 }
 
 /// A chain of method calls.
 #[derive(Debug)]
 struct Chain {
     line: u32,
+    /// Byte offset of the end of the chain.
+    end: u32,
     /// The variable the chain starts from: an import or a local `const`.
     root: String,
     /// The methods called, last first.
@@ -374,6 +378,20 @@ pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<Check
         info!("{COMPLEX_TYPES_RULE} is disabled");
         return Ok(workspace.finish(&policy, Vec::new(), 0));
     };
+    let (findings, files) = check_all(workspace, configs, threshold);
+    let findings: Vec<Finding> = findings.into_iter().map(|(f, _)| f).collect();
+    info!(findings = findings.len(), "{COMPLEX_TYPES_RULE} check complete");
+    Ok(workspace.finish(&policy, findings, files))
+}
+
+/// Every candidate finding of the programs of `configs` at `threshold`,
+/// each with the 1-based line where what it is about ends, and how many
+/// files were read.
+fn check_all(
+    workspace: &Workspace,
+    configs: &TsConfigs,
+    threshold: usize,
+) -> (Vec<(Finding, u32)>, usize) {
     let project = &workspace.project;
     let roots: BTreeSet<PathBuf> = configs
         .programs()
@@ -386,15 +404,81 @@ pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<Check
     let types = Types::new(project, &cache, &files, threshold as u64);
     let mut paths: Vec<&PathBuf> = files.keys().collect();
     paths.sort();
-    let findings: Vec<Finding> = paths
+    let findings = paths
         .par_iter()
-        .map(|path| types.check_file(path, &files[*path]))
+        .map(|path| {
+            let file = &files[*path];
+            let found = types.check_file(path, file);
+            if found.is_empty() {
+                return Vec::new();
+            }
+            // Only for the files with findings.
+            let lines = LineIndex::new(&file.src);
+            found
+                .into_iter()
+                .map(|(f, end)| {
+                    let end_line = lines.line(end as usize).max(f.line());
+                    (f, end_line)
+                })
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>()
         .into_iter()
         .flatten()
         .collect();
-    info!(findings = findings.len(), "{COMPLEX_TYPES_RULE} check complete");
-    Ok(workspace.finish(&policy, findings, files.len()))
+    (findings, files.len())
+}
+
+/// A finding of `complex-types`, with where what it is about ends, for
+/// tools that join it to measurements such as a `tsc` trace.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct FlaggedType {
+    /// The finding, with the severity and threshold the config file gives
+    /// it.
+    pub finding: Finding,
+    /// 1-based line where the declaration, type or chain the finding is
+    /// about ends; the finding's own line is where it starts.
+    pub end_line: u32,
+}
+
+/// What `complex-types` reports on `workspace`, as it would with the
+/// config file's settings, each with the lines it spans. `None` when the
+/// config file turns the rule off.
+///
+/// # Errors
+/// Fails if the config file has an invalid glob.
+pub fn flagged_types(workspace: &Workspace) -> Result<Option<Vec<FlaggedType>>> {
+    let policy =
+        workspace.policy(COMPLEX_TYPES_RULE, COMPLEX_TYPES_DEFAULT_THRESHOLD, Severity::Error)?;
+    let Some(threshold) = policy.min_threshold() else { return Ok(None) };
+    let configs = TsConfigs::load(&workspace.project);
+    let (candidates, files) = check_all(workspace, &configs, threshold);
+    let mut ends: HashMap<(PathBuf, u32, String), u32> = HashMap::new();
+    let mut found = Vec::with_capacity(candidates.len());
+    for (f, end) in candidates {
+        if let FindingKind::Issue(issue) = &f.kind {
+            ends.insert((f.file.clone(), issue.line, issue.key.clone()), end);
+        }
+        found.push(f);
+    }
+    let result = workspace.finish(&policy, found, files);
+    Ok(Some(
+        result
+            .findings
+            .into_iter()
+            .map(|finding| {
+                let end_line = match &finding.kind {
+                    FindingKind::Issue(issue) => ends
+                        .get(&(finding.file.clone(), issue.line, issue.key.clone()))
+                        .copied()
+                        .unwrap_or(issue.line),
+                    _ => finding.line(),
+                };
+                FlaggedType { finding, end_line }
+            })
+            .collect(),
+    ))
 }
 
 /// Reads `roots` and the local files they import, in parallel.
@@ -839,6 +923,7 @@ impl Reader {
         let line = self.line(call.span.start);
         self.out.chains.push(Chain {
             line,
+            end: call.span.end,
             root: root.to_string(),
             methods,
             name,
@@ -886,6 +971,7 @@ impl<'a> Visit<'a> for Reader {
     fn visit_ts_type_alias_declaration(&mut self, it: &TSTypeAliasDeclaration<'a>) {
         let name = it.id.name.to_string();
         let line = self.line(it.span.start);
+        let end = it.span.end;
         let names: Vec<String> = it
             .type_parameters
             .iter()
@@ -897,27 +983,33 @@ impl<'a> Visit<'a> for Reader {
         for p in it.type_parameters.iter().flat_map(|p| &p.params) {
             if let Some(c) = &p.constraint {
                 let ty = self.bare_ty(c);
-                self.out.sites.push(Site { alias: Some(name.clone()), ty: Some(ty), line });
+                self.out.sites.push(Site { alias: Some(name.clone()), ty: Some(ty), line, end });
             }
             let default = p.default.as_ref().map(|d| self.bare_ty(d));
             if let Some(d) = &default {
-                self.out.sites.push(Site { alias: Some(name.clone()), ty: Some(d.clone()), line });
+                self.out.sites.push(Site {
+                    alias: Some(name.clone()),
+                    ty: Some(d.clone()),
+                    line,
+                    end,
+                });
             }
             params.push((p.name.name.to_string(), default));
         }
         let body = self.bare_ty(&it.type_annotation);
         self.leave(n);
         if self.nested == 0 {
-            self.out.sites.push(Site { alias: Some(name.clone()), ty: None, line });
+            self.out.sites.push(Site { alias: Some(name.clone()), ty: None, line, end });
             self.out.aliases.insert(name, Alias { params, body });
         } else {
-            self.out.sites.push(Site { alias: Some(name), ty: Some(body), line });
+            self.out.sites.push(Site { alias: Some(name), ty: Some(body), line, end });
         }
     }
 
     fn visit_ts_interface_declaration(&mut self, it: &TSInterfaceDeclaration<'a>) {
         let name = it.id.name.to_string();
         let line = self.line(it.span.start);
+        let end = it.span.end;
         self.with_type_params(it.type_parameters.as_deref(), |reader| {
             let site = reader.members(&it.body.body);
             if let Some(p) = &it.type_parameters {
@@ -939,7 +1031,7 @@ impl<'a> Visit<'a> for Reader {
                     reader.out.interfaces.insert(name.clone(), site.clone());
                 }
             }
-            reader.out.sites.push(Site { alias: Some(name), ty: Some(site), line });
+            reader.out.sites.push(Site { alias: Some(name), ty: Some(site), line, end });
         });
     }
 
@@ -947,7 +1039,8 @@ impl<'a> Visit<'a> for Reader {
         // The whole type is read here; nothing in it needs visiting.
         let ty = self.bare_ty(it);
         let line = self.line(it.span().start);
-        self.out.sites.push(Site { alias: None, ty: Some(ty), line });
+        let end = it.span().end;
+        self.out.sites.push(Site { alias: None, ty: Some(ty), line, end });
     }
 
     fn visit_ts_module_declaration(&mut self, it: &TSModuleDeclaration<'a>) {
@@ -1320,8 +1413,9 @@ impl<'a> Types<'a> {
         types.star_reexports.iter().find_map(|m| self.exported(target, m, name, depth + 1, visited))
     }
 
-    /// The findings for `path`, which holds `types`.
-    fn check_file(&self, path: &'a Path, types: &'a FileTypes) -> Vec<Finding> {
+    /// The findings for `path`, which holds `types`, each with the byte
+    /// offset where the declaration, type or chain it is about ends.
+    fn check_file(&self, path: &'a Path, types: &'a FileTypes) -> Vec<(Finding, u32)> {
         let mut findings = Vec::new();
         let mut ranges: Vec<((&'a Path, &'a str), String, Vec<RangeUse>)> = Vec::new();
         for site in &types.sites {
@@ -1350,7 +1444,7 @@ impl<'a> Types<'a> {
         site: &Site,
         ty: &'a Ty,
         ranges: &mut Vec<((&'a Path, &'a str), String, Vec<RangeUse>)>,
-        findings: &mut Vec<Finding>,
+        findings: &mut Vec<(Finding, u32)>,
     ) {
         let ctx = Ctx::new(self);
         let env = Env::default();
@@ -1370,7 +1464,9 @@ impl<'a> Types<'a> {
                     let Decl::Alias(alias) = found.decl else { return true };
                     if is_paths(found.name, alias, &|helper| self.has_template(found.file, helper))
                     {
-                        findings.extend(self.check_paths(path, name, args, *at, &ctx));
+                        findings.extend(
+                            self.check_paths(path, name, args, *at, &ctx).map(|f| (f, site.end)),
+                        );
                     } else if let Some((range, n)) = ctx.range(path, &env, &found, alias, args) {
                         // Only a use of the alias itself can be written out.
                         let fix = ((range.file, range.name) == (found.file, found.name)
@@ -1399,7 +1495,7 @@ impl<'a> Types<'a> {
         if let Some(product) = largest
             && product.value >= self.threshold
         {
-            findings.push(self.report_product(path, site, product));
+            findings.push((self.report_product(path, site, product), site.end));
         }
     }
 
@@ -1456,11 +1552,16 @@ impl<'a> Types<'a> {
 
     /// A finding for the uses of one `Range<N>`-style alias in `path`: `tsc`
     /// builds the tuples for the largest `N` and reuses them for the
-    /// others.
-    fn report_ranges(&self, path: &Path, name: &str, uses: Vec<RangeUse>) -> Option<Finding> {
+    /// others. It ends where the use it points at does.
+    fn report_ranges(
+        &self,
+        path: &Path,
+        name: &str,
+        uses: Vec<RangeUse>,
+    ) -> Option<(Finding, u32)> {
         // The first of the largest.
         let largest = uses.iter().rev().max_by_key(|u| u.n)?;
-        let n = largest.n;
+        let (n, end) = (largest.n, largest.at.end);
         let types = n.saturating_mul(n.saturating_add(1)) / 2;
         if types < self.threshold {
             return None;
@@ -1496,11 +1597,12 @@ impl<'a> Types<'a> {
             };
             issue = issue.with_fix(Fix::new(path.to_path_buf(), description, ops));
         }
-        Some(Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(types)))
+        Some((Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(types)), end))
     }
 
-    /// A finding for a chain of builder calls that ends a chain.
-    fn check_chain(&self, path: &Path, types: &FileTypes, chain: &Chain) -> Option<Finding> {
+    /// A finding for a chain of builder calls that ends a chain, with where
+    /// the chain ends.
+    fn check_chain(&self, path: &Path, types: &FileTypes, chain: &Chain) -> Option<(Finding, u32)> {
         // A chain another continues is counted there.
         if let Some(name) = &chain.name
             && types.chains.iter().any(|c| c.root == *name)
@@ -1523,7 +1625,7 @@ impl<'a> Types<'a> {
             );
         }
         let issue = Issue::new("builder-chain", *package, message, chain.line);
-        Some(Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(cost)))
+        Some((Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(cost)), chain.end))
     }
 
     fn json_paths(&self, from: &Path, module: &str) -> Option<u64> {
@@ -2129,7 +2231,11 @@ mod tests {
         with_files(files, |types, _| {
             let mut paths: Vec<&PathBuf> = types.files.keys().collect();
             paths.sort();
-            paths.into_iter().flat_map(|p| types.check_file(p, &types.files[p])).collect()
+            paths
+                .into_iter()
+                .flat_map(|p| types.check_file(p, &types.files[p]))
+                .map(|(f, _)| f)
+                .collect()
         })
     }
 

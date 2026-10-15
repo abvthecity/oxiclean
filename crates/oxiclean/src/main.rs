@@ -60,6 +60,15 @@ enum Commands {
     /// it off.
     #[command(name = "bloat")]
     Bloat(oxiclean_bloat::Config),
+    /// Report hot spots and duplicate packages in a `tsc --generateTrace` directory
+    ///
+    /// Reads the trace `tsc --generateTrace <dir>` wrote (oxiclean never
+    /// runs tsc) and runs the rules hot-spots (warn by default; an error
+    /// where the trace confirms a complex-types finding) and
+    /// duplicate-packages (warn by default), each unless `.oxicleanrc.json`
+    /// turns it off.
+    #[command(name = "trace")]
+    Trace(oxiclean_trace::Config),
     /// Check for excessive import depth in JavaScript/TypeScript projects
     #[command(name = "depth")]
     Depth(oxiclean_depth::Config),
@@ -79,6 +88,7 @@ impl Commands {
             Self::Dependencies(_) => "dependencies",
             Self::Typecheck(_) => "typecheck",
             Self::Bloat(_) => "bloat",
+            Self::Trace(_) => "trace",
             Self::Depth(_) => "depth",
             Self::Cycles(_) => "cycles",
             Self::Duplicates(_) => "duplicates",
@@ -92,6 +102,7 @@ impl Commands {
             Self::Dependencies(cfg) => oxiclean_dependencies::run_dependencies_command(cfg),
             Self::Typecheck(cfg) => oxiclean_typecheck::run_typecheck_command(cfg),
             Self::Bloat(cfg) => oxiclean_bloat::run_bloat_command(cfg),
+            Self::Trace(cfg) => oxiclean_trace::run_trace_command(cfg),
             Self::Depth(cfg) => oxiclean_depth::run_depth_command(cfg),
             Self::Cycles(cfg) => oxiclean_cycles::run_cycles_command(cfg),
             Self::Duplicates(cfg) => oxiclean_duplicates::run_duplicates_command(cfg),

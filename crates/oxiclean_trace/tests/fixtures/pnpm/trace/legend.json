@@ -1,0 +1,12 @@
+[
+  {
+    "configFilePath": "/home/ci/pnpm-repo/packages/ui/tsconfig.json",
+    "tracePath": "/home/ci/pnpm-repo/trace/trace.12347-1.json",
+    "typesPath": "/home/ci/pnpm-repo/trace/types.12347-1.json"
+  },
+  {
+    "configFilePath": "/home/ci/pnpm-repo/packages/app/tsconfig.json",
+    "tracePath": "/home/ci/pnpm-repo/trace/trace.12347-2.json",
+    "typesPath": "/home/ci/pnpm-repo/trace/types.12347-2.json"
+  }
+]

@@ -43,6 +43,20 @@ pub enum Error {
     #[error("invalid config file {}: {message}", path.display())]
     Config { path: PathBuf, message: String },
 
+    #[error(
+        "no trace directory: pass the directory `tsc --generateTrace <dir>` wrote, as `oxiclean trace <dir>`, or set `trace.dir` in .oxicleanrc.json"
+    )]
+    NoTraceDir,
+
+    #[error("could not read the trace in {}: {message}", path.display())]
+    Trace {
+        path: PathBuf,
+        message: String,
+        /// The I/O or parse error behind it, when there is one.
+        #[source]
+        source: Option<io::Error>,
+    },
+
     #[error("could not apply fixes to {}", path.display())]
     Fix {
         path: PathBuf,

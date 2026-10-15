@@ -960,6 +960,7 @@ dependencies = [
  "oxiclean_dependencies",
  "oxiclean_depth",
  "oxiclean_duplicates",
+ "oxiclean_trace",
  "oxiclean_typecheck",
  "oxiclean_unused_exports",
  "rayon",
@@ -1044,6 +1045,21 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "oxiclean_core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "oxiclean_trace"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "memchr",
+ "oxiclean_core",
+ "oxiclean_typecheck",
+ "rayon",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
 ]
