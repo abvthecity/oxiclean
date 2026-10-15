@@ -21,6 +21,7 @@ oxiclean_dependencies = { version = "0.1.0", path = "../oxiclean_dependencies" }
 oxiclean_duplicates = { version = "0.1.0", path = "../oxiclean_duplicates" }
 oxiclean_unused_exports = { version = "0.1.0", path = "../oxiclean_unused_exports" }
 oxiclean_depth = { version = "0.1.0", path = "../oxiclean_depth" }
+oxiclean_typecheck = { version = "0.1.0", path = "../oxiclean_typecheck" }
 rayon.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -42,6 +42,13 @@ pub enum Error {
 
     #[error("invalid config file {}: {message}", path.display())]
     Config { path: PathBuf, message: String },
+
+    #[error("could not apply fixes to {}", path.display())]
+    Fix {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// Shorthand for results in this crate.

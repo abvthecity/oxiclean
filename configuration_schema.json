@@ -419,6 +419,28 @@
             }
           ]
         },
+        "overlap": {
+          "description": "Files that more than one tsconfig program type-checks, from configs\nin different directories where neither extends the other. Default\nthreshold: 1 file.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "program-files": {
+          "description": "Files a tsconfig program type-checks that nobody needs checked:\nbuild output in a tsconfig's `outDir` or `declarationDir`, and\nminified or very large JavaScript that `allowJs` pulls in. Default\nthreshold: 1 file.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "unused-enum-members": {
           "description": "Members of used enums that nothing uses, as knip's `enumMembers`.\nMembers tagged `@public`, `@beta` or `@alias` don't count. Default\nthreshold: 1.",
           "anyOf": [

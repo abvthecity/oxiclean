@@ -43,6 +43,15 @@ oxiclean heavy-dependencies --root ./my-project
 # Find packages the lockfile installs at more than one version
 oxiclean duplicate-versions --root ./my-project
 
+# Find files a tsconfig type-checks that nobody needs checked, such as build output
+oxiclean program-files --root ./my-project
+
+# Find files more than one tsconfig type-checks
+oxiclean overlap --root ./my-project
+
+# Apply the fixes a check offers
+oxiclean program-files --fix --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean bloat --help
@@ -72,6 +81,7 @@ oxiclean/
 │   ├── oxiclean_cycles/             # Circular import detection library
 │   ├── oxiclean_dependencies/       # Unused dependency detection library
 │   ├── oxiclean_duplicates/         # Duplicate export detection library
+│   ├── oxiclean_typecheck/          # tsconfig and lint setup checks
 │   ├── oxiclean_unused_exports/     # Unused export and type detection library
 │   └── oxiclean_depth/              # Import depth analysis library
 └── Cargo.toml                       # Workspace configuration
@@ -88,6 +98,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `--root <DIR>` | Project root. Defaults to the git root of the current directory. |
 | `-c, --config <FILE>` | Read this config file instead of `.oxicleanrc.json` in the root. |
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
+| `--fix` | Apply the fixes findings offer, then report what is left (see [Fixes](#fixes)). |
 
 The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
@@ -369,6 +380,57 @@ Findings point at the entry's line in `pnpm-workspace.yaml`.
 oxiclean catalog --root ./my-project
 ```
 
+### Program Files Checker
+
+`tsc` parses, binds and type-checks every file in a program. `program-files`
+reads every `tsconfig*.json` and `jsconfig*.json` as `tsc` does (following
+`extends`, `${configDir}` and its `include`, `exclude` and `files` rules)
+and reports files a program checks that nobody needs checked:
+
+- **Build output**: files in any tsconfig's `outDir` or `declarationDir`.
+  `tsc` only leaves out a program's own `outDir`, and only when it sets no
+  `exclude`, so `dist` from a `tsconfig.build.json` is often checked again
+  by `tsconfig.json`, or by the build config itself once it inherits an
+  `exclude`.
+- **Minified or very large JavaScript** (1 MiB or more) that `allowJs`
+  pulls in, such as vendored bundles.
+
+A config counts as a program when it is a `tsconfig.json` or
+`jsconfig.json`, another config references it, a package.json script
+names it (`tsc -p tsconfig.build.json`), or nothing extends it. `--fix`
+adds the files to `exclude`, keeping what the config excluded before.
+
+```
+⚠ tsconfig programs check files they don't need
+
+packages/app/tsconfig.json
+└──  line 2: type-checks the build output in dist, the output directory of tsconfig.build.json, as if it were source (12 files)
+        packages/app/tsconfig.build.json:4: emits to dist
+        packages/app/dist/main.d.ts: build output
+        fixable with --fix: add "dist" to "exclude"
+```
+
+### Overlap Checker
+
+`overlap` reports files that more than one tsconfig program type-checks.
+Each program checks its files on its own, so such files are checked once
+per program, by `tsc -b`, in the editor and by typed linting. Typical
+causes are a root tsconfig whose `include` reaches into packages with their
+own tsconfig, and a catch-all `tsconfig.eslint.json`. Configs where one
+extends the other, and configs in the same directory, are variants of one
+project and aren't compared. Findings go on the config that reaches into
+the other's directory.
+
+```
+⚠ Files type-checked by more than one tsconfig
+
+tsconfig.eslint.json
+└──  line 3: type-checks files that packages/ui/tsconfig.json also type-checks, so they are checked more than once (48 files)
+```
+
+Deno doesn't read tsconfig files, so these checks find nothing in a Deno
+workspace.
+
 ### Difference Between Tools
 
 - **Import Bloat**: Counts total reachable modules (breadth) - indicates bundle size impact
@@ -474,6 +536,14 @@ aren't read yet. Plugins that read a config file are on whenever the file
 is there; those that need a tool's package to be listed say so. `"plugins": { "html": false }` in `.oxicleanrc.json` turns a plugin
 off, and `true` turns one on.
 
+## Fixes
+
+With `--fix`, a check applies the fixes its findings offer and reports
+only what is left. A fix is offered only when it needs no decision, such
+as adding build output to a tsconfig's `exclude`; findings that have one
+say `fixable with --fix` in the text report and carry a `fix` in JSON.
+Fixes to JSON files keep their comments and formatting.
+
 ## Output formats
 
 `--format text` (the default) prints the report shown above.
@@ -539,7 +609,9 @@ so packages in a monorepo can define the same alias differently.
 ## Monorepos
 
 Workspace packages declared in `pnpm-workspace.yaml`, the root `package.json`
-`workspaces` field (npm, yarn and bun) or, failing those, `lerna.json` resolve
+`workspaces` field (npm, yarn and bun), the root `deno.json` `workspace`
+field (Deno, whose packages may name themselves in `deno.json`) or, failing
+those, `lerna.json` resolve
 to their source files, even before `node_modules` is installed. When a package's `main` or `exports` points at build output that
 doesn't exist yet (for example `build/index.js`), the matching file under
 `src/` is used instead.

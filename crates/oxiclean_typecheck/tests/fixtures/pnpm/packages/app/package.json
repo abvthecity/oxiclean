@@ -1,0 +1,1 @@
+{ "name": "@acme/app", "scripts": { "build": "tsc -p tsconfig.build.json" } }

@@ -16,9 +16,11 @@ mod constants;
 mod entry_points;
 mod error;
 mod exports;
+pub mod fix;
 mod globs;
 mod graph;
 mod jsonc;
+pub mod jsonc_tree;
 mod members;
 mod parser;
 mod plugins;
@@ -47,7 +49,8 @@ pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     Barrel, CheckResult, CycleFinding, CycleStep, DuplicateExport, DuplicateVersions, ExportName,
-    Finding, FindingKind, HeavyDependency, UnusedCatalogEntry, UnusedDependency, UnusedExport,
+    Finding, FindingKind, HeavyDependency, Issue, Related, UnusedCatalogEntry, UnusedDependency,
+    UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};

@@ -282,6 +282,15 @@ pub struct Rules {
     /// Packages `package-lock.json` or `pnpm-lock.yaml` installs at more
     /// than one version. Default threshold: 2 versions.
     pub duplicate_versions: Option<RuleSetting>,
+    /// Files a tsconfig program type-checks that nobody needs checked:
+    /// build output in a tsconfig's `outDir` or `declarationDir`, and
+    /// minified or very large JavaScript that `allowJs` pulls in. Default
+    /// threshold: 1 file.
+    pub program_files: Option<RuleSetting>,
+    /// Files that more than one tsconfig program type-checks, from configs
+    /// in different directories where neither extends the other. Default
+    /// threshold: 1 file.
+    pub overlap: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -302,6 +311,8 @@ impl Rules {
             "barrels" => self.barrels.as_ref(),
             "heavy-dependencies" => self.heavy_dependencies.as_ref(),
             "duplicate-versions" => self.duplicate_versions.as_ref(),
+            "program-files" => self.program_files.as_ref(),
+            "overlap" => self.overlap.as_ref(),
             _ => None,
         }
     }
@@ -321,6 +332,8 @@ impl Rules {
             &self.barrels,
             &self.heavy_dependencies,
             &self.duplicate_versions,
+            &self.program_files,
+            &self.overlap,
         ]
         .into_iter()
         .flatten()

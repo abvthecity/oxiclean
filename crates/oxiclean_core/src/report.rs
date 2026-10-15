@@ -13,7 +13,8 @@ mod machine;
 pub use machine::{OutputFormat, ReportMeta, message, write_json, write_sarif};
 
 use crate::{
-    exports::ExportKind, graph::ParseFailure, resolver::ResolutionStats, settings::Severity,
+    exports::ExportKind, fix::Fix, graph::ParseFailure, resolver::ResolutionStats,
+    settings::Severity,
 };
 
 /// What a finding points at.
@@ -56,6 +57,84 @@ pub enum FindingKind {
     /// A package installed at more than one version. The finding's file is
     /// the lockfile; the value is the number of versions.
     DuplicateVersions(DuplicateVersions),
+    /// A problem described in words, as the tsconfig and lint config
+    /// checks report: a misconfigured option, a missing project reference.
+    Issue(Issue),
+}
+
+/// A problem a check describes in words, for [`FindingKind::Issue`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Issue {
+    /// What kind of problem it is within its rule, e.g. `missing-reference`.
+    pub code: String,
+    /// What the finding is about, stable across commits, e.g. the other
+    /// package's name. Code scanning tells findings apart by it.
+    pub key: String,
+    /// One sentence describing it.
+    pub message: String,
+    /// 1-based line in the finding's file, or 0 for the whole file.
+    pub line: u32,
+    /// Other places involved, such as the second tsconfig covering a file.
+    pub related: Vec<Related>,
+    /// How `--fix` resolves it, when that can be done without a person
+    /// deciding.
+    pub fix: Option<Fix>,
+}
+
+impl Issue {
+    /// An issue of kind `code` about `key`, described by `message`, at
+    /// `line` of the finding's file.
+    #[must_use]
+    pub fn new(
+        code: impl Into<String>,
+        key: impl Into<String>,
+        message: impl Into<String>,
+        line: u32,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            key: key.into(),
+            message: message.into(),
+            line,
+            related: Vec::new(),
+            fix: None,
+        }
+    }
+
+    /// The issue with `related` places listed.
+    #[must_use]
+    pub fn with_related(mut self, related: Vec<Related>) -> Self {
+        self.related = related;
+        self
+    }
+
+    /// The issue with a fix for `--fix`.
+    #[must_use]
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fix = Some(fix);
+        self
+    }
+}
+
+/// Another place an [`Issue`] involves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Related {
+    /// The other file.
+    pub file: PathBuf,
+    /// 1-based line, or 0 for the whole file.
+    pub line: u32,
+    /// What is there, e.g. `also includes it`.
+    pub message: String,
+}
+
+impl Related {
+    /// `message` about `line` of `file`.
+    #[must_use]
+    pub fn new(file: PathBuf, line: u32, message: impl Into<String>) -> Self {
+        Self { file, line, message: message.into() }
+    }
 }
 
 /// The versions of a package a lockfile installs, for
@@ -283,6 +362,7 @@ impl Finding {
             FindingKind::UnusedCatalogEntry(entry) => entry.line,
             FindingKind::HeavyDependency(dep) => dep.line,
             FindingKind::DuplicateVersions(dup) => dup.line,
+            FindingKind::Issue(issue) => issue.line,
             FindingKind::Barrel(_) | FindingKind::WholeGraph => 0,
         }
     }
@@ -342,6 +422,7 @@ fn request(f: &Finding) -> &str {
         FindingKind::UnusedCatalogEntry(entry) => &entry.name,
         FindingKind::HeavyDependency(dep) => &dep.name,
         FindingKind::DuplicateVersions(dup) => &dup.name,
+        FindingKind::Issue(issue) => &issue.key,
         FindingKind::Barrel(_) | FindingKind::WholeGraph => "",
     }
 }
@@ -367,6 +448,10 @@ fn label(f: &Finding) -> String {
         FindingKind::DuplicateVersions(dup) => {
             format!("package '{}' ({})", dup.name, dup.versions.join(", "))
         }
+        FindingKind::Issue(issue) => match issue.line {
+            0 => issue.message.clone(),
+            line => format!("line {line}: {}", issue.message),
+        },
         _ => format!("import '{}'", request(f)),
     }
 }
@@ -382,6 +467,20 @@ fn details(f: &Finding, ctx: ReportContext<'_>) -> Vec<String> {
             .skip(1)
             .map(|n| format!("{file}:{} also exports it as '{}'", n.line, n.name))
             .collect();
+    }
+    if let FindingKind::Issue(issue) = &f.kind {
+        let mut lines: Vec<String> = issue
+            .related
+            .iter()
+            .map(|r| match r.line {
+                0 => format!("{}: {}", ctx.display(&r.file), r.message),
+                line => format!("{}:{line}: {}", ctx.display(&r.file), r.message),
+            })
+            .collect();
+        if let Some(fix) = &issue.fix {
+            lines.push(format!("fixable with --fix: {}", fix.description));
+        }
+        return lines;
     }
     let FindingKind::Cycle(cycle) = &f.kind else { return Vec::new() };
     let mut lines: Vec<String> = cycle

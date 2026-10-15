@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "composite": true, "outDir": "build" },
+  "exclude": ["node_modules"]
+}
