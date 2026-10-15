@@ -32,8 +32,9 @@ const MIN_PERCENTAGE: f64 = 0.6;
 /// How deep the tree goes. Spans nested deeper are left out, so that a
 /// trace nesting thousands of spans (tsc stops relating types at 100
 /// levels, but a crafted or corrupt trace needn't) can't overflow the
-/// stack of the walks over it.
-const MAX_DEPTH: usize = 500;
+/// stack of the walks over it. 200 leaves room on a 2 MiB thread stack
+/// (rayon's and the test harness's default) even in debug builds.
+const MAX_DEPTH: usize = 200;
 
 /// A declaration file is reported when it repeats an `import("…")` type at
 /// least this often.
