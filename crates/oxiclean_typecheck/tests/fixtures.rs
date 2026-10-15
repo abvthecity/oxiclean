@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
 use oxiclean_typecheck::{
-    CheckResult, Config, FindingKind, run_ambient_types_check, run_overlap_check,
-    run_program_files_check, run_references_check, run_tsconfig_check,
+    CheckResult, Config, FindingKind, run_ambient_types_check, run_isolated_declarations_check,
+    run_overlap_check, run_program_files_check, run_references_check, run_tsconfig_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -212,4 +212,52 @@ fn options_bun() {
 fn options_deno() {
     assert!(options("options-deno").is_empty());
     assert!(ambient("options-deno").is_empty());
+}
+
+fn isolated(name: &str) -> Vec<String> {
+    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
+    summary(&run_isolated_declarations_check(&cfg).expect("fixture analyses"))
+}
+
+/// pnpm: a package whose exports all have types; ones an annotation away,
+/// with `noEmit`, with `satisfies` in a file `files` reaches through a
+/// re-export; and ones not reported: with `allowJs`, which `tsc` won't
+/// combine with the option, and with a syntax error.
+#[test]
+fn isolated_pnpm() {
+    assert_eq!(
+        isolated("isolated-pnpm"),
+        [
+            "packages/app/tsconfig.json:1 few-annotations isolatedDeclarations (1)",
+            "packages/near/tsconfig.json:2 few-annotations isolatedDeclarations (1)",
+            "packages/ready/tsconfig.json:2 can-enable isolatedDeclarations (1) fix: set \"compilerOptions.isolatedDeclarations\": true",
+            "packages/shape/tsconfig.json:1 few-annotations isolatedDeclarations (1)",
+        ]
+    );
+}
+
+/// npm: a library that has `isolatedDeclarations` on already, and one on
+/// TypeScript 5.4, which doesn't know the option.
+#[test]
+fn isolated_npm() {
+    assert!(isolated("isolated-npm").is_empty());
+}
+
+/// Bun: a package too many annotations away to report, and one ready.
+#[test]
+fn isolated_bun() {
+    assert_eq!(
+        isolated("isolated-bun"),
+        [
+            "packages/server/tsconfig.json:2 can-enable isolatedDeclarations (1) fix: set \"compilerOptions.isolatedDeclarations\": true"
+        ]
+    );
+}
+
+/// Deno: a JSR package whose entry re-exports a function without a return
+/// type, which uses a private helper without one that isn't counted, and
+/// a package without `exports`.
+#[test]
+fn isolated_deno() {
+    assert_eq!(isolated("isolated-deno"), ["packages/add/deno.json:1 slow-types @scope/add (1)"]);
 }

@@ -304,6 +304,11 @@ pub struct Rules {
     /// neither their package.json nor the root one declares. Default
     /// threshold: 1 package.
     pub ambient_types: Option<RuleSetting>,
+    /// Programs that emit declarations and already have, or are a few
+    /// annotations from, the explicit types `isolatedDeclarations` needs;
+    /// and Deno packages with `exports` whose public API has JSR slow
+    /// types. Has no threshold.
+    pub isolated_declarations: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -329,6 +334,7 @@ impl Rules {
             "references" => self.references.as_ref(),
             "tsconfig" => self.tsconfig.as_ref(),
             "ambient-types" => self.ambient_types.as_ref(),
+            "isolated-declarations" => self.isolated_declarations.as_ref(),
             _ => None,
         }
     }
@@ -353,6 +359,7 @@ impl Rules {
             &self.references,
             &self.tsconfig,
             &self.ambient_types,
+            &self.isolated_declarations,
         ]
         .into_iter()
         .flatten()

@@ -27,14 +27,11 @@ use tracing::info;
 use crate::{
     config::{AMBIENT_TYPES_RULE, Config, DEFAULT_THRESHOLD},
     tsconfig::{TsConfigFile, TsConfigs},
+    typescript::{DEPENDENCY_FIELDS, typescript_version},
 };
 
 /// How many undeclared packages a finding names.
 const SAMPLES: usize = 3;
-
-/// The package.json fields that declare dependencies.
-const DEPENDENCY_FIELDS: &[&str] =
-    &["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
 
 /// The first TypeScript major version whose `types` defaults to `[]`.
 const TYPES_DEFAULT_EMPTY: u64 = 6;
@@ -110,34 +107,9 @@ fn loads_all_types(project: &Project, program: &TsConfigFile) -> bool {
     match program.options.get("types") {
         Some(Value::Array(types)) => types.iter().any(|t| t == "*"),
         Some(_) => false,
-        None => typescript_major(project, &program.dir).is_none_or(|v| v < TYPES_DEFAULT_EMPTY),
+        None => typescript_version(project, &program.dir)
+            .is_none_or(|(major, _)| major < TYPES_DEFAULT_EMPTY),
     }
-}
-
-/// The major version of the TypeScript `dir` uses: the one installed
-/// nearest, else the one a package.json from `dir` up asks for.
-fn typescript_major(project: &Project, dir: &Path) -> Option<u64> {
-    let dirs: Vec<&Path> = dir.ancestors().take_while(|a| a.starts_with(&project.root)).collect();
-    let installed = dirs.iter().find_map(|d| {
-        let text = fs::read_to_string(d.join("node_modules/typescript/package.json")).ok()?;
-        let pkg: Value = serde_json::from_str(&text).ok()?;
-        pkg.get("version")?.as_str().map(str::to_string)
-    });
-    let wanted = || {
-        dirs.iter().find_map(|d| {
-            let pkg = project.package_json(d)?;
-            DEPENDENCY_FIELDS
-                .iter()
-                .find_map(|f| pkg.get(f)?.get("typescript")?.as_str().map(str::to_string))
-        })
-    };
-    let version = installed.or_else(wanted)?;
-    let digits: String = version
-        .trim_start_matches(|c: char| !c.is_ascii_digit())
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    digits.parse().ok()
 }
 
 /// The `@types` packages, without the scope, in each `node_modules/@types`

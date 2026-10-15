@@ -37,6 +37,7 @@ const RULES: &[&str] = &[
     "references",
     "tsconfig",
     "ambient-types",
+    "isolated-declarations",
 ];
 
 fn fixtures() -> PathBuf {
