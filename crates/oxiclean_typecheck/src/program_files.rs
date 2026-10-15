@@ -61,11 +61,13 @@ pub fn check(configs: &TsConfigs) -> Vec<Finding> {
     }
     let mut findings = Vec::new();
     for program in configs.programs() {
-        let mut by_dir: BTreeMap<&Path, Vec<&PathBuf>> = BTreeMap::new();
-        for f in &program.root_files {
+        let mut by_dir: BTreeMap<&Path, Vec<&Path>> = BTreeMap::new();
+        // Files `files` names are checked whatever `exclude` says.
+        let listed = program.files.as_deref().unwrap_or_default();
+        for f in program.root_files.iter().filter(|f| !listed.contains(f)) {
             // The deepest output directory holding the file.
-            if let Some((dir, _)) = outputs.iter().rev().find(|(d, _)| f.starts_with(d)) {
-                by_dir.entry(dir.as_path()).or_default().push(f);
+            if let Some((dir, _)) = f.ancestors().find_map(|a| outputs.get_key_value(a)) {
+                by_dir.entry(dir.as_path()).or_default().push(f.as_path());
             }
         }
         for (dir, files) in by_dir {
@@ -84,7 +86,7 @@ fn build_output(
     program: &TsConfigFile,
     dir: &Path,
     emitter: &TsConfigFile,
-    files: &[&PathBuf],
+    files: &[&Path],
 ) -> Finding {
     let rel = relative(&program.dir, dir);
     let whose = if emitter.path == program.path {
@@ -103,8 +105,9 @@ fn build_output(
         emitter.line_of(&["compilerOptions", option]),
         format!("emits to {}", relative(&emitter.dir, dir)),
     )];
-    related
-        .extend(files.iter().take(SAMPLES).map(|f| Related::new((*f).clone(), 0, "build output")));
+    related.extend(
+        files.iter().take(SAMPLES).map(|f| Related::new(f.to_path_buf(), 0, "build output")),
+    );
     let issue = Issue::new("build-output", rel.clone(), message, include_line(program))
         .with_related(related)
         .with_fix(exclude_fix(program, &[rel]));
@@ -119,10 +122,11 @@ fn large_js(program: &TsConfigFile) -> Option<Finding> {
     }
     let js = |f: &Path| f.extension().is_some_and(|e| e == "js" || e == "mjs" || e == "cjs");
     let minified = |f: &Path| f.file_name().is_some_and(|n| n.to_string_lossy().contains(".min."));
+    let listed = program.files.as_deref().unwrap_or_default();
     let files: Vec<&PathBuf> = program
         .root_files
         .iter()
-        .filter(|f| js(f))
+        .filter(|f| js(f) && !listed.contains(f))
         .filter(|f| minified(f) || fs::metadata(f).is_ok_and(|m| m.len() >= LARGE_JS_BYTES))
         .collect();
     if files.is_empty() {
@@ -139,7 +143,7 @@ fn large_js(program: &TsConfigFile) -> Option<Finding> {
             patterns.push(p);
         }
     }
-    let message = "type-checks minified or very large JavaScript that allowJs pulls in".to_string();
+    let message = "type-checks minified or very large JavaScript that allowJs pulls in";
     let related = files
         .iter()
         .take(SAMPLES)
@@ -161,32 +165,36 @@ fn include_line(program: &TsConfigFile) -> u32 {
 }
 
 /// A fix adding `patterns` to `program`'s `exclude`. When the file sets no
-/// `exclude` of its own, it gets one that keeps what it excluded before:
-/// the inherited list, or else `tsc`'s default of its own `outDir`.
+/// `exclude` of its own, the one it gets starts with what it excluded
+/// before: the inherited list, or else `tsc`'s default of its own
+/// `outDir`.
 pub(crate) fn exclude_fix(program: &TsConfigFile, patterns: &[String]) -> Fix {
-    let file = program.path.clone();
-    let description = format!("add {} to \"exclude\"", quoted(patterns));
-    let key = vec![Segment::from("exclude")];
-    if program.sets("exclude") {
-        let ops = patterns
-            .iter()
-            .map(|p| FixOp::JsonAppend { path: key.clone(), value: Value::String(p.clone()) })
-            .collect();
-        return Fix::new(file, description, ops);
-    }
-    let mut list: Vec<String> = match &program.exclude {
-        Some(inherited) => inherited.iter().map(|p| relative(&program.dir, Path::new(p))).collect(),
-        None => {
-            program.path_option("outDir").map(|o| relative(&program.dir, &o)).into_iter().collect()
+    let seed: Vec<Value> = if program.sets("exclude") {
+        Vec::new()
+    } else {
+        match &program.exclude {
+            Some(inherited) => inherited
+                .iter()
+                .map(|p| Value::String(relative(&program.dir, Path::new(p))))
+                .collect(),
+            // `tsc`'s own default; the package folders it lists need no
+            // entry, as wildcards never enter them.
+            None => ["outDir", "declarationDir"]
+                .iter()
+                .filter_map(|o| program.path_option(o))
+                .map(|o| Value::String(relative(&program.dir, &o)))
+                .collect(),
         }
     };
-    for p in patterns {
-        if !list.contains(p) {
-            list.push(p.clone());
-        }
-    }
-    let value = Value::Array(list.into_iter().map(Value::String).collect());
-    Fix::new(file, description, vec![FixOp::JsonSet { path: key, value }])
+    let ops = patterns
+        .iter()
+        .map(|p| FixOp::JsonAppend {
+            path: vec![Segment::from("exclude")],
+            value: Value::String(p.clone()),
+            seed: seed.clone(),
+        })
+        .collect();
+    Fix::new(program.path.clone(), format!("add {} to \"exclude\"", quoted(patterns)), ops)
 }
 
 fn quoted(items: &[String]) -> String {

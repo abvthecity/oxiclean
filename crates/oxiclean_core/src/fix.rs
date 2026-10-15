@@ -18,6 +18,7 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use crate::{
+    error::{Error, Result},
     jsonc_tree::{JsoncDoc, Segment},
     report::{CheckResult, FindingKind},
 };
@@ -28,15 +29,18 @@ use crate::{
 pub enum FixOp {
     /// Sets the JSON member at `path`, creating the objects on the way.
     JsonSet { path: Vec<Segment>, value: Value },
-    /// Appends to the JSON array at `path`, creating it when missing.
-    JsonAppend { path: Vec<Segment>, value: Value },
+    /// Appends `value` to the JSON array at `path` unless it is there
+    /// already. A missing array is created holding `seed`, then `value`, so
+    /// several fixes can each append to an array none of them found.
+    JsonAppend { path: Vec<Segment>, value: Value, seed: Vec<Value> },
     /// Removes the items of the JSON array at `path` equal to `value`.
     JsonRemove { path: Vec<Segment>, value: Value },
     /// Replaces the bytes `start..end`, which must still read `expected`.
     Replace { start: usize, end: usize, expected: String, text: String },
 }
 
-/// The edits that resolve a finding, to one file.
+/// The edits that resolve a finding, to one file. Its operations are
+/// either all JSON operations or all byte replacements.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Fix {
@@ -44,10 +48,13 @@ pub struct Fix {
     pub file: PathBuf,
     /// What the fix does, e.g. `set "skipLibCheck": true`.
     pub description: String,
+    /// The changes, applied in order.
     pub ops: Vec<FixOp>,
 }
 
 impl Fix {
+    /// A fix to `file` making the changes `ops`, described by
+    /// `description`.
     #[must_use]
     pub fn new(file: PathBuf, description: impl Into<String>, ops: Vec<FixOp>) -> Self {
         Self { file, description: description.into(), ops }
@@ -62,6 +69,15 @@ impl Fix {
     }
 }
 
+/// A byte replacement of a [`FixOp::Replace`].
+struct Replace<'a> {
+    finding: usize,
+    start: usize,
+    end: usize,
+    expected: &'a str,
+    text: &'a str,
+}
+
 /// Applies the fixes of `result`'s findings to the files on disk, and
 /// removes the findings they resolved. Returns how many findings were
 /// fixed. A fix that no longer applies (the file changed, or isn't valid
@@ -69,7 +85,7 @@ impl Fix {
 ///
 /// # Errors
 /// Fails if a file can't be read or written.
-pub fn apply_fixes(result: &mut CheckResult) -> io::Result<usize> {
+pub fn apply_fixes(result: &mut CheckResult) -> Result<usize> {
     let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
     for (i, f) in result.findings.iter().enumerate() {
         if let Some(fix) = fix_of(&f.kind) {
@@ -78,64 +94,71 @@ pub fn apply_fixes(result: &mut CheckResult) -> io::Result<usize> {
     }
     let mut fixed = vec![false; result.findings.len()];
     for (file, indices) in by_file {
-        let original = fs::read_to_string(&file)?;
+        let io_err = |source| Error::Fix { path: file.clone(), source };
+        let original = fs::read_to_string(&file).map_err(io_err)?;
         let mut text = original.clone();
-        // Byte replacements refer to the original text: apply them last to
-        // first, after any JSON operations they can't overlap with.
-        let mut replaces: Vec<(usize, &FixOp)> = Vec::new();
+        let mut replaces: Vec<Replace<'_>> = Vec::new();
         for &i in &indices {
             let Some(fix) = fix_of(&result.findings[i].kind) else { continue };
-            let mut next = text.clone();
-            let mut ok = true;
-            for op in &fix.ops {
-                match apply_json(&next, op) {
-                    Some(Some(t)) => next = t,
-                    Some(None) => {
-                        ok = false;
-                        break;
-                    }
-                    None => replaces.push((i, op)),
-                }
+            let skip = |why: &str| {
+                warn!("Skipping fix '{}' to {}: {why}", fix.description, file.display());
+            };
+            let (json, bytes): (Vec<&FixOp>, Vec<&FixOp>) =
+                fix.ops.iter().partition(|op| !matches!(op, FixOp::Replace { .. }));
+            if !json.is_empty() && !bytes.is_empty() {
+                skip("it mixes JSON operations and byte replacements");
+                continue;
             }
-            if ok {
-                text = next;
-                fixed[i] = true;
-            } else {
-                warn!(
-                    "Skipping fix '{}' to {}: it no longer applies",
-                    fix.description,
-                    file.display()
-                );
+            if json.is_empty() {
+                replaces.extend(bytes.into_iter().filter_map(|op| match op {
+                    FixOp::Replace { start, end, expected, text } => {
+                        Some(Replace { finding: i, start: *start, end: *end, expected, text })
+                    }
+                    _ => None,
+                }));
+                continue;
+            }
+            // All of a fix's JSON operations apply, or none do.
+            match json.into_iter().try_fold(text.clone(), |t, op| apply_json(&t, op)) {
+                Some(next) => {
+                    text = next;
+                    fixed[i] = true;
+                }
+                None => skip("it no longer applies"),
             }
         }
-        replaces.sort_by_key(|(_, op)| match op {
-            FixOp::Replace { start, .. } => std::cmp::Reverse(*start),
-            _ => std::cmp::Reverse(0),
-        });
-        // Byte offsets refer to the original text, so they only apply when
-        // no JSON operation changed it, and never overlap each other.
+        // Byte offsets refer to the original text, so replacements only
+        // apply when no JSON operation changed it. They go last to first,
+        // and one overlapping another is skipped.
         let json_changed = text != original;
+        replaces.sort_by_key(|r| std::cmp::Reverse(r.start));
         let mut floor = usize::MAX;
-        for (i, op) in replaces {
-            let FixOp::Replace { start, end, expected, text: with } = op else { continue };
-            if !json_changed && *end <= floor && text.get(*start..*end) == Some(expected.as_str()) {
-                text.replace_range(*start..*end, with);
-                floor = *start;
+        let mut failed: Vec<usize> = Vec::new();
+        for r in &replaces {
+            if !json_changed && r.end <= floor && text.get(r.start..r.end) == Some(r.expected) {
+                text.replace_range(r.start..r.end, r.text);
+                floor = r.start;
             } else {
-                fixed[i] = false;
+                failed.push(r.finding);
+            }
+        }
+        // A fix with several replacements counts only if all of them applied.
+        for r in &replaces {
+            fixed[r.finding] = !failed.contains(&r.finding);
+        }
+        for i in failed {
+            if let Some(fix) = fix_of(&result.findings[i].kind) {
+                warn!("Skipping fix '{}' to {}: the text changed", fix.description, file.display());
             }
         }
         if text != original {
             debug!("Writing fixes to {}", file.display());
-            write_atomic(&file, &text)?;
+            write_atomic(&file, &text).map_err(io_err)?;
         }
     }
     let count = fixed.iter().filter(|f| **f).count();
-    let mut i = 0;
-    result.findings.retain(|_| {
-        i += 1;
-        !fixed[i - 1]
-    });
+    let mut flags = fixed.into_iter();
+    result.findings.retain(|_| !flags.next().unwrap_or(false));
     Ok(count)
 }
 
@@ -147,25 +170,49 @@ fn fix_of(kind: &FindingKind) -> Option<&Fix> {
     }
 }
 
-/// `Some(Some(text))` with a JSON operation applied, `Some(None)` when it
-/// can't be, and `None` for a byte replacement.
-fn apply_json(text: &str, op: &FixOp) -> Option<Option<String>> {
-    let doc = || JsoncDoc::parse(text);
-    Some(match op {
-        FixOp::JsonSet { path, value } => doc().and_then(|d| d.set(path, value)),
-        FixOp::JsonAppend { path, value } => doc().and_then(|d| d.append(path, value)),
-        FixOp::JsonRemove { path, value } => doc().and_then(|d| d.remove_item(path, value)),
-        FixOp::Replace { .. } => return None,
-    })
+/// `text` with a JSON operation applied, or `None` when it can't be. An
+/// append of what is there already, and a removal of what isn't, change
+/// nothing.
+fn apply_json(text: &str, op: &FixOp) -> Option<String> {
+    let doc = JsoncDoc::parse(text)?;
+    match op {
+        FixOp::JsonSet { path, value } => doc.set(path, value),
+        FixOp::JsonAppend { path, value, seed } => match doc.at(path) {
+            Some(node) if node.items().iter().any(|n| doc.value(n).as_ref() == Some(value)) => {
+                Some(text.to_string())
+            }
+            Some(_) => doc.append(path, value),
+            None => {
+                let mut items: Vec<Value> = Vec::with_capacity(seed.len() + 1);
+                for v in seed.iter().chain(std::iter::once(value)) {
+                    if !items.contains(v) {
+                        items.push(v.clone());
+                    }
+                }
+                doc.set(path, &Value::Array(items))
+            }
+        },
+        FixOp::JsonRemove { path, value } => {
+            Some(doc.remove_item(path, value).unwrap_or_else(|| text.to_string()))
+        }
+        FixOp::Replace { .. } => None,
+    }
 }
 
 /// Writes `text` to a temporary file next to `path` and renames it over
-/// `path`, so a crash never leaves a half-written file.
+/// `path`, so a crash never leaves a half-written file. A symlink is
+/// followed, so the link stays a link, and the file keeps its permissions.
 fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    let path = fs::canonicalize(path)?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.oxiclean-fix"));
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, path)
+    let written = fs::write(&tmp, text)
+        .and_then(|()| fs::set_permissions(&tmp, fs::metadata(&path)?.permissions()))
+        .and_then(|()| fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 #[cfg(test)]
@@ -203,6 +250,66 @@ mod tests {
             text,
             "{\n  // keep me\n  \"include\": [\"src\"],\n  \"compilerOptions\": { \"a\": true, \"b\": 1 }\n}\n"
         );
+    }
+
+    #[test]
+    fn appends_to_a_missing_array_stack() {
+        let t = TempDir::new().unwrap();
+        let file = t.path().join("tsconfig.json");
+        fs::write(&file, "{\n  \"extends\": \"./base.json\"\n}\n").unwrap();
+        let append = |value: &str| {
+            let path = vec![Segment::from("exclude")];
+            let op = FixOp::JsonAppend { path, value: json!(value), seed: vec![json!("out")] };
+            Fix::new(file.clone(), "a", vec![op])
+        };
+        let mut result = CheckResult {
+            findings: vec![
+                finding(&file, append("dist")),
+                finding(&file, append("build")),
+                finding(&file, append("dist")),
+            ],
+            ..CheckResult::default()
+        };
+        assert_eq!(apply_fixes(&mut result).unwrap(), 3);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "{\n  \"extends\": \"./base.json\",\n  \"exclude\": [\"out\", \"dist\", \"build\"]\n}\n"
+        );
+    }
+
+    #[test]
+    fn mixed_fixes_are_skipped_and_files_left_alone() {
+        let t = TempDir::new().unwrap();
+        let file = t.path().join("tsconfig.json");
+        fs::write(&file, "{}").unwrap();
+        let ops = vec![
+            FixOp::JsonSet { path: vec![Segment::from("a")], value: json!(1) },
+            FixOp::Replace { start: 0, end: 1, expected: "{".into(), text: "{".into() },
+        ];
+        let mut result = CheckResult {
+            findings: vec![finding(&file, Fix::new(file.clone(), "m", ops))],
+            ..CheckResult::default()
+        };
+        assert_eq!(apply_fixes(&mut result).unwrap(), 0);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_symlinks() {
+        let t = TempDir::new().unwrap();
+        let real = t.path().join("base.json");
+        let link = t.path().join("tsconfig.json");
+        fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut result = CheckResult {
+            findings: vec![finding(&link, Fix::json_set(link.clone(), &["a"], json!(1)))],
+            ..CheckResult::default()
+        };
+        assert_eq!(apply_fixes(&mut result).unwrap(), 1);
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "{\n  \"a\": 1\n}");
     }
 
     #[test]

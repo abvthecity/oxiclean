@@ -13,7 +13,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use oxiclean_core::{
     Project,
-    jsonc_tree::{JsoncDoc, Segment},
+    jsonc_tree::{JsoncDoc, Node, Segment},
     split_package_request,
 };
 use serde_json::{Map, Value};
@@ -49,6 +49,7 @@ struct Declared<T> {
 
 /// One tsconfig file, with what it inherits.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TsConfigFile {
     /// Absolute path of the file.
     pub path: PathBuf,
@@ -79,6 +80,7 @@ pub struct TsConfigFile {
 
 /// One entry of a tsconfig's `references`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Reference {
     /// The `path` as written.
     pub raw: String,
@@ -143,6 +145,7 @@ impl TsConfigFile {
 
 /// Every tsconfig in a project.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct TsConfigs {
     pub configs: Vec<TsConfigFile>,
 }
@@ -264,7 +267,9 @@ fn resolve_extends(project: &Project, dir: &Path, name: &str) -> Option<PathBuf>
         if p.is_file() {
             return Some(p);
         }
-        let json = PathBuf::from(format!("{}.json", p.display()));
+        let mut json = p.clone().into_os_string();
+        json.push(".json");
+        let json = PathBuf::from(json);
         if json.is_file() {
             return Some(json);
         }
@@ -292,9 +297,9 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
     let own = raw.get(path)?.clone()?;
     let dir = path.parent()?.to_path_buf();
     let mut merged = Merged::default();
+    merge(path, raw, &mut merged, &mut BTreeSet::new(), 0);
     let mut ancestors = BTreeSet::new();
-    merge(path, raw, &mut merged, &mut ancestors, 0);
-    ancestors.remove(path);
+    collect_ancestors(path, raw, &mut ancestors, 0);
 
     let config_dir = dir.to_string_lossy().into_owned();
     let resolve = |d: &Declared<Value>| -> Value {
@@ -330,18 +335,12 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
         .doc
         .root
         .get("references")
-        .map(|refs| {
-            refs.items()
-                .iter()
-                .enumerate()
-                .filter_map(|(i, n)| reference(&own.doc, &dir, i, n))
-                .collect()
-        })
+        .map(|refs| refs.items().iter().filter_map(|n| reference(&own.doc, &dir, n)).collect())
         .unwrap_or_default();
     Some(TsConfigFile {
         path: path.to_path_buf(),
         dir,
-        extends: own.extends.clone(),
+        extends: own.extends,
         ancestors,
         options,
         include: patterns(&merged.include),
@@ -354,12 +353,7 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
     })
 }
 
-fn reference(
-    doc: &JsoncDoc,
-    dir: &Path,
-    index: usize,
-    node: &oxiclean_core::jsonc_tree::Node,
-) -> Option<Reference> {
+fn reference(doc: &JsoncDoc, dir: &Path, node: &Node) -> Option<Reference> {
     let raw = node.get("path").and_then(|p| doc.value(p))?.as_str()?.to_string();
     let target = path_clean::clean(dir.join(&raw));
     let target = if target.extension().is_some_and(|e| e == "json") {
@@ -367,11 +361,25 @@ fn reference(
     } else {
         target.join("tsconfig.json")
     };
-    Some(Reference {
-        raw,
-        target,
-        line: doc.line(doc.root.get("references")?.items()[index].span.start),
-    })
+    Some(Reference { raw, target, line: doc.line(node.span.start) })
+}
+
+/// Every config `path` extends, directly or not.
+fn collect_ancestors(
+    path: &Path,
+    raw: &HashMap<PathBuf, Option<Raw>>,
+    out: &mut BTreeSet<PathBuf>,
+    depth: usize,
+) {
+    let Some(Some(r)) = raw.get(path) else { return };
+    if depth > MAX_EXTENDS_DEPTH {
+        return;
+    }
+    for e in &r.extends {
+        if out.insert(e.clone()) {
+            collect_ancestors(e, raw, out, depth + 1);
+        }
+    }
 }
 
 /// Settings merged along an `extends` chain.
@@ -391,13 +399,19 @@ fn merge(
     seen: &mut BTreeSet<PathBuf>,
     depth: usize,
 ) {
+    // `seen` holds the chain being merged, so a cycle ends while a base two
+    // siblings share is applied for each, as `tsc` does.
     if depth > MAX_EXTENDS_DEPTH || !seen.insert(path.to_path_buf()) {
         return;
     }
-    let Some(Some(r)) = raw.get(path) else { return };
+    let Some(Some(r)) = raw.get(path) else {
+        seen.remove(path);
+        return;
+    };
     for e in &r.extends {
         merge(e, raw, out, seen, depth + 1);
     }
+    seen.remove(path);
     let dir = path.parent().unwrap_or(Path::new("")).to_path_buf();
     let root = &r.doc.root;
     if let Some(opts) = root.get("compilerOptions") {
@@ -491,32 +505,28 @@ impl SourceFiles {
                 TS_EXTENSIONS.contains(&e) || (allow_js && JS_EXTENSIONS.contains(&e))
             })
         };
-        let mut out: BTreeSet<PathBuf> = BTreeSet::new();
         let include = match (&config.include, &config.files) {
             (Some(i), _) => i.clone(),
             (None, Some(_)) => Vec::new(),
             (None, None) => vec![format!("{}/**/*", slashes(&config.dir))],
         };
-        let exclude = config.exclude.clone().unwrap_or_else(|| {
-            let mut d: Vec<String> =
-                SKIPPED_DIRS.iter().map(|s| format!("{}/{s}", slashes(&config.dir))).collect();
-            d.extend(config.path_option("outDir").map(|o| slashes(&o)));
-            d
-        });
+        let exclude = config.exclude.clone().unwrap_or_else(|| default_exclude(config));
         let exclude_set = globs(&exclude, true);
         let mut wildcard: BTreeSet<PathBuf> = BTreeSet::new();
         for pattern in &include {
             let pattern = as_files_pattern(pattern);
             let Some(set) = globs(std::slice::from_ref(&pattern), false) else { continue };
-            let base = literal_base(&pattern);
-            // Wildcards skip hidden files unless the pattern names them.
-            let explicit_hidden =
-                pattern.strip_prefix(&slashes(&base)).unwrap_or(&pattern).contains("/.");
+            let (base, rest) = split_base(&pattern);
+            // Wildcards skip hidden files unless the pattern names them,
+            // and `*` never matches a name ending in `.min.js`.
+            let explicit_hidden = rest.contains("/.") || rest.starts_with('.');
+            let explicit_min = rest.ends_with(".min.js") || !rest.contains(['*', '?']);
             for f in self.under(&base) {
                 let rel = f.strip_prefix(&base).unwrap_or(f);
                 let hidden =
                     rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-                if (hidden && !explicit_hidden) || !supported(f) {
+                let min = f.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".min.js"));
+                if (hidden && !explicit_hidden) || (min && !explicit_min) || !supported(f) {
                     continue;
                 }
                 let text = slashes(f);
@@ -525,21 +535,71 @@ impl SourceFiles {
                 }
             }
         }
-        // A `.d.ts` or `.js` next to a `.ts` of the same name is its
-        // output, and `tsc` drops it from wildcard matches.
-        let stems: BTreeSet<String> = wildcard
-            .iter()
-            .filter(|f| matches!(extension_of(f), Some(".ts" | ".tsx")))
-            .map(|f| stem(f))
+        // Of files that differ only in extension, `tsc` keeps the one
+        // whose extension comes first in its group: `a.d.ts` and `a.js` next
+        // to `a.ts` are its output.
+        let mut best: BTreeMap<(String, usize), usize> = BTreeMap::new();
+        for f in &wildcard {
+            if let Some((group, rank)) = extension_rank(f) {
+                let e = best.entry((stem(f), group)).or_insert(rank);
+                *e = (*e).min(rank);
+            }
+        }
+        let mut out: BTreeSet<PathBuf> = wildcard
+            .into_iter()
+            .filter(|f| {
+                extension_rank(f)
+                    .is_none_or(|(group, rank)| best.get(&(stem(f), group)) == Some(&rank))
+            })
             .collect();
-        out.extend(wildcard.into_iter().filter(|f| {
-            !matches!(extension_of(f), Some(".d.ts" | ".js" | ".jsx")) || !stems.contains(&stem(f))
-        }));
         if let Some(files) = &config.files {
             out.extend(files.iter().filter(|f| f.is_file()).cloned());
         }
         out.into_iter().collect()
     }
+}
+
+/// What `tsc` excludes when a config sets no `exclude`: package folders,
+/// and its `outDir` and `declarationDir`.
+fn default_exclude(config: &TsConfigFile) -> Vec<String> {
+    let mut d: Vec<String> =
+        SKIPPED_DIRS.iter().map(|s| format!("{}/{s}", slashes(&config.dir))).collect();
+    d.extend(
+        ["outDir", "declarationDir"]
+            .iter()
+            .filter_map(|o| config.path_option(o))
+            .map(|o| slashes(&o)),
+    );
+    d
+}
+
+/// `tsc`'s extension groups, each in priority order. Of files with one
+/// stem, only the first extension of each group is kept.
+const EXTENSION_GROUPS: &[&[&str]] = &[
+    &[".ts", ".tsx", ".d.ts", ".js", ".jsx"],
+    &[".cts", ".d.cts", ".cjs"],
+    &[".mts", ".d.mts", ".mjs"],
+];
+
+/// The group and rank of `f`'s extension in [`EXTENSION_GROUPS`].
+fn extension_rank(f: &Path) -> Option<(usize, usize)> {
+    let ext = extension_of(f)?;
+    EXTENSION_GROUPS
+        .iter()
+        .enumerate()
+        .find_map(|(g, exts)| exts.iter().position(|e| *e == ext).map(|r| (g, r)))
+}
+
+/// The directory of `pattern` before its first wildcard (for a pattern
+/// naming one file, its directory), and the rest of the pattern.
+fn split_base(pattern: &str) -> (PathBuf, &str) {
+    let prefix = verbatim_prefix_len(pattern);
+    let literal_end = pattern[prefix..].find(['*', '?']).map_or(pattern.len(), |i| i + prefix);
+    let cut = pattern[..literal_end].rfind('/').unwrap_or(0);
+    let base = &pattern[..cut];
+    // Patterns use `/`; the platform's separator keeps Windows prefixes
+    // such as `\\?\C:\` intact.
+    (PathBuf::from(base.replace('/', std::path::MAIN_SEPARATOR_STR)), &pattern[cut..])
 }
 
 /// `pattern` as a pattern of files: one whose last part names no file
@@ -555,13 +615,15 @@ fn as_files_pattern(pattern: &str) -> String {
 fn globs(patterns: &[String], directories_too: bool) -> Option<GlobSet> {
     let mut b = GlobSetBuilder::new();
     for p in patterns {
-        let escaped: String = p
+        let prefix = verbatim_prefix_len(p);
+        let rest: String = p[prefix..]
             .chars()
             .flat_map(|c| match c {
                 '[' | ']' | '{' | '}' => vec!['[', c, ']'],
                 c => vec![c],
             })
             .collect();
+        let escaped = if prefix > 0 { format!("//[?]/{rest}") } else { rest };
         let mut add = |g: &str| match GlobBuilder::new(g).literal_separator(true).build() {
             Ok(glob) => {
                 b.add(glob);
@@ -576,20 +638,10 @@ fn globs(patterns: &[String], directories_too: bool) -> Option<GlobSet> {
     b.build().ok()
 }
 
-/// The directories of `pattern` before its first wildcard.
-fn literal_base(pattern: &str) -> PathBuf {
-    let mut base = PathBuf::new();
-    for part in pattern.split('/') {
-        if part.contains(['*', '?']) {
-            break;
-        }
-        base.push(if part.is_empty() { "/" } else { part });
-    }
-    // A pattern naming one file has its directory as the base.
-    if !pattern.contains(['*', '?']) {
-        base.pop();
-    }
-    base
+/// The length of a Windows verbatim prefix (`//?/`, as `\\\\?\\` reads with
+/// `/` separators) at the start of `pattern`, whose `?` isn't a wildcard.
+fn verbatim_prefix_len(pattern: &str) -> usize {
+    if pattern.starts_with("//?/") { 4 } else { 0 }
 }
 
 /// The TS or JS extension of `p`, longest first: `.d.ts` before `.ts`.
@@ -717,6 +769,60 @@ mod tests {
         let b = configs.get(&root.join("b/tsconfig.lib.json")).unwrap();
         assert!(b.is_program);
         assert_eq!(rel(&root, &b.root_files), ["b/main.ts"]);
+    }
+
+    #[test]
+    fn minified_declaration_dir_and_extension_groups() {
+        let t = TempDir::new().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        write(
+            &root,
+            "tsconfig.json",
+            r#"{ "compilerOptions": { "allowJs": true, "declarationDir": "types" } }"#,
+        );
+        for f in [
+            "vendor/j.min.js",
+            "vendor/k.min.mjs",
+            "types/a.d.ts",
+            "a.ts",
+            "a.tsx",
+            "c.cts",
+            "c.cjs",
+            "d.mts",
+            "d.mjs",
+            "e.js",
+            "e.jsx",
+        ] {
+            write(&root, f, "");
+        }
+        let configs = TsConfigs::load(&Project::load(&root));
+        let c = configs.get(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(
+            rel(&root, &c.root_files),
+            ["a.ts", "c.cts", "d.mts", "e.js", "vendor/k.min.mjs"]
+        );
+    }
+
+    #[test]
+    fn extends_siblings_each_apply_their_base() {
+        let t = TempDir::new().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        write(&root, "tsconfig.base.json", r#"{ "compilerOptions": { "outDir": "out" } }"#);
+        write(
+            &root,
+            "tsconfig.a.json",
+            r#"{ "extends": "./tsconfig.base.json", "compilerOptions": { "outDir": "build" } }"#,
+        );
+        write(&root, "tsconfig.b.json", r#"{ "extends": "./tsconfig.base.json" }"#);
+        write(
+            &root,
+            "tsconfig.json",
+            r#"{ "extends": ["./tsconfig.a.json", "./tsconfig.b.json"] }"#,
+        );
+        let configs = TsConfigs::load(&Project::load(&root));
+        let c = configs.get(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(c.path_option("outDir"), Some(root.join("out")));
+        assert_eq!(c.ancestors.len(), 3);
     }
 
     #[test]

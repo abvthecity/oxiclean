@@ -63,14 +63,14 @@ pub fn check(configs: &TsConfigs) -> Vec<Finding> {
                 }
                 let (reporter, other) = reporter(a, b, &programs);
                 let entry = shared.entry((reporter, programs[other].dir.as_path())).or_default();
-                entry.0.insert(other);
-                entry.1.insert(file);
+                entry.others.insert(other);
+                entry.files.insert(file);
             }
         }
     }
     shared
         .into_iter()
-        .map(|((reporter, _), (others, files))| {
+        .map(|((reporter, _), Shared { others, files })| {
             let others: Vec<&TsConfigFile> = others.into_iter().map(|o| programs[o]).collect();
             let files: Vec<&Path> = files.into_iter().collect();
             finding(programs[reporter], &others, &files)
@@ -78,8 +78,12 @@ pub fn check(configs: &TsConfigs) -> Vec<Finding> {
         .collect()
 }
 
-/// The other programs a program shares files with, and the files.
-type Shared<'a> = (BTreeSet<usize>, BTreeSet<&'a Path>);
+/// The programs a program shares files with, and the files.
+#[derive(Debug, Default)]
+struct Shared<'a> {
+    others: BTreeSet<usize>,
+    files: BTreeSet<&'a Path>,
+}
 
 /// Whether `a` and `b` are variants of one project: one extends the other,
 /// or they are in the same directory.

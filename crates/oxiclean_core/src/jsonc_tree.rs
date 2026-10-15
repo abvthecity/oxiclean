@@ -8,6 +8,7 @@ use serde_json::Value;
 
 /// One step of a path into a document: an object key or an array index.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Segment {
     Key(String),
     Index(usize),
@@ -27,12 +28,15 @@ impl From<usize> for Segment {
 
 /// A value and the bytes it spans.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Node {
     pub span: Range<usize>,
     pub kind: NodeKind,
 }
 
+/// What a [`Node`] is.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NodeKind {
     Object(Vec<Member>),
     Array(Vec<Node>),
@@ -42,6 +46,7 @@ pub enum NodeKind {
 
 /// An object member: its key, where the key is, and its value.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Member {
     pub key: String,
     pub key_span: Range<usize>,
@@ -93,6 +98,7 @@ impl Node {
 
 /// A parsed JSONC document.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct JsoncDoc {
     pub text: String,
     pub root: Node,
@@ -120,7 +126,7 @@ impl JsoncDoc {
         self.root.at(path)
     }
 
-    /// The node at `path` as a JSON value.
+    /// `node`'s text as a JSON value.
     #[must_use]
     pub fn value(&self, node: &Node) -> Option<Value> {
         crate::jsonc::parse_jsonc(&self.text[node.span.clone()])
@@ -184,11 +190,15 @@ impl JsoncDoc {
                         let sep = if self.same_line(node.span.start, last.span.start) {
                             ", ".to_string()
                         } else {
-                            format!(",\n{}", self.indent_at(last.span.start))
+                            format!(",{}{}", self.newline(), self.indent_at(last.span.start))
                         };
                         self.splice(last.span.end..last.span.end, &format!("{sep}{text}"))
                     }
-                    None => self.splice(node.span.start + 1..node.span.end - 1, &text),
+                    None if self.text[node.span.start + 1..node.span.end - 1].trim().is_empty() => {
+                        self.splice(node.span.start + 1..node.span.end - 1, &text)
+                    }
+                    // Only comments inside: keep them after the new item.
+                    None => self.splice(node.span.start + 1..node.span.start + 1, &text),
                 })
             }
             Some(_) => None,
@@ -242,7 +252,8 @@ impl JsoncDoc {
             let indent = self.indent_at(last.key_span.start);
             let inline = self.same_line(obj.span.start, last.key_span.start);
             let rendered = self.pretty(value, &indent);
-            let sep = if inline { ", ".to_string() } else { format!(",\n{indent}") };
+            let sep =
+                if inline { ", ".to_string() } else { format!(",{}{indent}", self.newline()) };
             return Some(self.splice(
                 last.value.span.end..last.value.span.end,
                 &format!("{sep}{key}: {rendered}"),
@@ -255,13 +266,13 @@ impl JsoncDoc {
         if inner.trim().is_empty() {
             Some(self.splice(
                 obj.span.start + 1..obj.span.end - 1,
-                &format!("\n{indent}{key}: {rendered}\n{outer}"),
+                &format!("{nl}{indent}{key}: {rendered}{nl}{outer}", nl = self.newline()),
             ))
         } else {
             // Only comments inside: keep them after the new member.
             Some(self.splice(
                 obj.span.start + 1..obj.span.start + 1,
-                &format!("\n{indent}{key}: {rendered}"),
+                &format!("{}{indent}{key}: {rendered}", self.newline()),
             ))
         }
     }
@@ -282,6 +293,8 @@ impl JsoncDoc {
         }
         let unit = self.indent_unit();
         let inner = format!("{indent}{unit}");
+        let nl = self.newline();
+        let sep = format!(",{nl}");
         match value {
             Value::Object(map) => {
                 let parts: Vec<String> = map
@@ -294,12 +307,12 @@ impl JsoncDoc {
                         )
                     })
                     .collect();
-                format!("{{\n{}\n{indent}}}", parts.join(",\n"))
+                format!("{{{nl}{}{nl}{indent}}}", parts.join(&sep))
             }
             Value::Array(items) => {
                 let parts: Vec<String> =
                     items.iter().map(|v| format!("{inner}{}", self.pretty(v, &inner))).collect();
-                format!("[\n{}\n{indent}]", parts.join(",\n"))
+                format!("[{nl}{}{nl}{indent}]", parts.join(&sep))
             }
             _ => one_line,
         }
@@ -320,6 +333,11 @@ impl JsoncDoc {
             .map(|m| self.indent_at(m.key_span.start))
             .filter(|i| !i.is_empty() && !self.same_line(self.root.span.start, 0))
             .unwrap_or_else(|| "  ".to_string())
+    }
+
+    /// The document's line ending: `\r\n` if it uses it anywhere.
+    fn newline(&self) -> &'static str {
+        if self.text.contains("\r\n") { "\r\n" } else { "\n" }
     }
 
     fn same_line(&self, a: usize, b: usize) -> bool {
@@ -567,6 +585,17 @@ mod tests {
         let out = doc.remove_item(&path(&["references"]), &json!({ "path": "../a" })).unwrap();
         assert_eq!(out, "{\n  \"references\": [\n    { \"path\": \"../b\" }\n  ]\n}");
         assert!(doc.remove_item(&path(&["references"]), &json!({ "path": "../z" })).is_none());
+    }
+
+    #[test]
+    fn keeps_crlf_and_comment_only_arrays() {
+        let doc = JsoncDoc::parse("{\r\n  \"a\": 1\r\n}\r\n").unwrap();
+        let out = doc.set(&path(&["b"]), &json!(2)).unwrap();
+        assert_eq!(out, "{\r\n  \"a\": 1,\r\n  \"b\": 2\r\n}\r\n");
+        let doc = JsoncDoc::parse("{ \"exclude\": [\n    // generated\n  ] }").unwrap();
+        let out = doc.append(&path(&["exclude"]), &json!("dist")).unwrap();
+        assert_eq!(out, "{ \"exclude\": [\"dist\"\n    // generated\n  ] }");
+        assert!(JsoncDoc::parse(out).is_some());
     }
 
     #[test]

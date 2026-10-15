@@ -83,6 +83,8 @@ pub struct Issue {
 }
 
 impl Issue {
+    /// An issue of kind `code` about `key`, described by `message`, at
+    /// `line` of the finding's file.
     #[must_use]
     pub fn new(
         code: impl Into<String>,
@@ -100,12 +102,14 @@ impl Issue {
         }
     }
 
+    /// The issue with `related` places listed.
     #[must_use]
     pub fn with_related(mut self, related: Vec<Related>) -> Self {
         self.related = related;
         self
     }
 
+    /// The issue with a fix for `--fix`.
     #[must_use]
     pub fn with_fix(mut self, fix: Fix) -> Self {
         self.fix = Some(fix);
@@ -117,6 +121,7 @@ impl Issue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Related {
+    /// The other file.
     pub file: PathBuf,
     /// 1-based line, or 0 for the whole file.
     pub line: u32,
@@ -125,6 +130,7 @@ pub struct Related {
 }
 
 impl Related {
+    /// `message` about `line` of `file`.
     #[must_use]
     pub fn new(file: PathBuf, line: u32, message: impl Into<String>) -> Self {
         Self { file, line, message: message.into() }

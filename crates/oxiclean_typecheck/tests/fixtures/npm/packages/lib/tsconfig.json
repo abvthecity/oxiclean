@@ -1,4 +1,4 @@
 {
   "compilerOptions": { "allowJs": true, "checkJs": false },
-  "include": ["src", "vendor"]
+  "include": ["src", "vendor/jquery.min.js"]
 }

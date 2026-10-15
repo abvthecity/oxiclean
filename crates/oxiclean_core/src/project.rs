@@ -616,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deno_and_bun_workspaces() {
+    fn test_deno_workspace_with_member_list() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         write(
@@ -636,13 +636,19 @@ mod tests {
                 ("@acme/cli", root.join("packages/cli").as_path())
             ]
         );
+    }
 
+    #[test]
+    fn test_deno_workspace_object_form() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         write(&root, "deno.json", r#"{"workspace":{"members":["libs/*"]}}"#);
         write(&root, "libs/x/deno.json", r#"{"name":"@acme/x"}"#);
         assert_eq!(Project::load(&root).workspace_package_count(), 1);
+    }
 
+    #[test]
+    fn test_bun_workspace() {
         // Bun reads package.json `workspaces`, as npm does.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().canonicalize().unwrap();
