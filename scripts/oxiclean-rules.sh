@@ -9,6 +9,7 @@ command_of() {
     program-files | overlap | references | tsconfig | ambient-types | isolated-declarations | \
       large-literals | type-bloat | complex-types) echo typecheck ;;
     bloat | barrels) echo bloat ;;
+    hot-spots | duplicate-packages) echo trace ;;
     depth | cycles | duplicates) echo "$1" ;;
     *) echo "unknown rule: $1" >&2; return 1 ;;
   esac
@@ -24,6 +25,7 @@ rules_of() {
         large-literals type-bloat complex-types
       ;;
     bloat) echo bloat barrels ;;
+    trace) echo hot-spots duplicate-packages ;;
     depth | cycles | duplicates) echo "$1" ;;
     *) echo "unknown command: $1" >&2; return 1 ;;
   esac
