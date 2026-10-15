@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "allowJs": true, "checkJs": false },
+  "include": ["src", "vendor"]
+}

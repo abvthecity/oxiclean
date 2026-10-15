@@ -1,0 +1,1 @@
+{ "name": "bun-repo", "private": true, "workspaces": ["packages/*"] }

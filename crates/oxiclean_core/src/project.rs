@@ -107,7 +107,7 @@ impl Project {
         for entry in walker.filter_map(|e| e.ok()) {
             match entry.file_name().to_str() {
                 Some("tsconfig.json") => tsconfig_files.push(entry.into_path()),
-                Some("package.json") => {
+                Some("package.json" | "deno.json" | "deno.jsonc") => {
                     if let Some(dir) = entry.path().parent() {
                         package_dirs.push(dir.to_path_buf());
                     }
@@ -117,6 +117,7 @@ impl Project {
         }
         tsconfig_files.sort();
         package_dirs.sort();
+        package_dirs.dedup();
 
         project.workspace_packages = discover_workspace_packages(&root, &package_dirs);
         debug!("Found {} workspace packages", project.workspace_packages.len());
@@ -384,10 +385,13 @@ fn discover_workspace_packages(root: &Path, package_dirs: &[PathBuf]) -> HashMap
         if rel.as_os_str().is_empty() || !include.is_match(rel) || exclude.is_match(rel) {
             continue;
         }
-        let name = fs::read_to_string(dir.join("package.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string));
+        // Deno packages name themselves in deno.json, as JSR packages do.
+        let name = ["package.json", "deno.json", "deno.jsonc"].iter().find_map(|file| {
+            fs::read_to_string(dir.join(file))
+                .ok()
+                .and_then(|s| parse_jsonc(&s))
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        });
         if let Some(name) = name {
             trace!("Workspace package '{}' at {}", name, dir.display());
             packages.entry(name).or_insert_with(|| dir.clone());
@@ -397,7 +401,8 @@ fn discover_workspace_packages(root: &Path, package_dirs: &[PathBuf]) -> HashMap
 }
 
 /// Workspace globs from pnpm-workspace.yaml and package.json `workspaces`
-/// (npm, yarn and bun), falling back to lerna.json `packages`.
+/// (npm, yarn and bun) and deno.json `workspace` (Deno), falling back to
+/// lerna.json `packages`.
 fn workspace_patterns(root: &Path) -> Vec<String> {
     let mut patterns = Vec::new();
 
@@ -438,6 +443,18 @@ fn workspace_patterns(root: &Path) -> Vec<String> {
             .and_then(|w| w.as_array())
             .or_else(|| ws.and_then(|w| w.get("packages")).and_then(|p| p.as_array()));
         if let Some(list) = list {
+            patterns.extend(list.iter().filter_map(|p| p.as_str()).map(str::to_string));
+        }
+    }
+
+    // Deno: `"workspace": ["./a"]` or `"workspace": { "members": [...] }`.
+    for file in ["deno.json", "deno.jsonc"] {
+        if let Ok(txt) = fs::read_to_string(root.join(file))
+            && let Some(v) = parse_jsonc(&txt)
+            && let Some(ws) = v.get("workspace")
+            && let Some(list) =
+                ws.as_array().or_else(|| ws.get("members").and_then(|m| m.as_array()))
+        {
             patterns.extend(list.iter().filter_map(|p| p.as_str()).map(str::to_string));
         }
     }
@@ -596,5 +613,42 @@ mod tests {
         assert_eq!(p.workspace_packages(), vec![("a", root.join("packages/a").as_path())]);
         // Only workspace members count, so the nested package.json is part of `a`.
         assert_eq!(p.package_for(&root.join("packages/a/nested/x.ts")), Some("a"));
+    }
+
+    #[test]
+    fn test_deno_and_bun_workspaces() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(
+            &root,
+            "deno.jsonc",
+            r#"{ // Deno
+          "workspace": ["./packages/add", "./packages/cli"] }"#,
+        );
+        write(&root, "packages/add/deno.json", r#"{"name":"@acme/add","exports":"./mod.ts"}"#);
+        write(&root, "packages/cli/deno.json", r#"{"name":"@acme/cli"}"#);
+        write(&root, "packages/cli/package.json", r#"{"private":true}"#);
+        let p = Project::load(&root);
+        assert_eq!(
+            p.workspace_packages(),
+            vec![
+                ("@acme/add", root.join("packages/add").as_path()),
+                ("@acme/cli", root.join("packages/cli").as_path())
+            ]
+        );
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root, "deno.json", r#"{"workspace":{"members":["libs/*"]}}"#);
+        write(&root, "libs/x/deno.json", r#"{"name":"@acme/x"}"#);
+        assert_eq!(Project::load(&root).workspace_package_count(), 1);
+
+        // Bun reads package.json `workspaces`, as npm does.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        write(&root, "package.json", r#"{"workspaces":["packages/*"]}"#);
+        write(&root, "bun.lock", "{}");
+        write(&root, "packages/a/package.json", r#"{"name":"a"}"#);
+        assert_eq!(Project::load(&root).workspace_package_count(), 1);
     }
 }

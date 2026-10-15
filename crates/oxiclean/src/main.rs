@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use oxiclean_core::{
-    CheckResult,
+    CheckResult, fix,
     report::{self, OutputFormat, ReportContext, ReportMeta, ReportStyle},
 };
 use tracing::debug;
@@ -24,6 +24,10 @@ struct Cli {
     /// Output format
     #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
     format: OutputFormat,
+
+    /// Apply the fixes findings offer, then report what is left
+    #[arg(long, global = true)]
+    fix: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -67,6 +71,12 @@ enum Commands {
     /// Check for packages the lockfile installs at more than one version
     #[command(name = "duplicate-versions")]
     DuplicateVersions(oxiclean_dependencies::Config),
+    /// Check for files tsconfig programs type-check that nobody needs checked
+    #[command(name = "program-files")]
+    ProgramFiles(oxiclean_typecheck::Config),
+    /// Check for files more than one tsconfig program type-checks
+    #[command(name = "overlap")]
+    Overlap(oxiclean_typecheck::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -75,7 +85,7 @@ fn main() -> Result<ExitCode> {
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
     let start = Instant::now();
-    let (result, style, rule) = match &cli.command {
+    let (mut result, style, rule) = match &cli.command {
         Commands::Bloat(cfg) => (
             oxiclean_bloat::run_bloat_check(cfg)?,
             oxiclean_bloat::REPORT_STYLE,
@@ -141,7 +151,19 @@ fn main() -> Result<ExitCode> {
             oxiclean_dependencies::VERSIONS_STYLE,
             oxiclean_dependencies::VERSIONS_RULE,
         ),
+        Commands::ProgramFiles(cfg) => (
+            oxiclean_typecheck::run_program_files_check(cfg)?,
+            oxiclean_typecheck::PROGRAM_FILES_STYLE,
+            oxiclean_typecheck::PROGRAM_FILES_RULE,
+        ),
+        Commands::Overlap(cfg) => (
+            oxiclean_typecheck::run_overlap_check(cfg)?,
+            oxiclean_typecheck::OVERLAP_STYLE,
+            oxiclean_typecheck::OVERLAP_RULE,
+        ),
     };
+    let fixed =
+        if cli.fix { fix::apply_fixes(&mut result).context("could not apply fixes")? } else { 0 };
     let elapsed_ms = start.elapsed().as_millis();
 
     let cwd = std::env::current_dir().context("could not read the current directory")?;
@@ -152,7 +174,17 @@ fn main() -> Result<ExitCode> {
     let mut stdout = BufWriter::new(std::io::stdout().lock());
     let meta = ReportMeta { rule, style: &style, version: env!("CARGO_PKG_VERSION"), elapsed_ms };
     match cli.format {
-        OutputFormat::Text => print_report(&mut stdout, &result, &style, elapsed_ms, ctx)?,
+        OutputFormat::Text => {
+            print_report(&mut stdout, &result, &style, elapsed_ms, ctx)?;
+            if cli.fix {
+                writeln!(
+                    stdout,
+                    "{} Fixed {} findings.",
+                    "●".bright_blue(),
+                    fixed.to_string().cyan()
+                )?;
+            }
+        }
         OutputFormat::Json => report::write_json(&mut stdout, meta, &result)?,
         OutputFormat::Sarif => report::write_sarif(&mut stdout, meta, &result)?,
     }
@@ -192,6 +224,10 @@ fn print_report(
     report::print_finished(out, result, elapsed_ms, rayon::current_num_threads(), ctx)?;
 
     let resolution = &result.resolution;
+    // Checks of config files resolve no imports.
+    if resolution.resolved + resolution.unresolved == 0 {
+        return Ok(());
+    }
     writeln!(
         out,
         "{} Resolved {} of {} imports ({}%), {} built-ins skipped.",

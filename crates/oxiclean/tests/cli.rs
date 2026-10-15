@@ -564,3 +564,39 @@ fn unused_dependencies_in_every_format() {
     );
     assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 7);
 }
+
+/// Copies the fixture directory `from` into `to`.
+fn copy_dir(from: &Path, to: &Path) {
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            fs::create_dir_all(&target).unwrap();
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn fix_excludes_build_output_and_keeps_comments() {
+    let t = TempDir::new().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxiclean_typecheck/tests/fixtures/pnpm");
+    copy_dir(&fixture, t.path());
+    let (code, out) = run(t.path(), &["program-files", "--fix"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Fixed 2 findings"), "{out}");
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/app/tsconfig.json")).unwrap(),
+        "{\n  \"extends\": \"../../tsconfig.base.json\",\n  // tests are checked separately\n  \"exclude\": [\"**/*.test.ts\", \"dist\"]\n}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/app/tsconfig.build.json")).unwrap(),
+        "{\n  \"extends\": \"./tsconfig.json\",\n  \"compilerOptions\": {\n    \"outDir\": \"dist\"\n  },\n  \"exclude\": [\"**/*.test.ts\", \"dist\"]\n}\n"
+    );
+    let (code, out) = run(t.path(), &["program-files"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("No tsconfig program checks files it doesn't need."), "{out}");
+}

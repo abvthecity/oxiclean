@@ -88,6 +88,7 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
             dup.name,
             dup.versions.join(", ")
         ),
+        FindingKind::Issue(issue) => issue.message.clone(),
     }
 }
 
@@ -184,6 +185,19 @@ pub fn write_json<W: Write>(
                     v["name"] = json!(dup.name);
                     v["versions"] = json!(dup.versions);
                 }
+                FindingKind::Issue(issue) => {
+                    v["kind"] = json!("issue");
+                    v["code"] = json!(issue.code);
+                    v["line"] = json!(issue.line);
+                    v["related"] = issue
+                        .related
+                        .iter()
+                        .map(|r| json!({ "file": rel(&r.file, root), "line": r.line, "message": r.message }))
+                        .collect();
+                    if let Some(fix) = &issue.fix {
+                        v["fix"] = json!({ "file": rel(&fix.file, root), "description": fix.description });
+                    }
+                }
             }
             v
         })
@@ -259,6 +273,11 @@ pub fn write_sarif<W: Write>(
                     .iter()
                     .skip(1)
                     .map(|n| (f.file.as_path(), n.line, format!("exports it as '{}'", n.name)))
+                    .collect(),
+                FindingKind::Issue(issue) => issue
+                    .related
+                    .iter()
+                    .map(|r| (r.file.as_path(), r.line, r.message.clone()))
                     .collect(),
                 FindingKind::Import { .. }
                 | FindingKind::WholeGraph
@@ -345,6 +364,11 @@ fn fingerprint(rule: &str, f: &Finding, root: &Path) -> String {
         FindingKind::Barrel(_) => key.push_str("<barrel>"),
         FindingKind::HeavyDependency(dep) => key.push_str(&dep.name),
         FindingKind::DuplicateVersions(dup) => key.push_str(&dup.name),
+        FindingKind::Issue(issue) => {
+            key.push_str(&issue.code);
+            key.push('\0');
+            key.push_str(&issue.key);
+        }
         FindingKind::Cycle(cycle) => {
             for step in &cycle.steps {
                 key.push_str(&rel(&step.file, root));
