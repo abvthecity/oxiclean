@@ -622,3 +622,24 @@ fn fix_adds_and_removes_references() {
     let (_, out) = run(t.path(), &["references"]);
     assert!(out.contains("Total violations: 2"), "{out}");
 }
+
+#[test]
+fn fix_sets_tsconfig_options() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/options-pnpm");
+    copy_dir(&fixture, t.path());
+    let (code, out) = run(t.path(), &["tsconfig", "--fix"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Fixed 3 findings"), "{out}");
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/app/tsconfig.json")).unwrap(),
+        "{\n  \"extends\": \"../../tsconfig.base.json\",\n  \"compilerOptions\": {\n    \"extendedDiagnostics\": false,\n    \"incremental\": true,\n    \"tsBuildInfoFile\": \"./node_modules/.tmp/tsconfig.tsbuildinfo\"\n  },\n  \"include\": [\"src\"]\n}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(t.path().join("tsconfig.base.json")).unwrap(),
+        "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"skipLibCheck\": true\n  }\n}\n"
+    );
+    let (code, out) = run(t.path(), &["tsconfig"]);
+    assert_eq!(code, 0, "{out}");
+}

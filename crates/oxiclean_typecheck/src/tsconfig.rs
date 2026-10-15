@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 use tracing::{debug, trace, warn};
 
 /// How deep `extends` chains are followed, so a cycle ends.
-const MAX_EXTENDS_DEPTH: usize = 16;
+pub(crate) const MAX_EXTENDS_DEPTH: usize = 16;
 
 /// Compiler options that hold one path, resolved against the config that
 /// sets them.
@@ -32,6 +32,20 @@ const PATH_LIST_OPTIONS: &[&str] = &["typeRoots", "rootDirs"];
 
 /// Directories wildcards never enter, as in `tsc`.
 const SKIPPED_DIRS: &[&str] = &["node_modules", "bower_components", "jspm_packages"];
+
+/// Directories of test inputs and expected outputs: the tsconfigs in them
+/// are data for a tool's tests, not programs anyone runs, and editing them
+/// would change what the tests compare.
+const TEST_INPUT_DIRS: &[&str] = &[
+    "fixtures",
+    "fixture",
+    "__fixtures__",
+    "testdata",
+    "goldens",
+    "test-goldens",
+    "test-output",
+    "__snapshots__",
+];
 
 /// TypeScript's own extensions, in `tsc`'s priority order.
 const TS_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".d.ts", ".cts", ".d.cts", ".mts", ".d.mts"];
@@ -61,6 +75,9 @@ pub struct TsConfigFile {
     pub extends: Vec<PathBuf>,
     /// Every config it extends, directly or not.
     pub ancestors: BTreeSet<PathBuf>,
+    /// Whether a config in its `extends` chain couldn't be found, so its
+    /// options are only partly known.
+    pub partial: bool,
     /// Merged `compilerOptions`, with path options and `paths` targets made
     /// absolute.
     pub options: Map<String, Value>,
@@ -155,8 +172,9 @@ pub struct TsConfigs {
 
 impl TsConfigs {
     /// Finds and reads every `tsconfig*.json` and `jsconfig*.json` under
-    /// the project root that git doesn't ignore, and expands each
-    /// program's files.
+    /// the project root that git doesn't ignore, outside test fixture
+    /// directories, and the configs they extend in the repo, and expands
+    /// each program's files.
     #[must_use]
     pub fn load(project: &Project) -> Self {
         let root = &project.root;
@@ -166,7 +184,22 @@ impl TsConfigs {
         for p in &paths {
             read_raw(project, p, &mut raw, 0);
         }
-        let mut configs: Vec<TsConfigFile> = paths.iter().filter_map(|p| finish(p, &raw)).collect();
+        // Bases in the repo with other names, such as a shared
+        // `@repo/tsconfig/base.json`, so fixes can go where they're set.
+        let found: BTreeSet<&PathBuf> = paths.iter().collect();
+        let mut bases: Vec<PathBuf> = raw
+            .keys()
+            .filter(|p| {
+                !found.contains(p)
+                    && p.strip_prefix(root).is_ok_and(|rel| {
+                        !rel.components().any(|c| SKIPPED_DIRS.iter().any(|s| c.as_os_str() == *s))
+                    })
+            })
+            .cloned()
+            .collect();
+        bases.sort();
+        let mut configs: Vec<TsConfigFile> =
+            paths.iter().chain(&bases).filter_map(|p| finish(p, &raw)).collect();
 
         let extended: BTreeSet<PathBuf> =
             configs.iter().flat_map(|c| c.extends.iter().cloned()).collect();
@@ -205,7 +238,12 @@ fn find_configs(root: &Path) -> Vec<PathBuf> {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
-        .filter_entry(|e| e.file_name() != "node_modules" && e.file_name() != ".git")
+        .filter_entry(|e| {
+            let n = e.file_name();
+            n != "node_modules"
+                && n != ".git"
+                && (e.depth() == 0 || !TEST_INPUT_DIRS.iter().any(|d| n == *d))
+        })
         .build();
     let mut out: Vec<PathBuf> = walker
         .filter_map(Result::ok)
@@ -226,6 +264,9 @@ fn find_configs(root: &Path) -> Vec<PathBuf> {
 struct Raw {
     doc: JsoncDoc,
     extends: Vec<PathBuf>,
+    /// Whether an `extends` entry couldn't be found, such as a package
+    /// that isn't installed.
+    unresolved: bool,
 }
 
 /// Reads `path` and, recursively, what it extends into `raw`.
@@ -249,7 +290,9 @@ fn read_raw(project: &Project, path: &Path, raw: &mut HashMap<PathBuf, Option<Ra
     let extends: Vec<PathBuf> = names
         .iter()
         .filter_map(|n| {
-            let r = resolve_extends(project, dir, n);
+            // Canonical, so a workspace package's base reached through a
+            // `node_modules` link is the file in the repo.
+            let r = resolve_extends(project, dir, n).map(|p| fs::canonicalize(&p).unwrap_or(p));
             if r.is_none() {
                 trace!("Could not resolve extends '{n}' in {}", path.display());
             }
@@ -259,7 +302,8 @@ fn read_raw(project: &Project, path: &Path, raw: &mut HashMap<PathBuf, Option<Ra
     for e in &extends {
         read_raw(project, e, raw, depth + 1);
     }
-    raw.insert(path.to_path_buf(), Some(Raw { doc, extends }));
+    let unresolved = extends.len() < names.len();
+    raw.insert(path.to_path_buf(), Some(Raw { doc, extends, unresolved }));
 }
 
 /// The tsconfig `extends` names from `dir`: a path, or a package's
@@ -303,6 +347,13 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
     merge(path, raw, &mut merged, &mut BTreeSet::new(), 0);
     let mut ancestors = BTreeSet::new();
     collect_ancestors(path, raw, &mut ancestors, 0);
+    // Unknown when an `extends` isn't installed, isn't valid JSON, or is
+    // past the depth limit.
+    let partial = own.unresolved
+        || ancestors.iter().any(|a| match raw.get(a) {
+            Some(Some(r)) => r.unresolved,
+            _ => true,
+        });
 
     let config_dir = dir.to_string_lossy().into_owned();
     let resolve = |d: &Declared<Value>| -> Value {
@@ -372,6 +423,7 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
         dir,
         extends: own.extends,
         ancestors,
+        partial,
         options,
         include: patterns(&merged.include),
         exclude: patterns(&merged.exclude),

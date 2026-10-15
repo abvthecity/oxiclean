@@ -59,3 +59,31 @@ pub const REFERENCES_STYLE: ReportStyle = ReportStyle {
 fn files(n: usize) -> String {
     if n == 1 { "1 file".to_string() } else { format!("{n} files") }
 }
+
+/// Name of the rule for compiler options that slow `tsc` down.
+pub const TSCONFIG_RULE: &str = "tsconfig";
+
+/// How tsconfig option findings are worded in the terminal report.
+pub const TSCONFIG_STYLE: ReportStyle = ReportStyle {
+    description: "Compiler options that make every tsc run slower than it needs to be",
+    heading: "tsconfig options slow tsc down",
+    threshold_unit: "",
+    value_label: |n| if n == 1 { "1 config".to_string() } else { format!("{n} configs") },
+    max_label: "",
+    max_unit: "",
+    ok_message: "No tsconfig option slows tsc down.",
+};
+
+/// Name of the rule for programs that load every visible `@types` package.
+pub const AMBIENT_TYPES_RULE: &str = "ambient-types";
+
+/// How ambient types findings are worded in the terminal report.
+pub const AMBIENT_TYPES_STYLE: ReportStyle = ReportStyle {
+    description: "tsconfig programs without compilerOptions.types, which load every @types package they can see, including ones nothing here declares",
+    heading: "Programs load @types packages they don't declare",
+    threshold_unit: "",
+    value_label: |n| if n == 1 { "1 package".to_string() } else { format!("{n} packages") },
+    max_label: "Most undeclared @types",
+    max_unit: "packages",
+    ok_message: "Every program loads only the @types packages it declares.",
+};

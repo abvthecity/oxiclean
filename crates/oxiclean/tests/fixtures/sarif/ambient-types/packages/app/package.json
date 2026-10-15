@@ -1,0 +1,5 @@
+{
+  "name": "app",
+  "scripts": { "typecheck": "tsc --noEmit -p tsconfig.json" },
+  "devDependencies": { "@types/react": "^19.0.0" }
+}

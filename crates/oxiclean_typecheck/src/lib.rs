@@ -12,19 +12,29 @@
 //!   packages type-check.
 //! - `overlap` ([`run_overlap_check`]): files more than one program
 //!   checks, so they are checked more than once.
+//! - `tsconfig` ([`run_tsconfig_check`]): compiler options that slow
+//!   every run, such as `skipLibCheck` left unset.
+//! - `ambient-types` ([`run_ambient_types_check`]): programs that load
+//!   `@types` packages nothing here declares.
 
+mod ambient_types;
 mod config;
 mod overlap;
 mod program_files;
 mod references;
+mod scripts;
 pub mod tsconfig;
+mod tsconfig_options;
 
+pub use ambient_types::run_ambient_types_check;
 pub use config::{
-    Config, DEFAULT_THRESHOLD, OVERLAP_RULE, OVERLAP_STYLE, PROGRAM_FILES_RULE,
-    PROGRAM_FILES_STYLE, REFERENCES_RULE, REFERENCES_STYLE,
+    AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, OVERLAP_RULE,
+    OVERLAP_STYLE, PROGRAM_FILES_RULE, PROGRAM_FILES_STYLE, REFERENCES_RULE, REFERENCES_STYLE,
+    TSCONFIG_RULE, TSCONFIG_STYLE,
 };
 pub use overlap::run_overlap_check;
 pub use oxiclean_core::{CheckResult, Finding, FindingKind, Issue};
 pub use program_files::run_program_files_check;
 pub use references::run_references_check;
 pub use tsconfig::{TsConfigFile, TsConfigs};
+pub use tsconfig_options::run_tsconfig_check;

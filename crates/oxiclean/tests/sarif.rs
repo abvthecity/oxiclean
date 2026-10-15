@@ -35,6 +35,8 @@ const RULES: &[&str] = &[
     "program-files",
     "overlap",
     "references",
+    "tsconfig",
+    "ambient-types",
 ];
 
 fn fixtures() -> PathBuf {
