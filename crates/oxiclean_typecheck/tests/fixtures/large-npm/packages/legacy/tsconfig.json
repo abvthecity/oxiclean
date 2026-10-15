@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "module": "commonjs", "moduleResolution": "node10", "resolveJsonModule": false, "noEmit": true },
+  "include": ["src"]
+}

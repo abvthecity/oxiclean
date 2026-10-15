@@ -1048,6 +1048,7 @@ dependencies = [
  "ignore",
  "oxc_allocator",
  "oxc_ast",
+ "oxc_ast_visit",
  "oxc_isolated_declarations",
  "oxc_parser",
  "oxc_span",

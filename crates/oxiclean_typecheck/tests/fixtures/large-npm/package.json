@@ -1,0 +1,1 @@
+{ "name": "npm-large", "private": true, "workspaces": ["packages/*"] }

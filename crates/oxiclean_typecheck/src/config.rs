@@ -103,3 +103,22 @@ pub const ISOLATED_DECLARATIONS_STYLE: ReportStyle = ReportStyle {
     max_unit: "",
     ok_message: "No package is close to isolatedDeclarations, and no JSR package has slow types.",
 };
+
+/// Name of the rule for large literals and `.json` imports `tsc` infers
+/// types for.
+pub const LARGE_LITERALS_RULE: &str = "large-literals";
+
+/// Literals and `.json` files with this many values are reported: a few
+/// thousand values take `tsc` a noticeable part of a second.
+pub const LARGE_LITERALS_DEFAULT_THRESHOLD: usize = 5000;
+
+/// How large literal findings are worded in the terminal report.
+pub const LARGE_LITERALS_STYLE: ReportStyle = ReportStyle {
+    description: "Object and array literals, and imported .json files, with so many values that inferring their types slows tsc",
+    heading: "Large literals tsc infers types for",
+    threshold_unit: "values",
+    value_label: |n| if n == 1 { "1 value".to_string() } else { format!("{n} values") },
+    max_label: "Largest",
+    max_unit: "values",
+    ok_message: "No literal or imported .json file is large enough to slow tsc.",
+};

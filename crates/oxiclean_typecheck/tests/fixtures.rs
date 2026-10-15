@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use oxiclean_core::CommonArgs;
 use oxiclean_typecheck::{
     CheckResult, Config, FindingKind, run_ambient_types_check, run_isolated_declarations_check,
-    run_overlap_check, run_program_files_check, run_references_check, run_tsconfig_check,
+    run_large_literals_check, run_overlap_check, run_program_files_check, run_references_check,
+    run_tsconfig_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -260,4 +261,49 @@ fn isolated_bun() {
 #[test]
 fn isolated_deno() {
     assert_eq!(isolated("isolated-deno"), ["packages/add/deno.json:1 slow-types @scope/add (1)"]);
+}
+
+fn large(name: &str) -> Vec<String> {
+    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
+    summary(&run_large_literals_check(&cfg).expect("fixture analyses"))
+}
+
+/// pnpm, with the threshold at 20 values: a `.json` file two programs
+/// import, an `as const` table, and ones not reported: a small literal,
+/// and a `.json` file a `.d.json.ts` declares.
+#[test]
+fn large_pnpm() {
+    assert_eq!(
+        large("large-pnpm"),
+        [
+            "packages/app/src/index.ts:6 literal icons (21)",
+            "packages/app/src/strings.json:1 json strings.json (30)",
+        ]
+    );
+}
+
+/// npm: an `allowJs` file of data, and ones not reported: a `.json` file
+/// a program with `resolveJsonModule` off requires, and a declaration
+/// file.
+#[test]
+fn large_npm() {
+    assert_eq!(large("large-npm"), ["packages/site/src/posts.js:1 literal posts (24)"]);
+}
+
+/// Bun: a dependency's `.json` file, imported with an attribute.
+#[test]
+fn large_bun() {
+    assert_eq!(large("large-bun"), ["node_modules/emoji-data/data.json:1 json data.json (25)"]);
+}
+
+/// Deno, without a tsconfig: a `.json` import and a default export.
+#[test]
+fn large_deno() {
+    assert_eq!(
+        large("large-deno"),
+        [
+            "packages/i18n/en.json:1 json en.json (22)",
+            "packages/i18n/mod.ts:3 literal default (25)",
+        ]
+    );
 }

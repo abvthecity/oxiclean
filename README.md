@@ -61,6 +61,9 @@ oxiclean ambient-types --root ./my-project
 # Find packages that could emit .d.ts files without type-checking, and JSR slow types
 oxiclean isolated-declarations --root ./my-project
 
+# Find large literals and .json imports that tsc infers types for
+oxiclean large-literals --root ./my-project
+
 # Apply the fixes a check offers
 oxiclean program-files --fix --root ./my-project
 
@@ -112,7 +115,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 | `--fix` | Apply the fixes findings offer, then report what is left (see [Fixes](#fixes)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` 20 levels for `depth` and 5000 values for `large-literals`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -540,10 +543,37 @@ packages/near/tsconfig.json
         packages/near/src/index.ts:3: TS9010: Variable must have an explicit type annotation with --isolatedDeclarations.
 ```
 
+### Large Literals Checker
+
+`tsc` builds a type for every value in an object or array literal, and for
+every value in each `.json` file a program imports. A few thousand values
+take a noticeable part of a second in every program that loads them, and
+more in the editor. `large-literals` counts the values (array elements and
+object properties, through nested literals) and reports:
+
+| Code | Meaning |
+|---|---|
+| `json` | A `.json` file programs import. A `<name>.d.json.ts` next to it declaring its type, with `allowArbitraryExtensions`, makes `tsc` read that instead; for a dependency's file, or under Deno, reading it at runtime does |
+| `literal` | An object or array literal of data, without functions or classes. An annotation doesn't help, since `tsc` still checks each value against it; moving the data to a `.json` file with a declaration, or loading it at runtime, does |
+
+Programs with `resolveJsonModule` set to `false` aren't checked for
+`.json` imports. Deno packages are checked without a tsconfig, since
+`deno check` always types the `.json` files it imports. The default
+threshold is 5000 values.
+
+```
+⚠ Large literals tsc infers types for (threshold: 5000 values)
+
+src/i18n/strings.json
+└──  line 1: 18210 values that tsc infers types for in every program that imports it (2 programs); a strings.d.json.ts next to it declaring its type, with allowArbitraryExtensions, lets tsc read that instead (18210 values)
+        src/i18n/index.ts:1: imports strings.json
+```
+
 These checks skip tsconfigs in test input directories (`fixtures`,
 `__fixtures__`, `testdata`, `goldens`, `test-output`, `__snapshots__`): they are data
 for tests, not programs anyone runs. Deno doesn't read tsconfig files, so
-these checks find nothing in a Deno workspace.
+in a Deno workspace only `isolated-declarations` (for JSR slow types) and
+`large-literals` find anything.
 
 ### Difference Between Tools
 

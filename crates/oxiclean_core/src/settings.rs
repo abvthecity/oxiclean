@@ -309,6 +309,10 @@ pub struct Rules {
     /// and Deno packages with `exports` whose public API has JSR slow
     /// types. Has no threshold.
     pub isolated_declarations: Option<RuleSetting>,
+    /// Object and array literals, and `.json` files programs import, with
+    /// so many values that inferring their types slows `tsc`. Default
+    /// threshold: 5000 values.
+    pub large_literals: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -335,6 +339,7 @@ impl Rules {
             "tsconfig" => self.tsconfig.as_ref(),
             "ambient-types" => self.ambient_types.as_ref(),
             "isolated-declarations" => self.isolated_declarations.as_ref(),
+            "large-literals" => self.large_literals.as_ref(),
             _ => None,
         }
     }
@@ -360,6 +365,7 @@ impl Rules {
             &self.tsconfig,
             &self.ambient_types,
             &self.isolated_declarations,
+            &self.large_literals,
         ]
         .into_iter()
         .flatten()
