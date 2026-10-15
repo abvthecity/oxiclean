@@ -1047,6 +1047,7 @@ dependencies = [
  "globset",
  "ignore",
  "oxc_allocator",
+ "oxc_ast",
  "oxc_isolated_declarations",
  "oxc_parser",
  "oxc_span",

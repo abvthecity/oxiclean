@@ -29,6 +29,7 @@ mod references;
 mod scripts;
 pub mod tsconfig;
 mod tsconfig_options;
+mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
 pub use config::{

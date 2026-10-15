@@ -219,20 +219,25 @@ fn isolated(name: &str) -> Vec<String> {
     summary(&run_isolated_declarations_check(&cfg).expect("fixture analyses"))
 }
 
-/// pnpm: a package whose exports all have types, one an annotation away,
-/// and an app that doesn't emit declarations.
+/// pnpm: a package whose exports all have types; ones an annotation away,
+/// with `noEmit`, with `satisfies` in a file `files` reaches through a
+/// re-export; and ones not reported: with `allowJs`, which `tsc` won't
+/// combine with the option, and with a syntax error.
 #[test]
 fn isolated_pnpm() {
     assert_eq!(
         isolated("isolated-pnpm"),
         [
+            "packages/app/tsconfig.json:1 few-annotations isolatedDeclarations (1)",
             "packages/near/tsconfig.json:2 few-annotations isolatedDeclarations (1)",
             "packages/ready/tsconfig.json:2 can-enable isolatedDeclarations (1) fix: set \"compilerOptions.isolatedDeclarations\": true",
+            "packages/shape/tsconfig.json:1 few-annotations isolatedDeclarations (1)",
         ]
     );
 }
 
-/// npm: a library that has `isolatedDeclarations` on already.
+/// npm: a library that has `isolatedDeclarations` on already, and one on
+/// TypeScript 5.4, which doesn't know the option.
 #[test]
 fn isolated_npm() {
     assert!(isolated("isolated-npm").is_empty());
@@ -250,7 +255,8 @@ fn isolated_bun() {
 }
 
 /// Deno: a JSR package whose entry re-exports a function without a return
-/// type, and a package without `exports`.
+/// type, which uses a private helper without one that isn't counted, and
+/// a package without `exports`.
 #[test]
 fn isolated_deno() {
     assert_eq!(isolated("isolated-deno"), ["packages/add/deno.json:1 slow-types @scope/add (1)"]);

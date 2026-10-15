@@ -524,13 +524,19 @@ isolated declarations on each program that emits declarations:
 |---|---|---|
 | `can-enable` | Every export already has the types it needs | Turns `isolatedDeclarations` on, which keeps it that way |
 | `few-annotations` | Up to 10 exports need an explicit type; each is listed | |
-| `slow-types` | A Deno package with `exports` (a JSR package) has exports without explicit types in its public files, which JSR calls slow types | |
+| `slow-types` | A Deno package with `exports` (a JSR package) has exports without explicit types in its public API (its entries and what they re-export), which JSR calls slow types | |
+
+Besides oxc's checks, an exported variable initialized with `satisfies`
+needs a type, as `tsc` requires. Programs with `allowJs` (which `tsc`
+won't combine with the option), on TypeScript before 5.5, or with a file
+that doesn't parse aren't reported. Each program's files are followed
+through their local imports, as `tsc` does. The rule has no threshold.
 
 ```
 ⚠ Packages could emit declarations without type-checking
 
 packages/near/tsconfig.json
-└──  line 2: emits declarations and is 1 annotation away from isolatedDeclarations, which lets tools write .d.ts files without type-checking (1 annotation)
+└──  line 2: emits declarations and is 1 annotation away from isolatedDeclarations, which lets tools write .d.ts files without type-checking (isolatedDeclarations)
         packages/near/src/index.ts:3: TS9010: Variable must have an explicit type annotation with --isolatedDeclarations.
 ```
 

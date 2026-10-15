@@ -431,7 +431,7 @@
           ]
         },
         "isolated-declarations": {
-          "description": "Programs that emit declarations and already have, or are a few\nannotations from, the explicit types `isolatedDeclarations` needs;\nand Deno packages with `exports` whose public files have JSR slow\ntypes. Default threshold: 1.",
+          "description": "Programs that emit declarations and already have, or are a few\nannotations from, the explicit types `isolatedDeclarations` needs;\nand Deno packages with `exports` whose public API has JSR slow\ntypes. Has no threshold.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

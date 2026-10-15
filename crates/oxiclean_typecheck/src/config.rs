@@ -97,7 +97,8 @@ pub const ISOLATED_DECLARATIONS_STYLE: ReportStyle = ReportStyle {
     description: "Packages that emit .d.ts files and could do it without type-checking, with isolatedDeclarations, and JSR packages with slow types",
     heading: "Packages could emit declarations without type-checking",
     threshold_unit: "",
-    value_label: |n| if n == 1 { "1 annotation".to_string() } else { format!("{n} annotations") },
+    // Every finding is one package; the message says how far it is.
+    value_label: |_| "isolatedDeclarations".to_string(),
     max_label: "",
     max_unit: "",
     ok_message: "No package is close to isolatedDeclarations, and no JSR package has slow types.",

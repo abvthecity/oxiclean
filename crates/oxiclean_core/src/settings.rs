@@ -306,8 +306,8 @@ pub struct Rules {
     pub ambient_types: Option<RuleSetting>,
     /// Programs that emit declarations and already have, or are a few
     /// annotations from, the explicit types `isolatedDeclarations` needs;
-    /// and Deno packages with `exports` whose public files have JSR slow
-    /// types. Default threshold: 1.
+    /// and Deno packages with `exports` whose public API has JSR slow
+    /// types. Has no threshold.
     pub isolated_declarations: Option<RuleSetting>,
 }
 
