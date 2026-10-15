@@ -39,6 +39,7 @@ const RULES: &[&str] = &[
     "ambient-types",
     "isolated-declarations",
     "large-literals",
+    "type-bloat",
 ];
 
 fn fixtures() -> PathBuf {

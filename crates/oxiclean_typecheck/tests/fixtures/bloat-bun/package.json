@@ -1,0 +1,1 @@
+{ "name": "bun-type-bloat", "private": true, "workspaces": ["packages/*"] }

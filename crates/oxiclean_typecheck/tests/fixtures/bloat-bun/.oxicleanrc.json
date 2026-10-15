@@ -1,0 +1,1 @@
+{ "rules": { "type-bloat": ["error", { "threshold": 500 }] } }

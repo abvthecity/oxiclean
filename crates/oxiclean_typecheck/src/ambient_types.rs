@@ -103,7 +103,7 @@ pub(crate) fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
 
 /// Whether `program` loads every visible `@types` package: it sets no
 /// `types` and runs on TypeScript before 6, or its `types` has `"*"`.
-fn loads_all_types(project: &Project, program: &TsConfigFile) -> bool {
+pub(crate) fn loads_all_types(project: &Project, program: &TsConfigFile) -> bool {
     match program.options.get("types") {
         Some(Value::Array(types)) => types.iter().any(|t| t == "*"),
         Some(_) => false,
@@ -114,7 +114,7 @@ fn loads_all_types(project: &Project, program: &TsConfigFile) -> bool {
 
 /// The `@types` packages, without the scope, in each `node_modules/@types`
 /// of `dirs`, nearest first, with where each is.
-fn visible_types(dirs: &[&Path], root: &Path) -> Vec<(String, PathBuf)> {
+pub(crate) fn visible_types(dirs: &[&Path], root: &Path) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
     for d in dirs {
         let Ok(entries) = fs::read_dir(d.join("node_modules/@types")) else { continue };

@@ -22,9 +22,12 @@
 //! - `large-literals` ([`run_large_literals_check`]): object and array
 //!   literals, and imported `.json` files, big enough that inferring
 //!   their types slows `tsc`.
+//! - `type-bloat` ([`run_type_bloat_check`]): package imports that load
+//!   huge declaration trees.
 
 mod ambient_types;
 mod config;
+mod declarations;
 mod isolated_declarations;
 mod large_literals;
 mod overlap;
@@ -33,6 +36,7 @@ mod references;
 mod scripts;
 pub mod tsconfig;
 mod tsconfig_options;
+mod type_bloat;
 mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
@@ -40,7 +44,8 @@ pub use config::{
     AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
     ISOLATED_DECLARATIONS_STYLE, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE,
     LARGE_LITERALS_STYLE, OVERLAP_RULE, OVERLAP_STYLE, PROGRAM_FILES_RULE, PROGRAM_FILES_STYLE,
-    REFERENCES_RULE, REFERENCES_STYLE, TSCONFIG_RULE, TSCONFIG_STYLE,
+    REFERENCES_RULE, REFERENCES_STYLE, TSCONFIG_RULE, TSCONFIG_STYLE, TYPE_BLOAT_DEFAULT_THRESHOLD,
+    TYPE_BLOAT_RULE, TYPE_BLOAT_STYLE,
 };
 pub use isolated_declarations::run_isolated_declarations_check;
 pub use large_literals::run_large_literals_check;
@@ -50,3 +55,4 @@ pub use program_files::run_program_files_check;
 pub use references::run_references_check;
 pub use tsconfig::{TsConfigFile, TsConfigs};
 pub use tsconfig_options::run_tsconfig_check;
+pub use type_bloat::run_type_bloat_check;

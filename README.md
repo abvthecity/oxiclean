@@ -64,6 +64,9 @@ oxiclean isolated-declarations --root ./my-project
 # Find large literals and .json imports that tsc infers types for
 oxiclean large-literals --root ./my-project
 
+# Find package imports that load huge declaration trees
+oxiclean type-bloat --root ./my-project
+
 # Apply the fixes a check offers
 oxiclean program-files --fix --root ./my-project
 
@@ -115,7 +118,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 | `--fix` | Apply the fixes findings offer, then report what is left (see [Fixes](#fixes)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)). `large-literals` defaults to 10000 values: in `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for objects of mixed shapes, in every program that loads them.
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)). `type-bloat` defaults to 100000 lines of declarations, about a second of parsing and binding in `tsc` 5.9. `large-literals` defaults to 10000 values: in `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for objects of mixed shapes, in every program that loads them.
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -572,11 +575,38 @@ src/i18n/strings.json
         src/i18n/index.ts:1: imports strings.json
 ```
 
+### Type Bloat Checker
+
+`bloat` counts the modules an import pulls into a bundle. `tsc` follows a
+different graph: the `.d.ts` files a package's types entry imports,
+re-exports and references, which it parses and binds in full, with
+`skipLibCheck` or without. `type-bloat` resolves each package import the
+way `tsc` does for its program (`paths`, `node_modules` from the importing
+file up, the package before its `@types` package, `exports` with the
+`types` condition when module resolution reads it, else `typesVersions`,
+`types`, `typings` and `main`), follows its declarations, and reports
+imports whose declarations, beyond the `@types` packages the program
+loads anyway, run to 100000 lines or more:
+
+| Import | Lines of declarations | `tsc` 5.9 total time |
+|---|---|---|
+| `import { google } from "googleapis"` | 3,731,740 | 9.9s |
+| `import { drive } from "@googleapis/drive"` | 25,013 | 0.5s |
+| `import AWS from "aws-sdk"` | 928,586 | 3.9s |
+| `import S3 from "aws-sdk/clients/s3"` | 8,224 | 0.4s |
+
+```
+⚠ Imports load huge declaration trees (threshold: 100000 lines)
+
+src/drive.ts
+└──  line 1: loads 3731740 lines of declarations in 1002 files that tsc parses and binds in every program that imports it; import what you use from a narrower entry, such as a subpath of googleapis or a smaller package (3731740 lines)
+```
+
 These checks skip tsconfigs in test input directories (`fixtures`,
 `__fixtures__`, `testdata`, `goldens`, `test-output`, `__snapshots__`): they are data
 for tests, not programs anyone runs. Deno doesn't read tsconfig files, so
 in a Deno workspace only `isolated-declarations` (for JSR slow types) and
-`large-literals` find anything.
+`large-literals` find anything, unless it keeps a tsconfig for editors.
 
 ### Difference Between Tools
 

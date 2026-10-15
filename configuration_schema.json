@@ -496,6 +496,17 @@
             }
           ]
         },
+        "type-bloat": {
+          "description": "Package imports whose declaration files, beyond the `@types`\npackages a program loads anyway, run to so many lines that parsing\nand binding them slows `tsc`. Default threshold: 100000 lines.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "unused-enum-members": {
           "description": "Members of used enums that nothing uses, as knip's `enumMembers`.\nMembers tagged `@public`, `@beta` or `@alias` don't count. Default\nthreshold: 1.",
           "anyOf": [

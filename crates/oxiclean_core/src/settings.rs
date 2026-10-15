@@ -313,6 +313,10 @@ pub struct Rules {
     /// so many values that inferring their types slows `tsc`. Default
     /// threshold: 10000 values.
     pub large_literals: Option<RuleSetting>,
+    /// Package imports whose declaration files, beyond the `@types`
+    /// packages a program loads anyway, run to so many lines that parsing
+    /// and binding them slows `tsc`. Default threshold: 100000 lines.
+    pub type_bloat: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -340,6 +344,7 @@ impl Rules {
             "ambient-types" => self.ambient_types.as_ref(),
             "isolated-declarations" => self.isolated_declarations.as_ref(),
             "large-literals" => self.large_literals.as_ref(),
+            "type-bloat" => self.type_bloat.as_ref(),
             _ => None,
         }
     }
@@ -366,6 +371,7 @@ impl Rules {
             &self.ambient_types,
             &self.isolated_declarations,
             &self.large_literals,
+            &self.type_bloat,
         ]
         .into_iter()
         .flatten()

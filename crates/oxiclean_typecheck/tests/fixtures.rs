@@ -7,7 +7,7 @@ use oxiclean_core::CommonArgs;
 use oxiclean_typecheck::{
     CheckResult, Config, FindingKind, run_ambient_types_check, run_isolated_declarations_check,
     run_large_literals_check, run_overlap_check, run_program_files_check, run_references_check,
-    run_tsconfig_check,
+    run_tsconfig_check, run_type_bloat_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -310,5 +310,54 @@ fn large_deno() {
             "packages/i18n/en.json:1 json en.json (22)",
             "packages/i18n/mod.ts:5 literal default (30)",
         ]
+    );
+}
+
+fn type_bloat(name: &str) -> Vec<String> {
+    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
+    summary(&run_type_bloat_check(&cfg).expect("fixture analyses"))
+}
+
+/// pnpm, with the threshold at 500 lines: an SDK whose root re-exports
+/// every client, imported from a root file and, as a type, from a file
+/// reached by import; not reported: one client on its own, and
+/// `@types/node`, which the SDK references but the program loads anyway.
+/// The values match the lines of the files `tsc --listFiles` lists.
+#[test]
+fn type_bloat_pnpm() {
+    assert_eq!(
+        type_bloat("bloat-pnpm"),
+        [
+            "packages/app/src/helper.ts:2 heavy-types mega-sdk (615)",
+            "packages/app/src/index.ts:1 heavy-types mega-sdk (615)",
+        ]
+    );
+}
+
+/// npm: a package typed only by its `@types` package, which pulls in more
+/// with `/// <reference path>`; not reported: a small package and a
+/// built-in module.
+#[test]
+fn type_bloat_npm() {
+    assert_eq!(
+        type_bloat("bloat-npm"),
+        ["packages/web/src/index.ts:1 heavy-types util-belt (703)"]
+    );
+}
+
+/// Bun: `exports` with a `types` condition; not reported: a wildcard
+/// subpath of the same package.
+#[test]
+fn type_bloat_bun() {
+    assert_eq!(type_bloat("bloat-bun"), ["packages/api/src/index.ts:1 heavy-types icon-kit (801)"]);
+}
+
+/// Deno, with a tsconfig for editors: a package whose `typesVersions`
+/// maps its `types` entry.
+#[test]
+fn type_bloat_deno() {
+    assert_eq!(
+        type_bloat("bloat-deno"),
+        ["packages/cli/src/main.ts:1 heavy-types cloud-apis (553)"]
     );
 }
