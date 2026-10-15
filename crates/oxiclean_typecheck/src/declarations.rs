@@ -1,11 +1,13 @@
 //! How `tsc` finds the files it loads for an import.
 
 use std::{
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use oxiclean_core::Project;
+use rayon::prelude::*;
 use serde_json::Value;
 
 use crate::{tsconfig::TsConfigFile, typescript::typescript_version};
@@ -418,6 +420,30 @@ fn version_matches(range: &str, version: (u64, u64)) -> bool {
             }
         })
     })
+}
+
+/// Reads `roots` and the files they lead to, in parallel, a frontier at a
+/// time: `read` returns what a file holds and the files it leads to, or
+/// `None` to skip it. Each file is read once.
+pub(crate) fn crawl<T: Send>(
+    roots: impl IntoIterator<Item = PathBuf>,
+    read: impl Fn(&Path) -> Option<(T, Vec<PathBuf>)> + Sync,
+) -> HashMap<PathBuf, T> {
+    let mut out: HashMap<PathBuf, T> = HashMap::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut frontier: Vec<PathBuf> = roots.into_iter().filter(|r| seen.insert(r.clone())).collect();
+    while !frontier.is_empty() {
+        let read: Vec<(PathBuf, T, Vec<PathBuf>)> = frontier
+            .into_par_iter()
+            .filter_map(|f| read(&f).map(|(t, next)| (f, t, next)))
+            .collect();
+        frontier = Vec::new();
+        for (f, t, next) in read {
+            frontier.extend(next.into_iter().filter(|n| seen.insert(n.clone())));
+            out.insert(f, t);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

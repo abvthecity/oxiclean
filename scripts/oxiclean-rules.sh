@@ -7,7 +7,7 @@ command_of() {
     unused-exports | unused-types | unused-enum-members | unused-namespace-members) echo unused ;;
     dependencies | heavy-dependencies | catalog | duplicate-versions) echo dependencies ;;
     program-files | overlap | references | tsconfig | ambient-types | isolated-declarations | \
-      large-literals | type-bloat) echo typecheck ;;
+      large-literals | type-bloat | complex-types) echo typecheck ;;
     bloat | barrels) echo bloat ;;
     depth | cycles | duplicates) echo "$1" ;;
     *) echo "unknown rule: $1" >&2; return 1 ;;
@@ -21,7 +21,7 @@ rules_of() {
     dependencies) echo dependencies heavy-dependencies catalog duplicate-versions ;;
     typecheck)
       echo program-files overlap references tsconfig ambient-types isolated-declarations \
-        large-literals type-bloat
+        large-literals type-bloat complex-types
       ;;
     bloat) echo bloat barrels ;;
     depth | cycles | duplicates) echo "$1" ;;

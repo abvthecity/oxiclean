@@ -50,8 +50,8 @@ enum Commands {
     /// Check for tsconfig setups that make type checking slower than it needs to be
     ///
     /// Runs the rules program-files, overlap, references, tsconfig,
-    /// ambient-types, isolated-declarations, large-literals and type-bloat,
-    /// each unless `.oxicleanrc.json` turns it off.
+    /// ambient-types, isolated-declarations, large-literals, type-bloat and
+    /// complex-types, each unless `.oxicleanrc.json` turns it off.
     #[command(name = "typecheck")]
     Typecheck(oxiclean_typecheck::Config),
     /// Check for imports and barrel files that pull in too many modules
@@ -99,8 +99,28 @@ impl Commands {
     }
 }
 
+/// The stack of rayon's threads and of the thread the command runs on.
+/// oxc's parser recurses once per level of nesting, and the defaults
+/// (2 MiB for rayon, 8 MiB for the main thread) overflow on deeply nested
+/// code, such as a type with thousands of nested conditionals.
+const THREAD_STACK: usize = 64 * 1024 * 1024;
+
 fn main() -> Result<ExitCode> {
     init_tracing();
+    // Parsing also happens off rayon's pool, so the whole command runs on a
+    // thread with the same large stack.
+    std::thread::Builder::new()
+        .stack_size(THREAD_STACK)
+        .spawn(run)
+        .context("could not start the main thread")?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+fn run() -> Result<ExitCode> {
+    if let Err(e) = rayon::ThreadPoolBuilder::new().stack_size(THREAD_STACK).build_global() {
+        debug!("Using rayon's default thread pool: {e}");
+    }
     let cli = Cli::parse();
     debug!("Parsed CLI arguments: {:?}", cli.command);
 

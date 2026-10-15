@@ -55,7 +55,7 @@ use crate::{
     ambient_types::{loads_all_types, visible_types},
     config::{Config, TYPE_BLOAT_DEFAULT_THRESHOLD, TYPE_BLOAT_RULE},
     declarations::{
-        Format, Mode, in_node_modules, is_declaration, is_relative, is_source, package_file,
+        Format, Mode, crawl, in_node_modules, is_declaration, is_relative, is_source, package_file,
         paths_target, resolve_file_only, resolve_types, types_package_name,
     },
     tsconfig::{TsConfigFile, TsConfigs},
@@ -173,42 +173,24 @@ fn read_sources(
     project: &Project,
     programs: &[&TsConfigFile],
 ) -> HashMap<PathBuf, Vec<oxiclean_core::Specifier>> {
-    let mut sources: HashMap<PathBuf, Vec<oxiclean_core::Specifier>> = HashMap::new();
-    let mut seen: HashSet<PathBuf> = programs
-        .iter()
-        .flat_map(|p| p.root_files.iter())
-        .filter(|f| is_source(f))
-        .cloned()
-        .collect();
-    let mut frontier: Vec<PathBuf> = seen.iter().cloned().collect();
+    let roots = programs.iter().flat_map(|p| p.root_files.iter()).filter(|f| is_source(f)).cloned();
     let mode = Mode::local();
-    while !frontier.is_empty() {
-        let read: Vec<(PathBuf, Vec<oxiclean_core::Specifier>, Vec<PathBuf>)> = frontier
-            .into_par_iter()
-            .filter_map(|f| {
-                let specs = match parse_imports(&f) {
-                    Ok(parsed) => parsed.specs,
-                    Err(e) => {
-                        warn!("Skipping {}: {e}", f.display());
-                        return None;
-                    }
-                };
-                let local = specs
-                    .iter()
-                    .filter(|s| is_relative(&s.request))
-                    .filter_map(|s| resolve_types(project, &mode, Format::Unknown, &f, &s.request))
-                    .filter(|l| is_source(l) && !in_node_modules(l))
-                    .collect();
-                Some((f, specs, local))
-            })
+    crawl(roots, |f| {
+        let specs = match parse_imports(f) {
+            Ok(parsed) => parsed.specs,
+            Err(e) => {
+                warn!("Skipping {}: {e}", f.display());
+                return None;
+            }
+        };
+        let local = specs
+            .iter()
+            .filter(|s| is_relative(&s.request))
+            .filter_map(|s| resolve_types(project, &mode, Format::Unknown, f, &s.request))
+            .filter(|l| is_source(l) && !in_node_modules(l))
             .collect();
-        frontier = Vec::new();
-        for (f, specs, local) in read {
-            frontier.extend(local.into_iter().filter(|l| seen.insert(l.clone())));
-            sources.insert(f, specs);
-        }
-    }
-    sources
+        Some((specs, local))
+    })
 }
 
 /// The package imports in `program`'s source: its root files and the

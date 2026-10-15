@@ -41,6 +41,7 @@ const RULES: &[(&str, &str)] = &[
     ("typecheck", "isolated-declarations"),
     ("typecheck", "large-literals"),
     ("typecheck", "type-bloat"),
+    ("typecheck", "complex-types"),
 ];
 
 /// The commands, each once.

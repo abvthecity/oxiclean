@@ -1,0 +1,1 @@
+{ "name": "@scope/api", "version": "1.0.0", "exports": "./src/main.ts", "imports": { "zod": "npm:zod@^3" } }

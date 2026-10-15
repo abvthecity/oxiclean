@@ -74,7 +74,7 @@ on or off. A rule that is `"off"` doesn't run at all, so turning off
 |---|---|
 | `unused` | `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` |
 | `dependencies` | `dependencies`, `heavy-dependencies`, `catalog`, `duplicate-versions` |
-| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat` |
+| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat`, `complex-types` |
 | `bloat` | `bloat`, `barrels` |
 | `depth` | `depth` |
 | `cycles` | `cycles` |
@@ -99,7 +99,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 | `--fix` | Apply the fixes findings offer, then report what is left (see [Fixes](#fixes)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)). `type-bloat` defaults to 100000 lines of declarations, about a second of parsing and binding in `tsc` 5.9. `large-literals` defaults to 10000 values: in `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for objects of mixed shapes, in every program that loads them.
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)). `type-bloat` defaults to 100000 lines of declarations, about a quarter of a second of parsing and binding in `tsc` 5.9. `complex-types` defaults to 1000 types, past which `tsc` check time and memory grow visibly. `large-literals` defaults to 10000 values: in `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for objects of mixed shapes, in every program that loads them.
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -591,6 +591,41 @@ loads anyway, run to 100000 lines or more:
 
 src/drive.ts
 └──  line 1: loads 3731740 lines of declarations in 1002 files that tsc parses and binds in every program that imports it; import what you use from a narrower entry, such as a subpath of googleapis or a smaller package (3731740 lines)
+```
+
+### Complex Types Checker
+
+Some type shapes make `tsc` build huge numbers of types, so one alias can
+cost more check time and memory than the rest of a file.
+`complex-types` reads them from the syntax, following type aliases
+across files, and reports those it estimates build at least 1000 types:
+
+| Code | Shape | Estimate |
+|---|---|---|
+| `template-product` | a template literal type whose holes are unions, such as `` `${State}${Prefix}-${Color}-${Shade}` `` | the product of the union sizes |
+| `union-intersection` | an intersection of unions, which `tsc` normalizes into a union of every combination | the product of the union sizes; an intersection of literal unions is their common members, and `A & A` is `A` |
+| `recursive-paths` | a `Paths<T>`-style alias with no depth limit, recursing in a template literal or through a helper such as `Join<K, Paths<T[K]>>`, used on a `.json` import, an object type or an interface | the key paths it builds |
+| `tuple-arithmetic` | a `Range<N>`-style alias that grows a tuple one element at a time | N(N+1)/2 for the largest `N` in each file, whose tuples the others reuse |
+| `builder-chain` | a chain of zod, tRPC, Hono, Elysia or Drizzle calls whose methods each rebuild the type built so far, such as zod's `.extend()` but not `.min()`, followed through the local `const`s it starts from | 115·links + links², fitted to zod `.extend()` chains |
+
+These are estimates, not measurements; `tsc --generateTrace` shows what
+the types cost. Type parameters hide aliases of the same name, and so do
+types declared in namespaces, functions and `declare module` blocks.
+`--fix` writes each `Range<N>` in a file out as the union
+`0 | 1 | … | N-1`, in parentheses where the union would otherwise bind
+differently, when the alias has the usual shape
+(`A['length'] extends N ? A[number] : Range<N, [...A, A['length']]>`) and
+N is at most 256. In the Bun fixture this cut `tsc`'s type count from
+22289 to 8528.
+
+```
+⚠ Types that expand to huge numbers of types (threshold: 1000 types)
+
+packages/server/src/config.ts
+├──  line 3: `Range<200>` builds 200 tuples, each one element longer than the last (about 20100 types), which the other use in this file reuses; write the union out, or use number and check it at runtime (20100 types)
+│       packages/server/src/config.ts:4: `Range<10>` reuses them
+│       fixable with --fix: write the 2 uses of Range out as unions
+└──  line 5: `Tup<120>` builds 120 tuples, each one element longer than the last (about 7260 types); write the union out, or use number and check it at runtime (7260 types)
 ```
 
 These checks skip tsconfigs in test input directories (`fixtures`,

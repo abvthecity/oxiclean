@@ -320,6 +320,10 @@ pub struct Rules {
     /// packages a program loads anyway, run to so many lines that parsing
     /// and binding them slows `tsc`. Default threshold: 100000 lines.
     pub type_bloat: Option<RuleSetting>,
+    /// Types that expand into huge numbers of types: template literal and
+    /// union intersection products, recursive key paths, tuple arithmetic
+    /// and long builder chains. Default threshold: 1000 types.
+    pub complex_types: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -348,6 +352,7 @@ impl Rules {
             "isolated-declarations" => self.isolated_declarations.as_ref(),
             "large-literals" => self.large_literals.as_ref(),
             "type-bloat" => self.type_bloat.as_ref(),
+            "complex-types" => self.complex_types.as_ref(),
             _ => None,
         }
     }
@@ -375,6 +380,7 @@ impl Rules {
             &self.isolated_declarations,
             &self.large_literals,
             &self.type_bloat,
+            &self.complex_types,
         ]
         .into_iter()
         .flatten()

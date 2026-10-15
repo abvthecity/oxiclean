@@ -53,6 +53,7 @@ use tracing::{debug, info, warn};
 use crate::{
     config::{Config, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE},
     declarations::{in_node_modules, is_source, is_typescript},
+    lines::LineIndex,
     tsconfig::{TsConfigFile, TsConfigs},
     typescript::typescript_version,
 };
@@ -498,11 +499,10 @@ fn analyze(file: &Path, threshold: usize) -> Option<FileReport> {
         warn!("Skipping {}: it couldn't be parsed", file.display());
         return None;
     }
-    let line_starts: Vec<usize> =
-        std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    let lines = LineIndex::new(&src);
     let mut collector = Collector {
         threshold,
-        line_starts,
+        lines,
         report: FileReport::default(),
         depth: 0,
         javascript: is_javascript(file),
@@ -513,7 +513,7 @@ fn analyze(file: &Path, threshold: usize) -> Option<FileReport> {
 
 struct Collector {
     threshold: usize,
-    line_starts: Vec<usize>,
+    lines: LineIndex,
     report: FileReport,
     /// How many data literals the visit is inside: the outermost one is
     /// the one counted.
@@ -535,8 +535,7 @@ enum Contents {
 
 impl Collector {
     fn line(&self, offset: u32) -> u32 {
-        let at = self.line_starts.partition_point(|&s| s <= offset as usize);
-        u32::try_from(at).unwrap_or(u32::MAX)
+        self.lines.line(offset as usize)
     }
 
     fn import(&mut self, request: &str, offset: u32) {
