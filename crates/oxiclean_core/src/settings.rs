@@ -311,7 +311,7 @@ pub struct Rules {
     pub isolated_declarations: Option<RuleSetting>,
     /// Object and array literals, and `.json` files programs import, with
     /// so many values that inferring their types slows `tsc`. Default
-    /// threshold: 5000 values.
+    /// threshold: 10000 values.
     pub large_literals: Option<RuleSetting>,
 }
 

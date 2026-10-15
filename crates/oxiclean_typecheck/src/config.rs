@@ -108,9 +108,10 @@ pub const ISOLATED_DECLARATIONS_STYLE: ReportStyle = ReportStyle {
 /// types for.
 pub const LARGE_LITERALS_RULE: &str = "large-literals";
 
-/// Literals and `.json` files with this many values are reported: a few
-/// thousand values take `tsc` a noticeable part of a second.
-pub const LARGE_LITERALS_DEFAULT_THRESHOLD: usize = 5000;
+/// Literals and `.json` files with this many values are reported: in
+/// `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for
+/// objects of mixed shapes.
+pub const LARGE_LITERALS_DEFAULT_THRESHOLD: usize = 10_000;
 
 /// How large literal findings are worded in the terminal report.
 pub const LARGE_LITERALS_STYLE: ReportStyle = ReportStyle {

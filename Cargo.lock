@@ -1055,6 +1055,7 @@ dependencies = [
  "oxiclean_core",
  "path-clean",
  "rayon",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",

@@ -269,22 +269,26 @@ fn large(name: &str) -> Vec<String> {
 }
 
 /// pnpm, with the threshold at 20 values: a `.json` file two programs
-/// import, an `as const` table, and ones not reported: a small literal,
-/// and a `.json` file a `.d.json.ts` declares.
+/// import, an `as const` table, a table in a file the program reaches by
+/// import only, a Supabase edge function (a Deno project inside a Node
+/// repo), and ones not reported: a small literal, and a `.json` file a
+/// `.d.json.ts` declares.
 #[test]
 fn large_pnpm() {
     assert_eq!(
         large("large-pnpm"),
         [
-            "packages/app/src/index.ts:6 literal icons (21)",
+            "packages/app/data/table.ts:1 literal primes (22)",
+            "packages/app/src/index.ts:7 literal icons (21)",
             "packages/app/src/strings.json:1 json strings.json (30)",
+            "supabase/functions/hello/data.json:1 json data.json (24)",
         ]
     );
 }
 
-/// npm: an `allowJs` file of data, and ones not reported: a `.json` file
-/// a program with `resolveJsonModule` off requires, and a declaration
-/// file.
+/// npm: an `allowJs` file of data, and ones not reported: `.json` files
+/// programs with `resolveJsonModule` off (set off, and unset under
+/// `node16`) import, and a declaration file.
 #[test]
 fn large_npm() {
     assert_eq!(large("large-npm"), ["packages/site/src/posts.js:1 literal posts (24)"]);
@@ -296,14 +300,15 @@ fn large_bun() {
     assert_eq!(large("large-bun"), ["node_modules/emoji-data/data.json:1 json data.json (25)"]);
 }
 
-/// Deno, without a tsconfig: a `.json` import and a default export.
+/// Deno, without a tsconfig: a `.json` import, a default export of data,
+/// and one not reported: an array holding a variable.
 #[test]
 fn large_deno() {
     assert_eq!(
         large("large-deno"),
         [
             "packages/i18n/en.json:1 json en.json (22)",
-            "packages/i18n/mod.ts:3 literal default (25)",
+            "packages/i18n/mod.ts:5 literal default (30)",
         ]
     );
 }

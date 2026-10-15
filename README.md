@@ -115,7 +115,7 @@ including thresholds, entry files and ignore patterns, is set in
 | `--format <text\|json\|sarif>` | Output format (see [Output formats](#output-formats)). |
 | `--fix` | Apply the fixes findings offer, then report what is left (see [Fixes](#fixes)). |
 
-The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` 20 levels for `depth` and 5000 values for `large-literals`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)).
+The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 100 modules for `heavy-dependencies`, 2 versions for `duplicate-versions` and 20 levels for `depth`. They flag roughly the worst 5% of files in Next.js and the worst 10–25% in Expo (see [bench/README.md](bench/README.md#choosing-thresholds)). `large-literals` defaults to 10000 values: in `tsc` 5.9, about 0.06s of checking for uniform data and 0.4s for objects of mixed shapes, in every program that loads them.
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
@@ -546,23 +546,26 @@ packages/near/tsconfig.json
 ### Large Literals Checker
 
 `tsc` builds a type for every value in an object or array literal, and for
-every value in each `.json` file a program imports. A few thousand values
-take a noticeable part of a second in every program that loads them, and
-more in the editor. `large-literals` counts the values (array elements and
-object properties, through nested literals) and reports:
+every value in each `.json` file a program imports, in every program that
+loads them, and again in the editor. `large-literals` counts the values
+(array elements and object properties, through nested literals) and
+reports:
 
 | Code | Meaning |
 |---|---|
-| `json` | A `.json` file programs import. A `<name>.d.json.ts` next to it declaring its type, with `allowArbitraryExtensions`, makes `tsc` read that instead; for a dependency's file, or under Deno, reading it at runtime does |
-| `literal` | An object or array literal of data, without functions or classes. An annotation doesn't help, since `tsc` still checks each value against it; moving the data to a `.json` file with a declaration, or loading it at runtime, does |
+| `json` | A `.json` file programs import. A `<name>.d.json.ts` next to it declaring its type, with `allowArbitraryExtensions`, makes `tsc` read that instead (when `tsc` emits JavaScript, it then stops copying the `.json` file to the output, so the build has to). For a dependency's file, or under Deno, reading it at runtime does |
+| `literal` | An object or array literal of plain data: strings, numbers, booleans, `null` and nested literals. An annotation doesn't help, since `tsc` still checks each value against it; moving the data to a `.json` file with a declaration, or loading it at runtime, does |
 
-Programs with `resolveJsonModule` set to `false` aren't checked for
-`.json` imports. Deno packages are checked without a tsconfig, since
-`deno check` always types the `.json` files it imports. The default
-threshold is 5000 values.
+Each program's files are followed through their local imports, as `tsc`
+does. Programs without `resolveJsonModule` aren't checked for `.json`
+imports; it defaults to on when modules resolve the `bundler` or
+`nodenext` way. `require` counts in JavaScript files only, as in `tsc`.
+Every directory with a `deno.json`, such as Supabase edge functions, is
+checked without a tsconfig, since `deno check` always types the `.json`
+files it imports. The default threshold is 10000 values.
 
 ```
-⚠ Large literals tsc infers types for (threshold: 5000 values)
+⚠ Large literals tsc infers types for (threshold: 10000 values)
 
 src/i18n/strings.json
 └──  line 1: 18210 values that tsc infers types for in every program that imports it (2 programs); a strings.d.json.ts next to it declaring its type, with allowArbitraryExtensions, lets tsc read that instead (18210 values)

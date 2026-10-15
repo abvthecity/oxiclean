@@ -442,7 +442,7 @@
           ]
         },
         "large-literals": {
-          "description": "Object and array literals, and `.json` files programs import, with\nso many values that inferring their types slows `tsc`. Default\nthreshold: 5000 values.",
+          "description": "Object and array literals, and `.json` files programs import, with\nso many values that inferring their types slows `tsc`. Default\nthreshold: 10000 values.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

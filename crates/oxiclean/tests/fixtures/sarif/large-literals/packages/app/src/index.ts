@@ -1,3 +1,4 @@
+import { primes } from "../data/table";
 import strings from "./strings.json";
 import typed from "./typed.json";
 
@@ -16,3 +17,4 @@ export const icons = {
 export function label(key: keyof typeof strings): string {
   return strings[key] ?? typed[key];
 }
+export const first: number = primes[0] ?? 0;
