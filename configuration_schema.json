@@ -216,7 +216,7 @@
       "additionalProperties": false
     },
     "Rules": {
-      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
+      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`. A rule the file doesn't set is on, at `error`,\nexcept `heavy-dependencies`, which is at `warn`. Each command runs a\ngroup of rules, and runs only the ones that are on.",
       "type": "object",
       "properties": {
         "bloat": {
@@ -341,7 +341,7 @@
           ]
         },
         "heavy-dependencies": {
-          "description": "Third-party packages that pull in too many modules, counted through\n`node_modules`, reported on the package.json that lists them.\nDefault threshold: 100 modules.",
+          "description": "Third-party packages that pull in too many modules, counted through\n`node_modules`, reported on the package.json that lists them.\nDefault threshold: 100 modules. Default severity: `warn`, as a heavy\npackage can be worth its weight.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

@@ -15,6 +15,11 @@ The root's `package.json` and each workspace package's are checked.
 oxiclean dependencies --root ./my-project
 ```
 
+`oxiclean dependencies` runs the `dependencies` rule and the
+`heavy-dependencies`, `catalog` and `duplicate-versions` rules below, each
+unless `.oxicleanrc.json` turns it off. Unused dependencies are errors by
+default and heavy dependencies warnings; a severity in the config file wins.
+
 ### Options
 
 - `--root <PATH>` - Root directory to analyze (default: git root)
@@ -104,7 +109,7 @@ Where oxiclean differs from knip:
 
 ## Unused catalog entries
 
-`oxiclean catalog` reports the entries of pnpm's `catalog` (the default
+The `catalog` rule reports the entries of pnpm's `catalog` (the default
 catalog) and `catalogs` in `pnpm-workspace.yaml` that nothing refers to,
 as knip's `catalog` issue type. An entry is used when the root's or a
 workspace package's `package.json` lists the package with `catalog:` or
@@ -122,13 +127,14 @@ pnpm-workspace.yaml
 
 ## Heavy dependencies
 
-`oxiclean heavy-dependencies` scores each package a `package.json` lists
+The `heavy-dependencies` rule scores each package a `package.json` lists
 by the modules importing it pulls in, reading the installed files in
 `node_modules`: every entry point of the package that the files the
 package entries reach import, and what those import in turn, other
 packages included. Packages at or above the threshold (default 100
 modules) are reported on the `package.json` line that lists them, with
-how many files import them. Imports resolve as in oxiclean's other checks,
+how many files import them, as warnings unless the config file sets the
+rule to `error`. Imports resolve as in oxiclean's other checks,
 through `exports` conditions such as `import`, `module` and `browser`, so a
 package whose entry is a single bundled file counts as one module.
 
@@ -136,12 +142,12 @@ package whose entry is a single bundled file counts as one module.
 ⚠ Heavy dependencies detected (threshold: 100 modules)
 
 package.json
-└──  package 'date-fns', imported by 12 files (pulls in 302 modules)
+└──  package 'date-fns', imported by 12 files (pulls in 302 modules) [warn]
 ```
 
 ## Duplicate package versions
 
-`oxiclean duplicate-versions` reads the root's `package-lock.json` (v2 and
+The `duplicate-versions` rule reads the root's `package-lock.json` (v2 and
 v3: each `node_modules/...` entry, links to workspace packages left out)
 and `pnpm-lock.yaml` (v6 and v9: the keys of `packages`, peer suffixes
 dropped, in the last document, as pnpm 10 and later put their own install

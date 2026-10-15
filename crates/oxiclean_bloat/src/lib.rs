@@ -3,7 +3,10 @@
 //! For every entry file, this counts how many unique modules each of its
 //! imports pulls in (transitively), and flags imports and entries whose count
 //! reaches a threshold. Large counts usually mean a barrel file or a heavy
-//! dependency is dragged into a bundle.
+//! dependency is dragged into a bundle. The `barrels` rule
+//! ([`run_barrels_check`]) reports barrel files whose import pulls in many
+//! modules, and the `bloat` command ([`run_bloat_command`]) runs each of the
+//! two rules the config file leaves on, from one module graph.
 //!
 //! # Examples
 //!
@@ -30,10 +33,12 @@
 
 mod barrels;
 mod checker;
+mod command;
 mod config;
 
 pub use barrels::{check_barrels, run_barrels_check};
 pub use checker::{check, run_bloat_check};
+pub use command::{RULES, run_bloat_command};
 pub use config::{
     BARRELS_DEFAULT_THRESHOLD, BARRELS_RULE, BARRELS_STYLE, Config, DEFAULT_THRESHOLD,
     REPORT_STYLE, RULE,

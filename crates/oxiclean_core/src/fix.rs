@@ -20,7 +20,7 @@ use tracing::{debug, warn};
 use crate::{
     error::{Error, Result},
     jsonc_tree::{JsoncDoc, Segment},
-    report::{CheckResult, FindingKind},
+    report::{CheckResult, CommandResult, Finding, FindingKind},
 };
 
 /// One change a fix makes.
@@ -86,20 +86,44 @@ struct Replace<'a> {
 /// # Errors
 /// Fails if a file can't be read or written.
 pub fn apply_fixes(result: &mut CheckResult) -> Result<usize> {
+    let fixed = fix_findings(&result.findings.iter().collect::<Vec<_>>())?;
+    let mut flags = fixed.iter();
+    result.findings.retain(|_| !flags.next().copied().unwrap_or(false));
+    Ok(fixed.iter().filter(|f| **f).count())
+}
+
+/// As [`apply_fixes`], for the findings of every rule of a command at
+/// once, so that fixes from different rules to one file stack.
+///
+/// # Errors
+/// Fails if a file can't be read or written.
+pub fn apply_command_fixes(result: &mut CommandResult) -> Result<usize> {
+    let findings: Vec<&Finding> = result.rules.iter().flat_map(|r| &r.result.findings).collect();
+    let fixed = fix_findings(&findings)?;
+    let mut flags = fixed.iter();
+    for r in &mut result.rules {
+        r.result.findings.retain(|_| !flags.next().copied().unwrap_or(false));
+    }
+    Ok(fixed.iter().filter(|f| **f).count())
+}
+
+/// Applies the fixes of `findings` to the files on disk, and returns which
+/// findings they resolved.
+fn fix_findings(findings: &[&Finding]) -> Result<Vec<bool>> {
     let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
-    for (i, f) in result.findings.iter().enumerate() {
+    for (i, f) in findings.iter().enumerate() {
         if let Some(fix) = fix_of(&f.kind) {
             by_file.entry(fix.file.clone()).or_default().push(i);
         }
     }
-    let mut fixed = vec![false; result.findings.len()];
+    let mut fixed = vec![false; findings.len()];
     for (file, indices) in by_file {
         let io_err = |source| Error::Fix { path: file.clone(), source };
         let original = fs::read_to_string(&file).map_err(io_err)?;
         let mut text = original.clone();
         let mut replaces: Vec<Replace<'_>> = Vec::new();
         for &i in &indices {
-            let Some(fix) = fix_of(&result.findings[i].kind) else { continue };
+            let Some(fix) = fix_of(&findings[i].kind) else { continue };
             let skip = |why: &str| {
                 warn!("Skipping fix '{}' to {}: {why}", fix.description, file.display());
             };
@@ -147,7 +171,7 @@ pub fn apply_fixes(result: &mut CheckResult) -> Result<usize> {
             fixed[r.finding] = !failed.contains(&r.finding);
         }
         for i in failed {
-            if let Some(fix) = fix_of(&result.findings[i].kind) {
+            if let Some(fix) = fix_of(&findings[i].kind) {
                 warn!("Skipping fix '{}' to {}: the text changed", fix.description, file.display());
             }
         }
@@ -156,10 +180,7 @@ pub fn apply_fixes(result: &mut CheckResult) -> Result<usize> {
             write_atomic(&file, &text).map_err(io_err)?;
         }
     }
-    let count = fixed.iter().filter(|f| **f).count();
-    let mut flags = fixed.into_iter();
-    result.findings.retain(|_| !flags.next().unwrap_or(false));
-    Ok(count)
+    Ok(fixed)
 }
 
 /// The fix a finding offers, if any.

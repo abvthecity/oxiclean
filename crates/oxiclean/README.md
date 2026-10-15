@@ -20,52 +20,41 @@ oxiclean <COMMAND> [OPTIONS]
 
 ## Commands
 
-### `bloat`
+Each command runs a group of rules; `.oxicleanrc.json` turns each rule on
+or off, and a rule that is off doesn't run.
 
-Detects excessive imports that can lead to large bundle sizes.
+| Command | Rules |
+|---|---|
+| `unused` | `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` |
+| `dependencies` | `dependencies`, `heavy-dependencies` (`warn` by default), `catalog`, `duplicate-versions` |
+| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat` |
+| `bloat` | `bloat`, `barrels` |
+| `depth`, `cycles`, `duplicates` | the rule of the same name |
 
 ```bash
-oxiclean bloat --root ./my-project
+oxiclean unused --root ./my-project
 ```
 
 **Options:**
 - `--root <PATH>` - Root directory to analyze (default: git root)
 - `-c, --config <FILE>` - Config file (default: `.oxicleanrc.json` in the root)
 - `--format <text|json|sarif>` - Output format
+- `--fix` - Apply the fixes the findings of every rule offer
 
-Thresholds, entry files and everything else are set in `.oxicleanrc.json`;
-see the [main README](../../README.md#configuration).
+Thresholds, severities, entry files and everything else are set in
+`.oxicleanrc.json`; see the [main README](../../README.md#configuration).
 
-See [crates/oxiclean_bloat/README.md](../oxiclean_bloat/README.md) for details.
+## Adding New Rules
 
-## Adding New Tools
+1. Add the rule to a library crate, with a function that runs it and
+   returns a `CheckResult`
+2. Add its name to `Rules` in `crates/oxiclean_core/src/settings.rs`, and
+   its default severity to `default_severity` if it isn't `error`
+3. Run it from the command function of its crate (such as
+   `run_typecheck_command`), which skips it when the config turns it off
 
-1. Create a library crate with a `Config` struct that derives `clap::Parser`
-2. Add the crate as a dependency in `crates/oxiclean/Cargo.toml`
-3. Add a new variant to the `Commands` enum
-4. Handle the command in the match statement
-
-**Example:**
-
-```rust
-// In crates/my_tool/src/lib.rs
-#[derive(Debug, Clone, Parser)]
-pub struct Config {
-    #[arg(long)]
-    pub input: String,
-}
-
-pub fn run(cfg: Config) -> anyhow::Result<()> {
-    // Tool logic
-    Ok(())
-}
-
-// In crates/oxiclean/src/main.rs
-enum Commands {
-    ImportBloat(oxiclean_bloat::Config),
-    MyTool(my_tool::Config),
-}
-```
+A new command is a variant of the `Commands` enum in
+`crates/oxiclean/src/main.rs` whose `run` returns a `CommandResult`.
 
 ## License
 

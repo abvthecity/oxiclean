@@ -8,75 +8,33 @@ A Rust monorepo for code quality and analysis tools for JavaScript/TypeScript pr
 # Install
 cargo install --path crates/oxiclean
 
-# Run import bloat checker
-oxiclean bloat --root ./my-project
+# Find exports, types and enum and namespace members that nothing uses
+oxiclean unused --root ./my-project
 
-# Run import depth checker
-oxiclean depth --root ./my-project
-
-# Find barrel files that pull in too many modules
-oxiclean barrels --root ./my-project
-
-# Find circular imports
-oxiclean cycles --root ./my-project
-
-# Find modules that export the same thing twice
-oxiclean duplicates --root ./my-project
-
-# Find exports and exported types that nothing imports
-oxiclean unused-exports --root ./my-project
-oxiclean unused-types --root ./my-project
-
-# Find members of used enums and namespaces that nothing uses
-oxiclean unused-enum-members --root ./my-project
-oxiclean unused-namespace-members --root ./my-project
-
-# Find package.json dependencies and devDependencies that nothing imports or runs
+# Find unused packages (errors), heavy packages (warnings), unused pnpm catalog
+# entries and packages the lockfile installs at more than one version
 oxiclean dependencies --root ./my-project
 
-# Find pnpm catalog entries that no package.json refers to
-oxiclean catalog --root ./my-project
+# Find tsconfig setups that slow type checking: build output and overlapping
+# programs, project references, slow compiler options, @types, declarations,
+# large literals and huge declaration imports
+oxiclean typecheck --root ./my-project
 
-# Find installed packages whose import pulls in too many modules
-oxiclean heavy-dependencies --root ./my-project
+# Find imports and barrel files that pull in too many modules
+oxiclean bloat --root ./my-project
 
-# Find packages the lockfile installs at more than one version
-oxiclean duplicate-versions --root ./my-project
+# Find excessive import depth, circular imports, and modules that export the
+# same thing twice
+oxiclean depth --root ./my-project
+oxiclean cycles --root ./my-project
+oxiclean duplicates --root ./my-project
 
-# Find files a tsconfig type-checks that nobody needs checked, such as build output
-oxiclean program-files --root ./my-project
-
-# Find files more than one tsconfig type-checks
-oxiclean overlap --root ./my-project
-
-# Find project references that don't match what packages import
-oxiclean references --root ./my-project
-
-# Find compiler options that slow every tsc run, such as skipLibCheck left unset
-oxiclean tsconfig --root ./my-project
-
-# Find programs that load @types packages nothing declares
-oxiclean ambient-types --root ./my-project
-
-# Find packages that could emit .d.ts files without type-checking, and JSR slow types
-oxiclean isolated-declarations --root ./my-project
-
-# Find large literals and .json imports that tsc infers types for
-oxiclean large-literals --root ./my-project
-
-# Find package imports that load huge declaration trees
-oxiclean type-bloat --root ./my-project
-
-# Apply the fixes a check offers
-oxiclean program-files --fix --root ./my-project
+# Apply the fixes the findings offer
+oxiclean typecheck --fix --root ./my-project
 
 # Get help
 oxiclean --help
-oxiclean bloat --help
-oxiclean depth --help
-oxiclean cycles --help
-oxiclean duplicates --help
-oxiclean unused-exports --help
+oxiclean unused --help
 ```
 
 ## Development
@@ -107,6 +65,29 @@ oxiclean/
 
 ## Tools
 
+Each command runs a group of rules, and `.oxicleanrc.json` turns each rule
+on or off. A rule that is `"off"` doesn't run at all, so turning off
+`heavy-dependencies` keeps `oxiclean dependencies` from parsing
+`node_modules`. Rule names in the config file are the names below.
+
+| Command | Rules |
+|---|---|
+| `unused` | `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` |
+| `dependencies` | `dependencies`, `heavy-dependencies`, `catalog`, `duplicate-versions` |
+| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat` |
+| `bloat` | `bloat`, `barrels` |
+| `depth` | `depth` |
+| `cycles` | `cycles` |
+| `duplicates` | `duplicates` |
+
+Every rule is on by default with `error` severity, except
+`heavy-dependencies`, which defaults to `warn`: a heavy package is worth a
+look but may be worth its weight. A severity in the config file wins over
+the default. Rules of one command share their work where they can: the
+`unused` rules share one module graph and one pass over its uses, `bloat`
+and `barrels` share a graph, and the `typecheck` rules read the tsconfig
+files once.
+
 The command line only says where to look and how to print. Everything else,
 including thresholds, entry files and ignore patterns, is set in
 [`.oxicleanrc.json`](#configuration).
@@ -122,7 +103,7 @@ The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 10
 
 `cycles` reports every cycle, so its threshold (the number of files in a cycle) defaults to 1. `duplicates` reports every export with a second name, so its threshold (the number of names) defaults to 2. `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members`, `dependencies` and `catalog` report every unused export, member, package or catalog entry and have no threshold.
 
-Every check exits with status 1 when a finding with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
+Every command exits with status 1 when a finding of any of its rules with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
 ### Import Bloat Checker
 
@@ -160,9 +141,9 @@ Each finding names how many modules the barrel re-exports from and how many
 files import it; importing the module that defines a name directly skips
 the rest.
 
-**Usage:**
+**Usage** (`barrels` runs with `bloat`):
 ```bash
-oxiclean barrels --root ./my-project
+oxiclean bloat --root ./my-project
 ```
 
 **Example Output:**
@@ -283,10 +264,9 @@ files, and declaration files. Files no entry reaches aren't checked. See the
 [checker's README](crates/oxiclean_unused_exports/README.md) for what counts
 as a use and where oxiclean differs from knip.
 
-**Usage:**
+**Usage** (both run with `unused`):
 ```bash
-oxiclean unused-exports --root ./my-project
-oxiclean unused-types --root ./my-project
+oxiclean unused --root ./my-project
 ```
 
 **Example Output:**
@@ -315,10 +295,9 @@ export enum Color {
 }
 ```
 
-**Usage:**
+**Usage** (both run with `unused`):
 ```bash
-oxiclean unused-enum-members --root ./my-project
-oxiclean unused-namespace-members --root ./my-project
+oxiclean unused --root ./my-project
 ```
 
 ### Unused Dependencies Checker
@@ -351,9 +330,11 @@ those import in turn; only runtime imports count. Findings point at the
 package's line in the `package.json` that lists it and say how many files
 import it.
 
-**Usage:**
+Findings are warnings unless the config file sets the rule to `error`.
+
+**Usage** (runs with `dependencies`):
 ```bash
-oxiclean heavy-dependencies --root ./my-project
+oxiclean dependencies --root ./my-project
 ```
 
 **Example Output:**
@@ -361,7 +342,7 @@ oxiclean heavy-dependencies --root ./my-project
 ⚠ Heavy dependencies detected (threshold: 100 modules)
 
 package.json
-└──  package 'date-fns', imported by 12 files (pulls in 302 modules)
+└──  package 'date-fns', imported by 12 files (pulls in 302 modules) [warn]
 ```
 
 ### Duplicate Package Versions Checker
@@ -372,9 +353,9 @@ versions (default 2). Each finding lists the versions, lowest first, and
 points at the package's first entry in the lockfile. pnpm's peer variants
 of one version count once.
 
-**Usage:**
+**Usage** (runs with `dependencies`):
 ```bash
-oxiclean duplicate-versions --root ./my-project
+oxiclean dependencies --root ./my-project
 ```
 
 **Example Output:**
@@ -393,12 +374,14 @@ that no `package.json` in the workspace refers to with `catalog:` or
 `catalog:<name>`, and no `overrides` entry uses, like knip's `catalog`.
 Findings point at the entry's line in `pnpm-workspace.yaml`.
 
-**Usage:**
+**Usage** (runs with `dependencies`):
 ```bash
-oxiclean catalog --root ./my-project
+oxiclean dependencies --root ./my-project
 ```
 
 ### Program Files Checker
+
+This and the checkers below run with `oxiclean typecheck`.
 
 `tsc` parses, binds and type-checks every file in a program. `program-files`
 reads every `tsconfig*.json` and `jsconfig*.json` as `tsc` does (following
@@ -653,7 +636,11 @@ apply settings to some files. Every key is optional.
     "bloat": ["error", { "threshold": 300, "ignorePatterns": ["scripts/**"] }],
     "depth": "off",
     // Only report cycles of 3 or more files
-    "cycles": ["warn", { "threshold": 3 }]
+    "cycles": ["warn", { "threshold": 3 }],
+    // `oxiclean unused` skips this rule; the other three still run
+    "unused-types": "off",
+    // Fail the run on heavy packages instead of warning
+    "heavy-dependencies": ["error", { "threshold": 200 }]
   },
   // Later overrides win. `packages` matches workspace package names (globs
   // allowed) and `files` matches paths relative to the root; when both are
@@ -672,7 +659,8 @@ apply settings to some files. Every key is optional.
 ```
 
 Unknown keys and rule names are errors, so a typo can't silently do nothing.
-A rule listed with only a severity keeps its default threshold.
+A rule listed with only a severity keeps its default threshold. A rule not
+listed is on, at `error`, or at `warn` for `heavy-dependencies`.
 
 [`configuration_schema.json`](configuration_schema.json) is a JSON schema for
 the file, generated from the Rust types; point `$schema` at it for completion
@@ -715,35 +703,62 @@ off, and `true` turns one on.
 
 ## Fixes
 
-With `--fix`, a check applies the fixes its findings offer and reports
-only what is left. A fix is offered only when it needs no decision, such
+With `--fix`, a command applies the fixes the findings of all its rules
+offer and reports only what is left. A fix is offered only when it needs no decision, such
 as adding build output to a tsconfig's `exclude`; findings that have one
 say `fixable with --fix` in the text report and carry a `fix` in JSON.
 Fixes to JSON files keep their comments and formatting.
 
 ## Output formats
 
-`--format text` (the default) prints the report shown above.
+`--format text` (the default) prints a section for each rule with
+findings, as shown above, then a line for each rule without, then one
+summary for the command:
 
-`--format json` prints one JSON document with a `summary` (files analysed,
-error and warning counts, import resolution) and every finding with its
-`rule`, `severity`, `file` (relative to the root, with `/`), `line`,
-`package`, `request`, `resolved`, `value`, `threshold` and a `message`.
+```
+⚠ Unused exports detected
+
+src/button.ts
+└──  export 'unusedHelper' (never imported)
+
+────────────────────────────────────────────────────────────
+Summary
+  Total violations: 1
+  Top 1 offenders:
+    1. export 'unusedHelper' (never imported) - src/button.ts
+
+✓ No unused exported types detected.
+✓ No unused enum members detected.
+✓ No unused namespace members detected.
+
+● Finished in 19ms on 2 files (using 8 threads).
+● Ran 4 rules (unused-exports, unused-types, unused-enum-members, unused-namespace-members): 1 error, 0 warnings.
+● Resolved 1 of 1 imports (100.0%), 0 built-ins skipped.
+```
+
+`--format json` prints one JSON document with the `command`, an entry in
+`rules` for each rule that ran (its `severity` and `threshold` outside any
+override, and its counts of findings, errors and warnings), a `summary`
+(files analysed, error and warning counts, import resolution) and every
+finding with its `rule`, `severity`, `file` (relative to the root, with
+`/`), `line`, `package`, `request`, `resolved`, `value`, `threshold` and a
+`message`.
 
 `--format sarif` prints a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 log, which GitHub code scanning and other tools can show inline on pull requests:
 
 ```yaml
-- run: oxiclean bloat --format sarif > oxiclean.sarif || true
+- run: oxiclean unused --format sarif > oxiclean.sarif || true
 - uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: oxiclean.sarif
 ```
 
-Each rule's log has its own code-scanning category (`oxiclean/<rule>/`), so
-uploading several rules for one commit keeps every rule's alerts. Results
-carry `partialFingerprints` that ignore line numbers, so an alert stays the
-same alert when code above it moves.
+A command's log has one run that lists every rule that ran, and each
+result names its rule. Each command has its own code-scanning category
+(`oxiclean/<command>/`), so uploading several commands for one commit keeps
+every command's alerts. Results carry `partialFingerprints` that ignore line
+numbers, so an alert stays the same alert when code above it moves.
 
 ## Debugging & Logging
 

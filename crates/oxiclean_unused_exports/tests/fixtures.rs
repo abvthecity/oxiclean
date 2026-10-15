@@ -7,9 +7,31 @@ use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
 use oxiclean_unused_exports::{
-    CheckResult, Config, FindingKind, run_unused_enum_members_check, run_unused_exports_check,
-    run_unused_namespace_members_check, run_unused_types_check,
+    CheckResult, Config, FindingKind, Unused, run_unused_command, run_unused_enum_members_check,
+    run_unused_exports_check, run_unused_namespace_members_check, run_unused_types_check,
 };
+
+/// The `unused` command shares one graph between its rules, built to read
+/// members when any member rule is on; each rule must find what it finds
+/// on its own.
+#[test]
+fn the_unused_command_matches_each_rule() {
+    for entry in std::fs::read_dir(fixture("")).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let cfg = Config { common: CommonArgs::with_root(&path) };
+        let command = run_unused_command(&cfg).expect("fixture analyses");
+        let rules: Vec<&str> = command.rules.iter().map(|r| r.rule).collect();
+        assert_eq!(rules, Unused::ALL.map(Unused::rule), "{name}");
+        let alone = [exports(&name), types(&name), enum_members(&name), namespace_members(&name)];
+        for (r, alone) in command.rules.iter().zip(alone) {
+            assert_eq!(lines(&r.result), alone, "{name}: {}", r.rule);
+        }
+    }
+}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)

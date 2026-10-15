@@ -19,11 +19,11 @@ export type Size = 'sm' | 'lg';   // reported by unused-types
 ## Usage
 
 ```bash
-oxiclean unused-exports --root ./my-project
-oxiclean unused-types --root ./my-project
-oxiclean unused-enum-members --root ./my-project
-oxiclean unused-namespace-members --root ./my-project
+oxiclean unused --root ./my-project
 ```
+
+`oxiclean unused` runs the four rules from one module graph, each unless
+`.oxicleanrc.json` turns it off (`"unused-types": "off"`, say).
 
 ### Options
 

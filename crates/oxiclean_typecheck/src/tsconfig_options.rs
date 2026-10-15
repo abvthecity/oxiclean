@@ -23,7 +23,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Workspace,
     fix::{Fix, FixOp},
     jsonc_tree::Segment,
 };
@@ -56,11 +56,15 @@ const DEBUG_CONFIG_WORDS: &[&str] = &["debug", "diag", "explain", "trace"];
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_tsconfig_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {TSCONFIG_RULE} check");
     let workspace = cfg.common.workspace()?;
+    run_on(&workspace, &TsConfigs::load(&workspace.project))
+}
+
+/// Runs the check on `workspace`, whose tsconfig files are `configs`.
+pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
+    info!("Starting {TSCONFIG_RULE} check");
     let policy = workspace.policy(TSCONFIG_RULE, DEFAULT_THRESHOLD)?;
-    let configs = TsConfigs::load(&workspace.project);
-    let findings = check(&workspace.project, &configs);
+    let findings = check(&workspace.project, configs);
     info!("{TSCONFIG_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, configs.configs.len()))
 }

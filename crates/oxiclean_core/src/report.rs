@@ -384,6 +384,8 @@ pub struct CheckResult {
     pub resolution: ResolutionStats,
     /// The rule's threshold outside any override, for the report heading.
     pub threshold: usize,
+    /// The rule's severity outside any override.
+    pub severity: Severity,
 }
 
 impl CheckResult {
@@ -391,6 +393,94 @@ impl CheckResult {
     #[must_use]
     pub fn error_count(&self) -> usize {
         self.findings.iter().filter(|f| f.severity == Severity::Error).count()
+    }
+}
+
+/// What one rule of a command found.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RuleResult {
+    /// The rule's name in `.oxicleanrc.json`, e.g. `unused-types`.
+    pub rule: &'static str,
+    /// How its findings are worded.
+    pub style: ReportStyle,
+    pub result: CheckResult,
+}
+
+impl RuleResult {
+    #[must_use]
+    pub fn new(rule: &'static str, style: ReportStyle, result: CheckResult) -> Self {
+        Self { rule, style, result }
+    }
+}
+
+/// The output of a command: what each of its rules that is on found. Rules
+/// the config file turns off don't run and aren't listed.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct CommandResult {
+    /// Canonical project root the rules ran on.
+    pub root: PathBuf,
+    /// One entry per rule that ran, in the command's order.
+    pub rules: Vec<RuleResult>,
+}
+
+impl CommandResult {
+    /// A command on `root` that has run no rule yet.
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
+        Self { root, rules: Vec::new() }
+    }
+
+    /// A command of one rule.
+    #[must_use]
+    pub fn single(rule: &'static str, style: ReportStyle, result: CheckResult) -> Self {
+        Self { root: result.root.clone(), rules: vec![RuleResult::new(rule, style, result)] }
+    }
+
+    /// Adds what `rule` found.
+    pub fn push(&mut self, rule: &'static str, style: ReportStyle, result: CheckResult) {
+        self.rules.push(RuleResult::new(rule, style, result));
+    }
+
+    /// Number of findings across every rule.
+    #[must_use]
+    pub fn finding_count(&self) -> usize {
+        self.rules.iter().map(|r| r.result.findings.len()).sum()
+    }
+
+    /// Number of findings with error severity across every rule; a run with
+    /// any fails.
+    #[must_use]
+    pub fn error_count(&self) -> usize {
+        self.rules.iter().map(|r| r.result.error_count()).sum()
+    }
+
+    /// The most files any rule analysed. Rules that share a module graph
+    /// analyse the same files, so this is the largest set the command read.
+    #[must_use]
+    pub fn files_analyzed(&self) -> usize {
+        self.rules.iter().map(|r| r.result.files_analyzed).max().unwrap_or(0)
+    }
+
+    /// The files any rule could not parse, each once, by path.
+    #[must_use]
+    pub fn parse_failures(&self) -> Vec<&ParseFailure> {
+        let mut failures: BTreeMap<&Path, &ParseFailure> = BTreeMap::new();
+        for f in self.rules.iter().flat_map(|r| &r.result.parse_failures) {
+            failures.entry(&f.path).or_insert(f);
+        }
+        failures.into_values().collect()
+    }
+
+    /// The import resolution of the rule that resolved the most imports.
+    #[must_use]
+    pub fn resolution(&self) -> ResolutionStats {
+        self.rules
+            .iter()
+            .map(|r| r.result.resolution)
+            .max_by_key(|r| r.resolved + r.unresolved)
+            .unwrap_or_default()
     }
 }
 
@@ -679,28 +769,73 @@ fn print_summary<W: Write>(
     Ok(())
 }
 
-/// Prints the closing line, plus a note about files that could not be parsed.
+/// Prints what every rule of `command` found: a section for each rule with
+/// findings, then the success line of each rule without, then the closing
+/// lines.
+///
+/// # Errors
+/// Returns any error from writing to `writer`.
+pub fn print_command<W: Write>(
+    writer: &mut W,
+    command: &str,
+    result: &CommandResult,
+    elapsed_ms: u128,
+    threads: usize,
+    ctx: ReportContext<'_>,
+) -> io::Result<()> {
+    let (found, clean): (Vec<&RuleResult>, Vec<&RuleResult>) =
+        result.rules.iter().partition(|r| !r.result.findings.is_empty());
+    for (i, r) in found.iter().enumerate() {
+        if i > 0 {
+            writeln!(writer)?;
+        }
+        print_findings(writer, &r.result.findings, &r.style, r.result.threshold, ctx)?;
+    }
+    if !found.is_empty() && !clean.is_empty() {
+        writeln!(writer)?;
+    }
+    for r in clean {
+        print_ok(writer, &r.style, r.result.threshold)?;
+    }
+    if result.rules.is_empty() {
+        writeln!(
+            writer,
+            "{} The config file turns off every rule {command} runs.",
+            "⚠".yellow().bold()
+        )?;
+    }
+    print_finished(writer, result, elapsed_ms, threads, ctx)
+}
+
+/// `n` and `noun`, plural unless `n` is 1.
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 { format!("1 {noun}") } else { format!("{n} {noun}s") }
+}
+
+/// Prints the closing line, plus a note about files that could not be parsed
+/// and how many imports resolved.
 ///
 /// # Errors
 /// Returns any error from writing to `writer`.
 pub fn print_finished<W: Write>(
     writer: &mut W,
-    result: &CheckResult,
+    result: &CommandResult,
     elapsed_ms: u128,
     threads: usize,
     ctx: ReportContext<'_>,
 ) -> io::Result<()> {
-    if !result.parse_failures.is_empty() {
+    let failures = result.parse_failures();
+    if !failures.is_empty() {
         writeln!(
             writer,
             "\n{} {} file(s) could not be parsed; their imports were skipped:",
             "⚠".yellow(),
-            result.parse_failures.len().to_string().yellow()
+            failures.len().to_string().yellow()
         )?;
-        for failure in result.parse_failures.iter().take(5) {
+        for failure in failures.iter().take(5) {
             writeln!(writer, "    {}", ctx.display(&failure.path).dimmed())?;
         }
-        if result.parse_failures.len() > 5 {
+        if failures.len() > 5 {
             writeln!(writer, "    ... (set RUST_LOG=warn for the full list)")?;
         }
     }
@@ -709,8 +844,36 @@ pub fn print_finished<W: Write>(
         "\n{} Finished in {}ms on {} files (using {} threads).",
         "●".bright_blue(),
         elapsed_ms.to_string().cyan(),
-        result.files_analyzed.to_string().cyan(),
+        result.files_analyzed().to_string().cyan(),
         threads.to_string().cyan()
+    )?;
+    if result.rules.len() > 1 {
+        let errors = result.error_count();
+        let names: Vec<&str> = result.rules.iter().map(|r| r.rule).collect();
+        writeln!(
+            writer,
+            "{} Ran {} ({}): {}, {}.",
+            "●".bright_blue(),
+            count(result.rules.len(), "rule"),
+            names.join(", "),
+            count(errors, "error").cyan(),
+            count(result.finding_count() - errors, "warning").cyan()
+        )?;
+    }
+
+    let resolution = result.resolution();
+    // Checks of config files resolve no imports.
+    if resolution.resolved + resolution.unresolved == 0 {
+        return Ok(());
+    }
+    writeln!(
+        writer,
+        "{} Resolved {} of {} imports ({}%), {} built-ins skipped.",
+        "●".bright_blue(),
+        resolution.resolved.to_string().cyan(),
+        (resolution.resolved + resolution.unresolved).to_string().cyan(),
+        format!("{:.1}", resolution.resolved_percent()).cyan(),
+        resolution.builtin.to_string().cyan()
     )
 }
 

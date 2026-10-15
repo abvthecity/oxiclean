@@ -8,7 +8,7 @@ use std::{
     fs,
 };
 
-use oxiclean_core::{CheckResult, DuplicateVersions, Finding, FindingKind, Result};
+use oxiclean_core::{CheckResult, DuplicateVersions, Finding, FindingKind, Result, Workspace};
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -22,8 +22,12 @@ use crate::{
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_duplicate_versions_check(cfg: &Config) -> Result<CheckResult> {
+    run_on(&cfg.common.workspace()?)
+}
+
+/// Runs the duplicate versions check on `workspace`.
+pub(crate) fn run_on(workspace: &Workspace) -> Result<CheckResult> {
     info!("Starting {VERSIONS_RULE} check");
-    let workspace = cfg.common.workspace()?;
     let policy = workspace.policy(VERSIONS_RULE, VERSIONS_DEFAULT_THRESHOLD)?;
     let readers: [(&str, Reader); 2] =
         [("pnpm-lock.yaml", pnpm_installed), ("package-lock.json", npm_installed)];

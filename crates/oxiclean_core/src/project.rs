@@ -75,7 +75,7 @@ impl TsConfig {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Project {
     pub root: PathBuf,
     /// Directory containing a tsconfig.json -> its effective config

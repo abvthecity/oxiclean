@@ -48,14 +48,15 @@ pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
-    Barrel, CheckResult, CycleFinding, CycleStep, DuplicateExport, DuplicateVersions, ExportName,
-    Finding, FindingKind, HeavyDependency, Issue, Related, UnusedCatalogEntry, UnusedDependency,
-    UnusedExport,
+    Barrel, CheckResult, CommandResult, CycleFinding, CycleStep, DuplicateExport,
+    DuplicateVersions, ExportName, Finding, FindingKind, HeavyDependency, Issue, Related,
+    RuleResult, UnusedCatalogEntry, UnusedDependency, UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
 pub use settings::{
     ConfigFile, DependencyField, DependencyFields, PluginSettings, RulePolicy, Severity,
+    default_severity,
 };
 pub use types::{SpecKind, Specifier};
 pub use uses::{ModuleUses, Usage, Used};

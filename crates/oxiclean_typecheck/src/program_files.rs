@@ -15,7 +15,7 @@ use std::{
 };
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Related, Result,
+    CheckResult, Finding, FindingKind, Issue, Related, Result, Workspace,
     fix::{Fix, FixOp},
     jsonc_tree::Segment,
 };
@@ -39,11 +39,15 @@ const SAMPLES: usize = 3;
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_program_files_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {PROGRAM_FILES_RULE} check");
     let workspace = cfg.common.workspace()?;
+    run_on(&workspace, &TsConfigs::load(&workspace.project))
+}
+
+/// Runs the check on `workspace`, whose tsconfig files are `configs`.
+pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
+    info!("Starting {PROGRAM_FILES_RULE} check");
     let policy = workspace.policy(PROGRAM_FILES_RULE, DEFAULT_THRESHOLD)?;
-    let configs = TsConfigs::load(&workspace.project);
-    let findings = check(&configs);
+    let findings = check(configs);
     let programs = configs.programs().count();
     info!("{PROGRAM_FILES_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, programs))

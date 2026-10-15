@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use oxiclean_core::{
     Analysis, BuildOptions, CheckResult, Finding, FindingKind, HeavyDependency, ModuleGraph,
-    ModuleId, Result, RulePolicy,
+    ModuleId, Result, RulePolicy, Workspace,
 };
 use tracing::info;
 
@@ -21,9 +21,14 @@ use crate::{
 /// Fails if the project root can't be found, an entry glob is invalid, or no
 /// entry files are found.
 pub fn run_heavy_dependencies_check(cfg: &Config) -> Result<CheckResult> {
+    run_on(cfg.common.workspace()?)
+}
+
+/// Runs the heavy dependencies check on `workspace`.
+pub(crate) fn run_on(workspace: Workspace) -> Result<CheckResult> {
     info!("Starting {HEAVY_RULE} check");
     let analysis =
-        cfg.common.analyze_package_entries(BuildOptions::default().follow_node_modules(true))?;
+        workspace.analyze_package_entries(BuildOptions::default().follow_node_modules(true))?;
     let policy = analysis.policy(HEAVY_RULE, HEAVY_DEFAULT_THRESHOLD)?;
     Ok(check_heavy_dependencies(&analysis, &policy))
 }

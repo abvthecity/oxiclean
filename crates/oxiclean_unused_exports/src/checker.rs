@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
 use oxiclean_core::{
-    Analysis, BuildOptions, CheckResult, Export, ExportForm, ExportKind, ExportMember, Finding,
-    FindingKind, Module, ModuleGraph, ModuleId, Result, RulePolicy, UnusedExport, Used,
+    Analysis, BuildOptions, CheckResult, CommandResult, Export, ExportForm, ExportKind,
+    ExportMember, Finding, FindingKind, Module, ModuleGraph, ModuleId, Result, RulePolicy,
+    UnusedExport, Used, report::ReportStyle,
 };
 use tracing::info;
 
 use crate::config::{
-    Config, DEFAULT_THRESHOLD, UNUSED_ENUM_MEMBERS_RULE, UNUSED_EXPORTS_RULE,
-    UNUSED_NAMESPACE_MEMBERS_RULE, UNUSED_TYPES_RULE,
+    Config, DEFAULT_THRESHOLD, UNUSED_ENUM_MEMBERS_RULE, UNUSED_ENUM_MEMBERS_STYLE,
+    UNUSED_EXPORTS_RULE, UNUSED_EXPORTS_STYLE, UNUSED_NAMESPACE_MEMBERS_RULE,
+    UNUSED_NAMESPACE_MEMBERS_STYLE, UNUSED_TYPES_RULE, UNUSED_TYPES_STYLE,
 };
 
 /// Tags that keep an export out of the report, as in knip.
@@ -28,6 +30,10 @@ pub enum Unused {
 }
 
 impl Unused {
+    /// Every rule, in the order the `unused` command runs them.
+    pub const ALL: [Self; 4] =
+        [Self::Exports, Self::Types, Self::EnumMembers, Self::NamespaceMembers];
+
     /// The rule's name in `.oxicleanrc.json`.
     #[must_use]
     pub fn rule(self) -> &'static str {
@@ -38,6 +44,54 @@ impl Unused {
             Self::NamespaceMembers => UNUSED_NAMESPACE_MEMBERS_RULE,
         }
     }
+
+    /// How the rule's findings are worded in the terminal report.
+    #[must_use]
+    pub fn style(self) -> ReportStyle {
+        match self {
+            Self::Exports => UNUSED_EXPORTS_STYLE,
+            Self::Types => UNUSED_TYPES_STYLE,
+            Self::EnumMembers => UNUSED_ENUM_MEMBERS_STYLE,
+            Self::NamespaceMembers => UNUSED_NAMESPACE_MEMBERS_STYLE,
+        }
+    }
+
+    /// Whether the rule reports members, which the graph must read.
+    fn members(self) -> bool {
+        matches!(self, Self::EnumMembers | Self::NamespaceMembers)
+    }
+}
+
+/// Runs each of the rules in [`Unused::ALL`] the config file leaves on,
+/// from one module graph and one pass over its uses. Rules that are off
+/// don't run.
+///
+/// # Errors
+/// As for [`run_unused_exports_check`].
+pub fn run_unused_command(cfg: &Config) -> Result<CommandResult> {
+    let workspace = cfg.common.workspace()?;
+    let mut out = CommandResult::new(workspace.root.clone());
+    let on: Vec<Unused> = Unused::ALL.into_iter().filter(|w| workspace.enabled(w.rule())).collect();
+    if on.is_empty() {
+        info!("Every unused rule is off");
+        return Ok(out);
+    }
+    let analysis =
+        workspace.analyze_package_entries(build_options(on.iter().any(|w| w.members())))?;
+    let usage = ExportUsage::new(&analysis.graph, &analysis.entries);
+    for which in on {
+        let policy = analysis.policy(which.rule(), DEFAULT_THRESHOLD)?;
+        out.push(which.rule(), which.style(), check_usage(&analysis, &usage, &policy, which));
+    }
+    Ok(out)
+}
+
+/// What the module graph of the checks of exports reads. Type-only and
+/// lazy imports use exports too, so they are resolved as well, and the
+/// files only they reach are analysed. Files no entry reaches are not
+/// analysed at all: they are unused files, not files with unused exports.
+fn build_options(members: bool) -> BuildOptions {
+    BuildOptions::default().resolve_passive(true).read_exports(true).read_members(members)
 }
 
 /// Runs the unused exports check described by `cfg`.
@@ -75,14 +129,7 @@ pub fn run_unused_namespace_members_check(cfg: &Config) -> Result<CheckResult> {
 
 fn run(cfg: &Config, which: Unused) -> Result<CheckResult> {
     info!("Starting {} check", which.rule());
-    // Type-only and lazy imports use exports too, so they are resolved as
-    // well, and the files only they reach are analysed. Files no entry
-    // reaches are not analysed at all: they are unused files, not files
-    // with unused exports.
-    let members = matches!(which, Unused::EnumMembers | Unused::NamespaceMembers);
-    let options =
-        BuildOptions::default().resolve_passive(true).read_exports(true).read_members(members);
-    let analysis = cfg.common.analyze_package_entries(options)?;
+    let analysis = cfg.common.analyze_package_entries(build_options(which.members()))?;
     let policy = analysis.policy(which.rule(), DEFAULT_THRESHOLD)?;
     Ok(check(&analysis, &policy, which))
 }
@@ -97,8 +144,24 @@ pub fn check(analysis: &Analysis, policy: &RulePolicy, which: Unused) -> CheckRe
         info!("{} is disabled", which.rule());
         return analysis.finish(policy, Vec::new());
     }
+    let usage = ExportUsage::new(&analysis.graph, &analysis.entries);
+    check_usage(analysis, &usage, policy, which)
+}
+
+/// As [`check`], with the uses of `analysis`'s graph already followed, so
+/// several rules can share them.
+#[must_use]
+pub fn check_usage(
+    analysis: &Analysis,
+    usage: &ExportUsage<'_>,
+    policy: &RulePolicy,
+    which: Unused,
+) -> CheckResult {
+    if policy.min_threshold().is_none() {
+        info!("{} is disabled", which.rule());
+        return analysis.finish(policy, Vec::new());
+    }
     let graph = &analysis.graph;
-    let usage = ExportUsage::new(graph, &analysis.entries);
     let findings: Vec<Finding> = match which {
         Unused::Exports | Unused::Types => usage
             .unused_exports()

@@ -229,7 +229,9 @@ impl PluginSettings {
 }
 
 /// Every rule oxiclean knows. Each is set to a severity, or to
-/// `[severity, options]`.
+/// `[severity, options]`. A rule the file doesn't set is on, at `error`,
+/// except `heavy-dependencies`, which is at `warn`. Each command runs a
+/// group of rules, and runs only the ones that are on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -277,7 +279,8 @@ pub struct Rules {
     pub barrels: Option<RuleSetting>,
     /// Third-party packages that pull in too many modules, counted through
     /// `node_modules`, reported on the package.json that lists them.
-    /// Default threshold: 100 modules.
+    /// Default threshold: 100 modules. Default severity: `warn`, as a heavy
+    /// package can be worth its weight.
     pub heavy_dependencies: Option<RuleSetting>,
     /// Packages `package-lock.json` or `pnpm-lock.yaml` installs at more
     /// than one version. Default threshold: 2 versions.
@@ -545,8 +548,17 @@ impl ConfigFile {
         Ok(())
     }
 
-    /// The settings of `rule`, with `default_threshold` where the file sets
-    /// none.
+    /// Whether `rule` is on for any file: on outside the overrides, or
+    /// turned on by one. A command skips the rules that aren't.
+    #[must_use]
+    pub fn enabled(&self, rule: &str) -> bool {
+        let setting = |rules: &Rules| rules.get(rule).and_then(|s| s.to_config().enabled);
+        setting(&self.rules) != Some(false)
+            || self.overrides.iter().any(|o| setting(&o.rules) == Some(true))
+    }
+
+    /// The settings of `rule`, with `default_threshold` and the rule's
+    /// [`default_severity`] where the file sets none.
     ///
     /// # Errors
     /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.
@@ -554,7 +566,7 @@ impl ConfigFile {
         let err = |message: String| Error::Config { path: CONFIG_FILE_NAME.into(), message };
         let mut base = ResolvedRule {
             enabled: true,
-            severity: Severity::Error,
+            severity: default_severity(rule),
             threshold: default_threshold,
             ignored: false,
             fields: DependencyFields::default(),
@@ -582,6 +594,17 @@ impl ConfigFile {
             .collect::<Result<Vec<_>, String>>()
             .map_err(err)?;
         Ok(RulePolicy { base, ignore: file_globs(&ignore).map_err(err)?, overrides })
+    }
+}
+
+/// The severity of `rule` when the config file sets none: `warn` for
+/// `heavy-dependencies`, whose findings are worth a look but not a failed
+/// run, and `error` for every other rule.
+#[must_use]
+pub fn default_severity(rule: &str) -> Severity {
+    match rule {
+        "heavy-dependencies" => Severity::Warn,
+        _ => Severity::Error,
     }
 }
 
@@ -795,6 +818,41 @@ mod tests {
         assert!(!cfg.policy("bloat", 1).unwrap().base().enabled);
         let depth = cfg.policy("depth", 1).unwrap().base();
         assert!(depth.enabled && depth.severity == Severity::Error);
+    }
+
+    #[test]
+    fn default_severities() {
+        let none = parse("{}").unwrap();
+        assert_eq!(none.policy("heavy-dependencies", 1).unwrap().base().severity, Severity::Warn);
+        assert_eq!(none.policy("dependencies", 1).unwrap().base().severity, Severity::Error);
+
+        // The file's severity wins, outside and inside overrides.
+        let cfg = parse(
+            r#"{
+                "rules": { "heavy-dependencies": "error", "dependencies": ["warn", {}] },
+                "overrides": [{ "files": ["legacy/**"], "rules": { "heavy-dependencies": "warn" } }]
+            }"#,
+        )
+        .unwrap();
+        let heavy = cfg.policy("heavy-dependencies", 1).unwrap();
+        assert_eq!(heavy.base().severity, Severity::Error);
+        assert_eq!(heavy.resolve(Path::new("legacy/package.json"), None).severity, Severity::Warn);
+        assert_eq!(cfg.policy("dependencies", 1).unwrap().base().severity, Severity::Warn);
+    }
+
+    #[test]
+    fn enabled_rules() {
+        let cfg = parse(
+            r#"{
+                "rules": { "bloat": "off", "depth": "off", "cycles": "warn" },
+                "overrides": [{ "files": ["a/**"], "rules": { "depth": "error" } }]
+            }"#,
+        )
+        .unwrap();
+        assert!(!cfg.enabled("bloat"));
+        assert!(cfg.enabled("depth"), "an override turns it on");
+        assert!(cfg.enabled("cycles"));
+        assert!(cfg.enabled("barrels"), "rules the file doesn't set are on");
     }
 
     const CFG: &str = r#"{

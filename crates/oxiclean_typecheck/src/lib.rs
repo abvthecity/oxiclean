@@ -24,8 +24,12 @@
 //!   their types slows `tsc`.
 //! - `type-bloat` ([`run_type_bloat_check`]): package imports that load
 //!   huge declaration trees.
+//!
+//! The `typecheck` command ([`run_typecheck_command`]) runs each of these
+//! rules the config file leaves on, reading the tsconfig files once.
 
 mod ambient_types;
+mod command;
 mod config;
 mod declarations;
 mod isolated_declarations;
@@ -40,6 +44,7 @@ mod type_bloat;
 mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
+pub use command::{RULES, run_typecheck_command};
 pub use config::{
     AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
     ISOLATED_DECLARATIONS_STYLE, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE,
