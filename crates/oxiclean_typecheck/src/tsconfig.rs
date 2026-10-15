@@ -61,7 +61,8 @@ pub struct TsConfigFile {
     pub extends: Vec<PathBuf>,
     /// Every config it extends, directly or not.
     pub ancestors: BTreeSet<PathBuf>,
-    /// Merged `compilerOptions`, with path options made absolute.
+    /// Merged `compilerOptions`, with path options and `paths` targets made
+    /// absolute.
     pub options: Map<String, Value>,
     /// Merged `include`, as absolute patterns, if any config set it.
     pub include: Option<Vec<String>>,
@@ -89,6 +90,8 @@ pub struct Reference {
     pub target: PathBuf,
     /// 1-based line of the entry.
     pub line: u32,
+    /// The entry as JSON, to remove it by.
+    pub value: Value,
 }
 
 impl TsConfigFile {
@@ -320,6 +323,33 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
         let is_path = PATH_OPTIONS.contains(&k.as_str()) || PATH_LIST_OPTIONS.contains(&k.as_str());
         options.insert(k.clone(), if is_path { resolve(d) } else { d.value.clone() });
     }
+    // `paths` targets are relative to `baseUrl`, or else to the config that
+    // sets `paths`.
+    if let Some(d) = merged.options.get("paths")
+        && let Value::Object(map) = &d.value
+    {
+        let base = options
+            .get("baseUrl")
+            .and_then(Value::as_str)
+            .map_or_else(|| d.dir.clone(), PathBuf::from);
+        let resolved: Map<String, Value> = map
+            .iter()
+            .map(|(k, targets)| {
+                let targets = targets
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|t| {
+                        let t = t.replace("${configDir}", &config_dir);
+                        Value::String(slashes(&path_clean::clean(base.join(t))))
+                    })
+                    .collect();
+                (k.clone(), Value::Array(targets))
+            })
+            .collect();
+        options.insert("paths".into(), Value::Object(resolved));
+    }
     let patterns = |d: &Option<Declared<Vec<String>>>| {
         d.as_ref().map(|d| {
             d.value
@@ -361,7 +391,8 @@ fn reference(doc: &JsoncDoc, dir: &Path, node: &Node) -> Option<Reference> {
     } else {
         target.join("tsconfig.json")
     };
-    Some(Reference { raw, target, line: doc.line(node.span.start) })
+    let value = doc.value(node)?;
+    Some(Reference { raw, target, line: doc.line(node.span.start), value })
 }
 
 /// Every config `path` extends, directly or not.

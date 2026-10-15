@@ -41,6 +41,20 @@ pub const OVERLAP_STYLE: ReportStyle = ReportStyle {
     ok_message: "No file is type-checked by more than one tsconfig.",
 };
 
+/// Name of the rule for project references that don't match imports.
+pub const REFERENCES_RULE: &str = "references";
+
+/// How reference findings are worded in the terminal report.
+pub const REFERENCES_STYLE: ReportStyle = ReportStyle {
+    description: "Project references that don't match what packages import, so packages are type-checked more than once",
+    heading: "Project references don't match imports",
+    threshold_unit: "",
+    value_label: |n| if n == 1 { "1 config".to_string() } else { format!("{n} configs") },
+    max_label: "",
+    max_unit: "",
+    ok_message: "Project references match imports.",
+};
+
 /// `1 file` or `n files`.
 fn files(n: usize) -> String {
     if n == 1 { "1 file".to_string() } else { format!("{n} files") }

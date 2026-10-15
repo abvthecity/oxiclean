@@ -77,6 +77,9 @@ enum Commands {
     /// Check for files more than one tsconfig program type-checks
     #[command(name = "overlap")]
     Overlap(oxiclean_typecheck::Config),
+    /// Check for project references that don't match what packages import
+    #[command(name = "references")]
+    References(oxiclean_typecheck::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -160,6 +163,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_typecheck::run_overlap_check(cfg)?,
             oxiclean_typecheck::OVERLAP_STYLE,
             oxiclean_typecheck::OVERLAP_RULE,
+        ),
+        Commands::References(cfg) => (
+            oxiclean_typecheck::run_references_check(cfg)?,
+            oxiclean_typecheck::REFERENCES_STYLE,
+            oxiclean_typecheck::REFERENCES_RULE,
         ),
     };
     let fixed =

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use oxiclean_core::CommonArgs;
 use oxiclean_typecheck::{
     CheckResult, Config, FindingKind, run_overlap_check, run_program_files_check,
+    run_references_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -92,4 +93,54 @@ fn bun() {
 fn deno() {
     assert!(program_files("deno").is_empty());
     assert!(overlap("deno").is_empty());
+}
+
+fn references(name: &str) -> Vec<String> {
+    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
+    summary(&run_references_check(&cfg).expect("fixture analyses"))
+}
+
+/// pnpm with project references: one of each kind of mismatch.
+#[test]
+fn references_pnpm() {
+    assert_eq!(
+        references("references-pnpm"),
+        [
+            "packages/app/tsconfig.json:5 stale-reference @acme/legacy (1) fix: remove { \"path\": \"../legacy\" } from \"references\"",
+            "packages/app/tsconfig.json:4 missing-reference @acme/ui (1) fix: add { \"path\": \"../ui\" } to \"references\"",
+            "packages/legacy/tsconfig.json:2 not-composite composite (1) fix: set \"compilerOptions.composite\": true",
+            "packages/x/tsconfig.json:1 reference-cycle {x},{y} (2)",
+            "tsconfig.json:7 missing-target ./packages/gone (1)",
+        ]
+        .map(|s| {
+            let root = fixture("references-pnpm").canonicalize().unwrap();
+            let p = |n: &str| root.join(format!("packages/{n}/tsconfig.json")).to_string_lossy().replace('\\', "/");
+            s.replace("{x}", &p("x")).replace("{y}", &p("y"))
+        })
+    );
+}
+
+/// npm without references: a package.json `types` pointing at source two
+/// packages import.
+#[test]
+fn references_npm() {
+    assert_eq!(
+        references("references-npm"),
+        ["packages/core/tsconfig.json:0 source-imports core (2)"]
+    );
+}
+
+/// Bun without references: a `paths` wildcard into each package's `src`.
+#[test]
+fn references_bun() {
+    assert_eq!(
+        references("references-bun"),
+        ["packages/c/tsconfig.json:0 source-imports @acme/c (2)"]
+    );
+}
+
+/// Deno has no tsconfig files, so no references.
+#[test]
+fn references_deno() {
+    assert!(references("references-deno").is_empty());
 }
