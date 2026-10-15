@@ -15,6 +15,11 @@ export default tseslint.config(
     },
   },
   {
+    // No tsconfig includes the config itself.
+    files: ['eslint.config.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
     files: ['**/*.test.ts'],
     rules: { 'import-x/no-cycle': 'off' },
   },

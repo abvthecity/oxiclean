@@ -28,6 +28,11 @@ const MAX_DEPTH: usize = 48;
 /// How many imports deep other modules are read.
 const MAX_MODULE_DEPTH: usize = 4;
 
+/// How many values a config may be read into, all told, before the rest
+/// is unknown: constants that name each other twice over grow
+/// exponentially.
+const MAX_NODES: usize = 200_000;
+
 /// Extensions tried when resolving a relative import, in order.
 const EXTENSIONS: &[&str] = &["", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".json"];
 
@@ -47,10 +52,14 @@ pub(crate) enum Val {
         path: String,
     },
     /// A call: the callee as written (`tseslint.config`), the package its
-    /// first name comes from, and the arguments.
+    /// first name comes from, and the arguments. A method called on a
+    /// constant made with `new`, as `compat.config(...)` after
+    /// `const compat = new FlatCompat()`, has the class's name in
+    /// `instance_of` and the package it comes from in `source`.
     Call {
         callee: String,
         source: Option<String>,
+        instance_of: Option<String>,
         args: Vec<Item>,
     },
     /// One of two values, as `a ? b : c` or `a || b`.
@@ -270,7 +279,8 @@ fn is_json(file: &Path) -> bool {
 }
 
 /// The JSON(C) document in `src`, read as a JS expression so that every
-/// value has a line. `None` when it isn't one.
+/// value has a line. Comments and trailing commas are allowed. `None`
+/// when it isn't one.
 pub(crate) fn json_value(src: &str) -> Option<Val> {
     let src = src.trim_start_matches('\u{feff}');
     // `(` keeps every line where it was.
@@ -281,19 +291,58 @@ pub(crate) fn json_value(src: &str) -> Option<Val> {
         return None;
     }
     let Statement::ExpressionStatement(s) = &ret.program.body[0] else { return None };
-    let mut ctx = Ctx { resolver: None, loaded: Loaded::default(), visiting: Vec::new() };
-    let mut reader = Reader {
-        lines: LineIndex::new(&wrapped),
-        consts: HashMap::new(),
-        imports: HashMap::new(),
-        dir: PathBuf::new(),
-        line_override: None,
-        module_depth: 0,
-        ctx: &mut ctx,
-    };
+    let mut ctx = Ctx::new(None);
+    let mut reader = Reader::new(&mut ctx, &wrapped, Module::default(), PathBuf::new(), None, 0);
     let v = reader.value(&s.expression, 0);
     // Only plain data counts as JSON.
     plain(&v).then_some(v)
+}
+
+/// As [`json_value`], for a document that must be strict JSON, comments
+/// aside, as ESLint 8 reads `.eslintrc.json` and package.json: a trailing
+/// comma makes it unreadable.
+pub(crate) fn strict_json_value(src: &str) -> Option<Val> {
+    let src = src.trim_start_matches('\u{feff}');
+    serde_json::from_str::<Value>(&without_comments(src)).ok()?;
+    json_value(src)
+}
+
+/// `src` with its `//` and `/* */` comments blanked out, strings kept.
+fn without_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                '\\' => out.extend(chars.next()),
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"', _) => {
+                in_string = true;
+                out.push(c);
+            }
+            ('/', Some('/')) => while chars.next_if(|&n| n != '\n').is_some() {},
+            ('/', Some('*')) => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Whether `v` is plain data, as JSON is.
@@ -312,7 +361,7 @@ pub(crate) fn load(file: &Path, resolver: &Resolver<'_>) -> Loaded {
         let value = fs::read_to_string(file).ok().and_then(|s| json_value(&s));
         return Loaded { value, packages: Vec::new() };
     }
-    let mut ctx = Ctx { resolver: Some(resolver), loaded: Loaded::default(), visiting: Vec::new() };
+    let mut ctx = Ctx::new(Some(resolver));
     let value = module_export(&mut ctx, file, None, None, 0);
     let mut loaded = ctx.loaded;
     loaded.value = value;
@@ -326,11 +375,19 @@ struct Ctx<'r> {
     loaded: Loaded,
     /// The modules being read, so imports that cycle end.
     visiting: Vec<PathBuf>,
+    /// How many more values may be read, of [`MAX_NODES`].
+    budget: usize,
+}
+
+impl<'r> Ctx<'r> {
+    fn new(resolver: Option<&'r Resolver<'r>>) -> Self {
+        Self { resolver, loaded: Loaded::default(), visiting: Vec::new(), budget: MAX_NODES }
+    }
 }
 
 /// What a module exports as `name`, or by default. `line` replaces the
 /// lines of everything read from another module with the line that
-/// imports it.
+/// imports it. A module that doesn't parse can't be read.
 fn module_export(
     ctx: &mut Ctx<'_>,
     file: &Path,
@@ -352,13 +409,15 @@ fn module_export(
     let source_type = SourceType::from_path(file).ok()?;
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, &src, source_type).parse();
-    if ret.panicked {
+    if ret.panicked || !ret.errors.is_empty() {
         return None;
     }
     ctx.visiting.push(file.to_path_buf());
     let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-    let out = read_program(ctx, &ret.program, &src, dir, name, line, module_depth);
-    ctx.visiting.pop();
+    let module = Module::collect(&ret.program, &mut ctx.loaded.packages);
+    let mut reader = Reader::new(ctx, &src, module, dir, line, module_depth);
+    let out = reader.export(name);
+    reader.ctx.visiting.pop();
     out
 }
 
@@ -381,125 +440,111 @@ fn relined(v: Val, line: u32) -> Val {
     }
 }
 
-fn read_program<'a>(
-    ctx: &mut Ctx<'_>,
-    program: &Program<'a>,
-    src: &str,
-    dir: PathBuf,
-    name: Option<&str>,
-    line_override: Option<u32>,
-    module_depth: usize,
-) -> Option<Val> {
-    let mut consts: HashMap<&str, &Expression<'a>> = HashMap::new();
-    let mut imports: HashMap<&str, (String, Option<String>)> = HashMap::new();
-    let mut exported: Option<&Expression<'a>> = None;
-    let mut named: HashMap<String, &Expression<'a>> = HashMap::new();
-    // `export { a as b }`: b → a.
-    let mut aliases: Vec<(String, String)> = Vec::new();
-    for stmt in &program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                let source = decl.source.value.to_string();
-                ctx.loaded.packages.push(source.clone());
-                for spec in decl.specifiers.iter().flatten() {
-                    match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                            let imported = match &s.imported {
-                                ModuleExportName::IdentifierName(n) => n.name.to_string(),
-                                ModuleExportName::IdentifierReference(n) => n.name.to_string(),
-                                ModuleExportName::StringLiteral(n) => n.value.to_string(),
-                            };
-                            let imported = (imported != "default").then_some(imported);
-                            imports.insert(s.local.name.as_str(), (source.clone(), imported));
-                        }
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                            imports.insert(s.local.name.as_str(), (source.clone(), None));
-                        }
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
-                            imports.insert(s.local.name.as_str(), (source.clone(), None));
-                        }
+/// The top-level declarations of a module that a config is read from.
+#[derive(Default)]
+struct Module<'s, 'a> {
+    consts: HashMap<&'s str, &'s Expression<'a>>,
+    /// Local name → package or path, and the name imported (`None` for
+    /// the default or namespace).
+    imports: HashMap<&'s str, (String, Option<String>)>,
+    /// `export default` or `module.exports =`.
+    exported: Option<&'s Expression<'a>>,
+    /// `export const x = ...`.
+    named: HashMap<String, &'s Expression<'a>>,
+    /// `export { a as b }`: b → a.
+    aliases: Vec<(String, String)>,
+}
+
+impl<'s, 'a> Module<'s, 'a> {
+    /// Reads the declarations of `program`, adding every package it
+    /// imports or requires to `packages`.
+    fn collect(program: &'s Program<'a>, packages: &mut Vec<String>) -> Self {
+        let mut m = Self::default();
+        for stmt in &program.body {
+            match stmt {
+                Statement::ImportDeclaration(decl) => {
+                    let source = decl.source.value.to_string();
+                    packages.push(source.clone());
+                    for spec in decl.specifiers.iter().flatten() {
+                        let (local, imported) = import_specifier(spec);
+                        m.imports.insert(local, (source.clone(), imported));
                     }
                 }
-            }
-            Statement::VariableDeclaration(decl) => declare(decl, &mut consts),
-            Statement::ExportDefaultDeclaration(decl) => {
-                exported = decl.declaration.as_expression();
-            }
-            Statement::ExportNamedDeclaration(decl) => {
-                if let Some(Declaration::VariableDeclaration(v)) = &decl.declaration {
-                    declare(v, &mut consts);
-                    for d in &v.declarations {
-                        if let (Some(n), Some(init)) = (d.id.get_identifier_name(), &d.init) {
-                            named.insert(n.to_string(), init);
+                Statement::VariableDeclaration(decl) => declare(decl, &mut m.consts),
+                Statement::ExportDefaultDeclaration(decl) => {
+                    m.exported = decl.declaration.as_expression();
+                }
+                Statement::ExportNamedDeclaration(decl) => {
+                    if let Some(Declaration::VariableDeclaration(v)) = &decl.declaration {
+                        declare(v, &mut m.consts);
+                        for d in &v.declarations {
+                            if let (Some(n), Some(init)) = (d.id.get_identifier_name(), &d.init) {
+                                m.named.insert(n.to_string(), init);
+                            }
                         }
                     }
+                    for s in &decl.specifiers {
+                        m.aliases.push((s.exported.name().to_string(), s.local.name().to_string()));
+                    }
                 }
-                for s in &decl.specifiers {
-                    aliases.push((s.exported.name().to_string(), s.local.name().to_string()));
+                Statement::ExpressionStatement(s) => {
+                    if let Some(right) = module_exports_assignment(&s.expression) {
+                        m.exported = Some(right);
+                    }
                 }
+                _ => {}
             }
-            Statement::ExpressionStatement(s) => {
-                if let Expression::AssignmentExpression(a) = &s.expression
-                    && a.left
-                        .as_member_expression()
-                        .is_some_and(|m| m.is_specific_member_access("module", "exports"))
-                {
-                    exported = Some(&a.right);
-                }
-            }
-            _ => {}
         }
-    }
-    // A constant changed after it is declared, as `config.push({...})`,
-    // isn't what its initializer says.
-    for stmt in &program.body {
-        if let Statement::ExpressionStatement(s) = stmt
-            && let Some(name) = mutated(&s.expression)
-        {
-            consts.remove(name);
-        }
-    }
-    // `require('x')` imports too.
-    for e in consts.values() {
-        if let Expression::CallExpression(c) = e.get_inner_expression()
-            && c.is_require_call()
-            && let Some(Argument::StringLiteral(s)) = c.arguments.first()
-        {
-            ctx.loaded.packages.push(s.value.to_string());
-        }
-    }
-    let mut reader = Reader {
-        lines: LineIndex::new(src),
-        consts,
-        imports,
-        dir,
-        line_override,
-        module_depth,
-        ctx,
-    };
-    match name {
-        None => {
-            if exported.is_none()
-                && let Some((_, local)) = aliases.iter().find(|(e, _)| e == "default")
+        // A constant changed after it is declared, as `config.push({...})`,
+        // isn't what its initializer says.
+        for stmt in &program.body {
+            if let Statement::ExpressionStatement(s) = stmt
+                && let Some(name) = mutated(&s.expression)
             {
-                exported = reader.consts.get(local.as_str()).copied();
-            }
-            Some(reader.value(exported?, 0))
-        }
-        Some(n) => {
-            let e = named.get(n).copied().or_else(|| {
-                let (_, local) = aliases.iter().find(|(e, _)| e == n)?;
-                reader.consts.get(local.as_str()).copied()
-            });
-            match e {
-                Some(e) => Some(reader.value(e, 0)),
-                // `module.exports = { n }`.
-                None => {
-                    let v = reader.value(exported?, 0);
-                    v.get(n).cloned()
-                }
+                m.consts.remove(name);
             }
         }
+        // `require('x')` imports too.
+        for e in m.consts.values() {
+            if let Expression::CallExpression(c) = e.get_inner_expression()
+                && c.is_require_call()
+                && let Some(Argument::StringLiteral(s)) = c.arguments.first()
+            {
+                packages.push(s.value.to_string());
+            }
+        }
+        m
+    }
+}
+
+/// The local name an import specifier binds, and the name it imports
+/// (`None` for the default export or the namespace).
+fn import_specifier<'s>(spec: &'s ImportDeclarationSpecifier<'_>) -> (&'s str, Option<String>) {
+    match spec {
+        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+            let imported = match &s.imported {
+                ModuleExportName::IdentifierName(n) => n.name.to_string(),
+                ModuleExportName::IdentifierReference(n) => n.name.to_string(),
+                ModuleExportName::StringLiteral(n) => n.value.to_string(),
+            };
+            (s.local.name.as_str(), (imported != "default").then_some(imported))
+        }
+        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => (s.local.name.as_str(), None),
+        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => (s.local.name.as_str(), None),
+    }
+}
+
+/// The right side of `module.exports = ...`.
+fn module_exports_assignment<'s, 'a>(e: &'s Expression<'a>) -> Option<&'s Expression<'a>> {
+    match e {
+        Expression::AssignmentExpression(a)
+            if a.left
+                .as_member_expression()
+                .is_some_and(|m| m.is_specific_member_access("module", "exports")) =>
+        {
+            Some(&a.right)
+        }
+        _ => None,
     }
 }
 
@@ -558,17 +603,59 @@ fn declare<'s, 'a>(
 
 struct Reader<'s, 'a, 'c, 'r> {
     lines: LineIndex,
-    consts: HashMap<&'s str, &'s Expression<'a>>,
-    imports: HashMap<&'s str, (String, Option<String>)>,
+    module: Module<'s, 'a>,
+    /// Constants already read, with how many values each took.
+    memo: HashMap<&'s str, (Val, usize)>,
     dir: PathBuf,
     line_override: Option<u32>,
     module_depth: usize,
     ctx: &'c mut Ctx<'r>,
 }
 
-impl<'a> Reader<'_, 'a, '_, '_> {
+impl<'s, 'a, 'c, 'r> Reader<'s, 'a, 'c, 'r> {
+    fn new(
+        ctx: &'c mut Ctx<'r>,
+        src: &str,
+        module: Module<'s, 'a>,
+        dir: PathBuf,
+        line_override: Option<u32>,
+        module_depth: usize,
+    ) -> Self {
+        Self {
+            lines: LineIndex::new(src),
+            module,
+            memo: HashMap::new(),
+            dir,
+            line_override,
+            module_depth,
+            ctx,
+        }
+    }
+
     fn line(&self, offset: u32) -> u32 {
         self.line_override.unwrap_or_else(|| self.lines.line(offset as usize))
+    }
+
+    /// What the module exports as `name`, or by default.
+    fn export(&mut self, name: Option<&str>) -> Option<Val> {
+        let local = |reader: &Self, exported: &str| {
+            let (_, local) = reader.module.aliases.iter().find(|(e, _)| e == exported)?;
+            reader.module.consts.get(local.as_str()).copied()
+        };
+        match name {
+            None => {
+                let exported = self.module.exported.or_else(|| local(self, "default"))?;
+                Some(self.value(exported, 0))
+            }
+            Some(n) => match self.module.named.get(n).copied().or_else(|| local(self, n)) {
+                Some(e) => Some(self.value(e, 0)),
+                // `module.exports = { n }`.
+                None => {
+                    let v = self.value(self.module.exported?, 0);
+                    v.get(n).cloned()
+                }
+            },
+        }
     }
 
     /// The value of package import `source`, or of the project module it
@@ -587,9 +674,10 @@ impl<'a> Reader<'_, 'a, '_, '_> {
     }
 
     fn value(&mut self, expr: &Expression<'a>, depth: usize) -> Val {
-        if depth > MAX_DEPTH {
+        if depth > MAX_DEPTH || self.ctx.budget == 0 {
             return Val::Unknown;
         }
+        self.ctx.budget -= 1;
         let line = self.line(expr.span().start);
         match expr.get_inner_expression() {
             Expression::StringLiteral(s) => Val::Str(s.value.to_string()),
@@ -600,66 +688,21 @@ impl<'a> Reader<'_, 'a, '_, '_> {
             Expression::NumericLiteral(n) => Val::Num(n.value),
             Expression::NullLiteral(_) => Val::Null,
             Expression::Identifier(id) if id.name == "undefined" => Val::Null,
-            Expression::ArrayExpression(a) => {
-                let mut items = Vec::new();
-                for el in &a.elements {
-                    match el {
-                        ArrayExpressionElement::SpreadElement(s) => items.push(Item {
-                            val: self.value(&s.argument, depth + 1),
-                            line: self.line(s.span.start),
-                            spread: true,
-                        }),
-                        ArrayExpressionElement::Elision(_) => {}
-                        e => {
-                            if let Some(e) = e.as_expression() {
-                                items.push(Item {
-                                    val: self.value(e, depth + 1),
-                                    line: self.line(e.span().start),
-                                    spread: false,
-                                });
-                            }
-                        }
-                    }
-                }
-                Val::Arr(items)
-            }
-            Expression::ObjectExpression(o) => {
-                let mut props = Vec::new();
-                for p in &o.properties {
-                    match p {
-                        ObjectPropertyKind::ObjectProperty(p) => {
-                            let key =
-                                p.key.static_name().map_or_else(|| "?".to_string(), |k| k.into());
-                            props.push(Prop {
-                                key,
-                                val: self.value(&p.value, depth + 1),
-                                line: self.line(p.span.start),
-                            });
-                        }
-                        ObjectPropertyKind::SpreadProperty(s) => {
-                            let line = self.line(s.span.start);
-                            match self.value(&s.argument, depth + 1) {
-                                Val::Obj(base) => props.extend(base),
-                                v => props.push(Prop { key: SPREAD.to_string(), val: v, line }),
-                            }
-                        }
-                    }
-                }
-                Val::Obj(props)
-            }
+            Expression::ArrayExpression(a) => self.array(a, depth),
+            Expression::ObjectExpression(o) => self.object(o, depth),
             Expression::CallExpression(c) if c.is_require_call() => match c.arguments.first() {
                 Some(Argument::StringLiteral(s)) => self.import(&s.value, None, line),
                 _ => Val::Unknown,
             },
             Expression::CallExpression(c) => {
-                let (callee, source) = self.callee(&c.callee);
+                let (callee, source, instance_of) = self.callee(&c.callee);
                 let args = self.arguments(&c.arguments, depth);
-                Val::Call { callee, source, args }
+                Val::Call { callee, source, instance_of, args }
             }
             Expression::NewExpression(n) => {
-                let (callee, source) = self.callee(&n.callee);
+                let (callee, source, instance_of) = self.callee(&n.callee);
                 let args = self.arguments(&n.arguments, depth);
-                Val::Call { callee: format!("new {callee}"), source, args }
+                Val::Call { callee: format!("new {callee}"), source, instance_of, args }
             }
             Expression::StaticMemberExpression(m) => {
                 let object = self.value(&m.object, depth + 1);
@@ -672,16 +715,7 @@ impl<'a> Reader<'_, 'a, '_, '_> {
                 }
                 _ => Val::Unknown,
             },
-            Expression::Identifier(id) => {
-                let name = id.name.as_str();
-                if let Some(e) = self.consts.get(name).copied() {
-                    return self.value(e, depth + 1);
-                }
-                match self.imports.get(name).cloned() {
-                    Some((source, imported)) => self.import(&source, imported.as_deref(), line),
-                    None => Val::Unknown,
-                }
-            }
+            Expression::Identifier(id) => self.identifier(id.name.as_str(), line, depth),
             Expression::ConditionalExpression(c) => Val::Either(
                 Box::new(self.value(&c.consequent, depth + 1)),
                 Box::new(self.value(&c.alternate, depth + 1)),
@@ -693,6 +727,80 @@ impl<'a> Reader<'_, 'a, '_, '_> {
             Expression::AwaitExpression(a) => self.value(&a.argument, depth + 1),
             _ => Val::Unknown,
         }
+    }
+
+    /// The value a name stands for: a constant, read once, or an import.
+    fn identifier(&mut self, name: &str, line: u32, depth: usize) -> Val {
+        if let Some((name, e)) = self.module.consts.get_key_value(name).map(|(k, e)| (*k, *e)) {
+            if let Some((v, size)) = self.memo.get(name) {
+                if self.ctx.budget < *size {
+                    self.ctx.budget = 0;
+                    return Val::Unknown;
+                }
+                self.ctx.budget -= size;
+                return v.clone();
+            }
+            let before = self.ctx.budget;
+            let v = self.value(e, depth + 1);
+            // A constant cut short by the depth limit is read again where
+            // it is shallower.
+            if depth < MAX_DEPTH / 2 {
+                self.memo.insert(name, (v.clone(), before - self.ctx.budget));
+            }
+            return v;
+        }
+        match self.module.imports.get(name).cloned() {
+            Some((source, imported)) => self.import(&source, imported.as_deref(), line),
+            None => Val::Unknown,
+        }
+    }
+
+    fn array(&mut self, a: &oxc_ast::ast::ArrayExpression<'a>, depth: usize) -> Val {
+        let mut items = Vec::new();
+        for el in &a.elements {
+            match el {
+                ArrayExpressionElement::SpreadElement(s) => items.push(Item {
+                    val: self.value(&s.argument, depth + 1),
+                    line: self.line(s.span.start),
+                    spread: true,
+                }),
+                ArrayExpressionElement::Elision(_) => {}
+                e => {
+                    if let Some(e) = e.as_expression() {
+                        items.push(Item {
+                            val: self.value(e, depth + 1),
+                            line: self.line(e.span().start),
+                            spread: false,
+                        });
+                    }
+                }
+            }
+        }
+        Val::Arr(items)
+    }
+
+    fn object(&mut self, o: &oxc_ast::ast::ObjectExpression<'a>, depth: usize) -> Val {
+        let mut props = Vec::new();
+        for p in &o.properties {
+            match p {
+                ObjectPropertyKind::ObjectProperty(p) => {
+                    let key = p.key.static_name().map_or_else(|| "?".to_string(), |k| k.into());
+                    props.push(Prop {
+                        key,
+                        val: self.value(&p.value, depth + 1),
+                        line: self.line(p.span.start),
+                    });
+                }
+                ObjectPropertyKind::SpreadProperty(s) => {
+                    let line = self.line(s.span.start);
+                    match self.value(&s.argument, depth + 1) {
+                        Val::Obj(base) => props.extend(base),
+                        v => props.push(Prop { key: SPREAD.to_string(), val: v, line }),
+                    }
+                }
+            }
+        }
+        Val::Obj(props)
     }
 
     fn arguments(&mut self, args: &[Argument<'a>], depth: usize) -> Vec<Item> {
@@ -712,9 +820,10 @@ impl<'a> Reader<'_, 'a, '_, '_> {
             .collect()
     }
 
-    /// A callee as written, as `tseslint.config`, and the package its
-    /// first name is imported from.
-    fn callee(&self, e: &Expression<'a>) -> (String, Option<String>) {
+    /// A callee as written, as `tseslint.config`, the package its first
+    /// name is imported from, and, when that name is a constant made with
+    /// `new X()`, X (whose package is then the source).
+    fn callee(&self, e: &Expression<'a>) -> (String, Option<String>, Option<String>) {
         let mut parts = Vec::new();
         let mut cur = e.get_inner_expression();
         loop {
@@ -726,10 +835,24 @@ impl<'a> Reader<'_, 'a, '_, '_> {
                 Expression::Identifier(id) => {
                     parts.push(id.name.to_string());
                     parts.reverse();
-                    let source = self.imports.get(id.name.as_str()).map(|(s, _)| s.clone());
-                    return (parts.join("."), source);
+                    let name = id.name.as_str();
+                    if let Some((s, _)) = self.module.imports.get(name) {
+                        return (parts.join("."), Some(s.clone()), None);
+                    }
+                    let class = match self.module.consts.get(name).map(|e| e.get_inner_expression())
+                    {
+                        Some(Expression::NewExpression(n)) => match n.callee.get_inner_expression()
+                        {
+                            Expression::Identifier(c) => Some(c.name.as_str()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let source =
+                        class.and_then(|c| self.module.imports.get(c)).map(|(s, _)| s.clone());
+                    return (parts.join("."), source, class.map(str::to_string));
                 }
-                _ => return (String::new(), None),
+                _ => return (String::new(), None, None),
             }
         }
     }
@@ -755,9 +878,14 @@ pub(crate) enum FixSite {
     /// its own with `indent` when the first element has one.
     Insert { start: usize, expected: String, indent: Option<String>, empty: bool },
     /// Patterns go after `expected`, the last pattern of an existing
-    /// global ignores array at `start`, or its `[` when it is empty.
-    Append { start: usize, expected: String, empty: bool },
+    /// global ignores array at `start`, or its `[` when it is empty;
+    /// `existing` are the patterns it has.
+    Append { start: usize, expected: String, empty: bool, existing: Vec<String> },
 }
+
+/// The elements of a config array, each with its expression unless it is
+/// spread, and the offset of the bracket or parenthesis before them.
+type Elements<'s, 'a> = (Vec<(Span, Option<&'s Expression<'a>>)>, usize);
 
 /// Where the flat config `src` of `file` can take global ignores, and its
 /// quote character, when its export is an array (or a call of
@@ -769,75 +897,16 @@ pub(crate) fn flat_fix_site(file: &Path, src: &str) -> Option<(FixSite, char)> {
     if !ret.errors.is_empty() {
         return None;
     }
-    let mut consts: HashMap<&str, &Expression<'_>> = HashMap::new();
-    let mut exported = None;
-    for stmt in &ret.program.body {
-        match stmt {
-            Statement::VariableDeclaration(decl) => declare(decl, &mut consts),
-            Statement::ExportDefaultDeclaration(decl) => {
-                exported = decl.declaration.as_expression()
-            }
-            Statement::ExpressionStatement(s) => {
-                if let Expression::AssignmentExpression(a) = &s.expression
-                    && a.left
-                        .as_member_expression()
-                        .is_some_and(|m| m.is_specific_member_access("module", "exports"))
-                {
-                    exported = Some(&a.right);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut e = exported?.get_inner_expression();
+    let module = Module::collect(&ret.program, &mut Vec::new());
+    let mut e = module.exported?.get_inner_expression();
     if let Expression::Identifier(id) = e {
-        e = consts.get(id.name.as_str())?.get_inner_expression();
+        e = module.consts.get(id.name.as_str())?.get_inner_expression();
     }
     let quote = if src.matches('\'').count() > src.matches('"').count() { '\'' } else { '"' };
-    // The elements, and the offset of the bracket or parenthesis before them.
-    let (elements, open): (Vec<(Span, Option<&Expression<'_>>)>, usize) = match e {
-        Expression::ArrayExpression(a) => (array_elements(a)?, a.span.start as usize),
-        Expression::CallExpression(c) if is_config_helper(&c.callee) => {
-            let single = match c.arguments.as_slice() {
-                [a] => a.as_expression().map(Expression::get_inner_expression),
-                _ => None,
-            };
-            if let Some(Expression::ArrayExpression(a)) = single {
-                (array_elements(a)?, a.span.start as usize)
-            } else {
-                let out = c
-                    .arguments
-                    .iter()
-                    .map(|a| match a {
-                        Argument::SpreadElement(s) => (s.span, None),
-                        a => (a.span(), a.as_expression()),
-                    })
-                    .collect();
-                let after = c.callee.span().end as usize;
-                let open = after + src.get(after..)?.find('(')?;
-                (out, open)
-            }
-        }
-        _ => return None,
-    };
+    let (elements, open) = config_elements(e, &module.imports, src)?;
     for el in elements.iter().filter_map(|(_, e)| *e) {
         if let Some(arr) = global_ignores_array(el) {
-            let site = match arr.elements.last() {
-                Some(last) => {
-                    let span = last.span();
-                    FixSite::Append {
-                        start: span.start as usize,
-                        expected: src.get(span.start as usize..span.end as usize)?.to_string(),
-                        empty: false,
-                    }
-                }
-                None => FixSite::Append {
-                    start: arr.span.start as usize,
-                    expected: "[".to_string(),
-                    empty: true,
-                },
-            };
-            return Some((site, quote));
+            return Some((append_site(arr, src)?, quote));
         }
     }
     let expected = src.get(open..=open)?.to_string();
@@ -849,6 +918,68 @@ pub(crate) fn flat_fix_site(file: &Path, src: &str) -> Option<(FixSite, char)> {
             .then(|| before.to_string())
     });
     Some((FixSite::Insert { start: open, expected, indent, empty: elements.is_empty() }, quote))
+}
+
+/// The elements of the config array `e` exports: an array, or the
+/// arguments of a config helper.
+fn config_elements<'s, 'a>(
+    e: &'s Expression<'a>,
+    imports: &HashMap<&str, (String, Option<String>)>,
+    src: &str,
+) -> Option<Elements<'s, 'a>> {
+    match e {
+        Expression::ArrayExpression(a) => Some((array_elements(a)?, a.span.start as usize)),
+        Expression::CallExpression(c) if is_config_helper(&c.callee, imports) => {
+            let single = match c.arguments.as_slice() {
+                [a] => a.as_expression().map(Expression::get_inner_expression),
+                _ => None,
+            };
+            if let Some(Expression::ArrayExpression(a)) = single {
+                return Some((array_elements(a)?, a.span.start as usize));
+            }
+            let out = c
+                .arguments
+                .iter()
+                .map(|a| match a {
+                    Argument::SpreadElement(s) => (s.span, None),
+                    a => (a.span(), a.as_expression()),
+                })
+                .collect();
+            let after = c.callee.span().end as usize;
+            let open = after + src.get(after..)?.find('(')?;
+            Some((out, open))
+        }
+        _ => None,
+    }
+}
+
+/// Where patterns go in the global ignores array `arr`.
+fn append_site(arr: &oxc_ast::ast::ArrayExpression<'_>, src: &str) -> Option<FixSite> {
+    let existing = arr
+        .elements
+        .iter()
+        .filter_map(|el| match el.as_expression() {
+            Some(Expression::StringLiteral(s)) => Some(s.value.to_string()),
+            _ => None,
+        })
+        .collect();
+    Some(match arr.elements.last() {
+        Some(last) => {
+            let span = last.span();
+            FixSite::Append {
+                start: span.start as usize,
+                expected: src.get(span.start as usize..span.end as usize)?.to_string(),
+                empty: false,
+                existing,
+            }
+        }
+        None => FixSite::Append {
+            start: arr.span.start as usize,
+            expected: "[".to_string(),
+            empty: true,
+            existing,
+        },
+    })
 }
 
 /// The elements of `a`, each with its expression unless it is spread, or
@@ -866,15 +997,42 @@ fn array_elements<'s, 'a>(
         .collect()
 }
 
-/// Whether `callee` is a helper that returns its arguments as a flat
-/// config array: `defineConfig` or typescript-eslint's `config`.
-pub(crate) fn is_config_helper(callee: &Expression<'_>) -> bool {
-    let name = match callee.get_inner_expression() {
-        Expression::Identifier(id) => id.name.as_str(),
-        Expression::StaticMemberExpression(m) => m.property.name.as_str(),
-        _ => return false,
-    };
-    matches!(name, "defineConfig" | "config" | "defineFlatConfig")
+/// Packages whose `config` export returns its arguments as a flat config
+/// array.
+const CONFIG_HELPER_PACKAGES: &[&str] = &["typescript-eslint", "eslint/config"];
+
+/// Whether a package's export `name` returns its arguments as a flat
+/// config array: `defineConfig` (from `eslint/config` or a package like
+/// it), or `config` from typescript-eslint.
+pub(crate) fn is_config_helper_export(source: &str, name: &str) -> bool {
+    let from_package = !source.starts_with('.') && !source.starts_with('/');
+    match name {
+        "defineConfig" | "defineFlatConfig" => from_package,
+        "config" => CONFIG_HELPER_PACKAGES.contains(&source),
+        _ => false,
+    }
+}
+
+/// Whether `callee` is a config helper imported into the module: a name
+/// imported as one, or a property of a package imported whole.
+fn is_config_helper(
+    callee: &Expression<'_>,
+    imports: &HashMap<&str, (String, Option<String>)>,
+) -> bool {
+    match callee.get_inner_expression() {
+        Expression::Identifier(id) => match imports.get(id.name.as_str()) {
+            Some((source, Some(imported))) => is_config_helper_export(source, imported),
+            _ => false,
+        },
+        Expression::StaticMemberExpression(m) => match m.object.get_inner_expression() {
+            Expression::Identifier(id) => match imports.get(id.name.as_str()) {
+                Some((source, None)) => is_config_helper_export(source, &m.property.name),
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// The array of string patterns of a global ignores element:
@@ -945,7 +1103,7 @@ mod tests {
             "import tseslint from 'typescript-eslint';\nconst on = process.env.CI;\nconst base = { files: ['**/*.ts'] };\nexport default tseslint.config(\n  { ignores: ['dist'] },\n  ...tseslint.configs.recommendedTypeChecked,\n  { ...base, languageOptions: { parserOptions: { projectService: on } } },\n);\n",
             "eslint.config.mjs",
         );
-        let Val::Call { callee, source, args } = v else { panic!("{v:?}") };
+        let Val::Call { callee, source, args, .. } = v else { panic!("{v:?}") };
         assert_eq!(callee, "tseslint.config");
         assert_eq!(source.as_deref(), Some("typescript-eslint"));
         assert_eq!(args[1].line, 6);
@@ -994,18 +1152,65 @@ mod tests {
         );
         assert_eq!(
             site("export default [{ name: 'x', ignores: ['a'] }, {}];"),
-            Some(FixSite::Append { start: 39, expected: "'a'".into(), empty: false })
+            Some(FixSite::Append {
+                start: 39,
+                expected: "'a'".into(),
+                empty: false,
+                existing: vec!["a".into()]
+            })
         );
+        let define = "import { defineConfig, globalIgnores } from 'eslint/config';\n";
         assert!(matches!(
-            site("export default defineConfig(globalIgnores([]), {});"),
+            site(&format!("{define}export default defineConfig(globalIgnores([]), {{}});")),
             Some(FixSite::Append { empty: true, .. })
         ));
         assert!(matches!(
-            site("const c = tseslint.config({});\nexport default c;"),
+            site(
+                "import tseslint from 'typescript-eslint';\nconst c = tseslint.config({});\nexport default c;"
+            ),
             Some(FixSite::Insert { .. })
         ));
+        // Not a flat config helper: FlatCompat reads eslintrc objects, and
+        // a `config` or `defineConfig` that isn't imported may be anything.
+        assert_eq!(
+            site(
+                "import { FlatCompat } from '@eslint/eslintrc';\nconst compat = new FlatCompat();\nexport default compat.config({ rules: {} });"
+            ),
+            None
+        );
+        assert_eq!(site("export default defineConfig({});"), None);
+        assert_eq!(site("import x from './x.js';\nexport default x.config({});"), None);
         assert_eq!(site("export default antfu({});"), None);
         assert!(matches!(site("export default [...a, {}];"), Some(FixSite::Insert { .. })));
         assert_eq!(site("export default [, {}];"), None);
+    }
+
+    #[test]
+    fn strict_json_rejects_trailing_commas() {
+        assert!(strict_json_value("{ // c\n \"a\": \"//x\" /* y */ }").is_some());
+        assert!(strict_json_value("{ \"a\": [1,] }").is_none());
+        assert!(json_value("{ \"a\": [1,] }").is_some());
+    }
+
+    #[test]
+    fn modules_that_dont_parse_are_unreadable() {
+        let t = tempfile::TempDir::new().unwrap();
+        let file = t.path().join("eslint.config.js");
+        fs::write(&file, "export default [{ rules: {} }];\nconst = ;\n").unwrap();
+        let project = Project::new(t.path());
+        assert_eq!(load(&file, &Resolver { project: &project }).value, None);
+    }
+
+    #[test]
+    fn constants_named_twice_over_stay_bounded() {
+        let mut src = String::new();
+        for i in 0..40 {
+            src.push_str(&format!("const a{i} = [a{n}, a{n}];\n", n = i + 1));
+        }
+        src.push_str("const a40 = { rules: {} };\nexport default a0;\n");
+        let start = std::time::Instant::now();
+        let v = read(&src, "eslint.config.js");
+        assert!(matches!(v, Val::Arr(_)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
     }
 }

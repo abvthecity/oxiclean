@@ -41,6 +41,8 @@ use std::{
 use oxc_span::SourceType;
 use serde_json::Value;
 
+pub use config::prefixed as prefixed_package;
+
 use crate::{Project, settings::PluginSettings};
 
 /// What a format plugin makes of a file.

@@ -727,28 +727,34 @@ the committed fixture traces with analyze-trace's checked-in output.
 `oxiclean lint` runs `lint-config`, which reads ESLint 8 configs
 (`.eslintrc.*` and package.json `eslintConfig`, with `overrides` and local
 `extends`), ESLint 9 flat configs (`eslint.config.{js,mjs,cjs,ts,mts,cts}`)
-and oxlint configs (`.oxlintrc.json`, `oxlint.json`) with oxc, without
-running ESLint, oxlint or Node, and reports settings that make linting
-slower than it needs to be. It defaults to `warn`.
+and oxlint configs (`.oxlintrc.json(c)` and `oxlint.config.(m)ts`, and any
+other a script passes to `--config`) with oxc, without running ESLint,
+oxlint or Node, and reports settings that make linting slower than it
+needs to be. It defaults to `warn`. Like ESLint, it reads one eslintrc per
+directory and none where a flat config is in or above it, and it looks up
+nested flat configs per file only for ESLint 10 (or 9 with the
+`v10_config_lookup_from_file` flag); ESLint 9 uses the config of the
+directory it runs in.
 
 | Code | Reported when | `--fix` |
 |---|---|---|
-| `typed-js-files` | typescript-eslint's parser and type-aware parsing (`parserOptions.project` or `projectService`) apply to JavaScript files too, such as `eslint.config.js`, so typescript-eslint builds TypeScript programs for them | |
+| `typed-js-files` | typescript-eslint's parser and type-aware parsing (`parserOptions.project` or `projectService`) apply to JavaScript files ESLint lints too, such as `eslint.config.js`, so typescript-eslint type-checks them, or fails to parse those no tsconfig includes | |
 | `project-globs` | `parserOptions.project` names more than one tsconfig, through a list or a glob, so typescript-eslint builds a program for each | |
 | `project-service` | `project: true` where the installed typescript-eslint is 8 or later, whose `projectService` shares one service across files | |
-| `tsconfig-root-dir` | relative `project` paths without `tsconfigRootDir`, which resolve from wherever ESLint runs | |
+| `tsconfig-root-dir` | relative `project` paths without `tsconfigRootDir`, which resolve from wherever ESLint runs (typescript-eslint 8.37 and later infer it for flat configs that read `tseslint.configs`) | |
 | `slow-rule` | `import/no-cycle`, `import/no-unused-modules`, `import/namespace` or `import/no-deprecated` (or the `import-x/` ones) is on, each with what does its job faster, such as `oxiclean cycles` or oxlint's `import/no-cycle` | |
 | `eslint-plugin-oxlint` | a package runs oxlint too (a script, a dependency or an oxlint config) and ESLint doesn't use eslint-plugin-oxlint to turn off the rules oxlint already checks | |
 | `build-output` | build output the linter doesn't ignore: framework output such as `.next` and `.svelte-kit`, tsconfig `outDir`s, and `dist`, `build`, `out` and `coverage` when git ignores them. ESLint reads `.eslintignore` and `--ignore-pattern` in scripts; oxlint skips what `.gitignore` ignores, so only committed output is reported for it | Adds the directories to `ignorePatterns` of JSON eslintrc and oxlint configs, and to the global ignores of flat configs whose exported array is written out in the file |
 | `type-aware-unused` | oxlint's type-aware mode is on, in `options.typeAware` or `--type-aware` in a script, but every type-aware rule is off | Turns `options.typeAware` off in the config |
 
 Configs are evaluated statically: imports of local files and workspace
-packages are followed, spreads, `tseslint.config()`, `defineConfig()` and
-`globalIgnores()` are understood, and an entry behind a condition counts
-as maybe applying. A config built in ways it can't follow, such as from a
-shared config package or an array changed after it's declared, makes the
-checks that depend on it stay quiet rather than guess. YAML eslintrc files
-aren't read.
+packages are followed, spreads, `tseslint.config()`, `defineConfig()`,
+FlatCompat and `globalIgnores()` are understood, and an entry behind a
+condition counts as maybe applying. A config built in ways it can't
+follow, such as from a shared config package or an array changed after
+it's declared, makes the checks that depend on it stay quiet rather than
+guess. So do YAML eslintrc files, which aren't read, and a
+`.eslintrc.json` with a trailing comma, which ESLint 8 can't read either.
 
 ```
 ⚠ Lint configs that slow linting down
@@ -758,7 +764,7 @@ aren't read.
 ├──  line 7: doesn't ignore build output, so ESLint parses generated files in `packages/lib/build` (2 files); add it to its ignores (1 item)
 │       packages/lib/tsconfig.json:3: emits build output there
 │       fixable with --fix: add "packages/lib/build/**" to "ignorePatterns"
-└──  line 5: turns on type-aware parsing for 1 JavaScript file too, such as `packages/lib/src/legacy.js`, so typescript-eslint builds TypeScript programs that include them; set it in an entry with `files` for TypeScript only, or add typescript-eslint's disableTypeChecked for JavaScript files (1 item)
+└──  line 5: turns on type-aware parsing for 1 JavaScript file too, such as `packages/lib/src/legacy.js`, so typescript-eslint type-checks them along with the TypeScript files, or fails to parse those no tsconfig includes; set it in an entry with `files` for TypeScript only, or add typescript-eslint's disableTypeChecked for JavaScript files (1 item)
 ```
 
 ### Difference Between Tools

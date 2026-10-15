@@ -47,7 +47,7 @@ pub use graph::{
 pub use jsonc::parse_jsonc;
 pub use members::ExportMember;
 pub use parser::{ParsedImports, imports_for, parse_imports};
-pub use plugins::{Plugins, plugin_names};
+pub use plugins::{Plugins, plugin_names, prefixed_package};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
     Barrel, CheckResult, CommandResult, CycleFinding, CycleStep, DuplicateExport,

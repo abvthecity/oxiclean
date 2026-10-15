@@ -35,8 +35,9 @@ fn lint_config(name: &str) -> Vec<String> {
 }
 
 /// pnpm, ESLint 9: `project` globs over two tsconfigs, set for every file
-/// (so for `eslint.config.mjs` and a build script too) without
-/// `tsconfigRootDir`; `import-x/no-cycle`, which a test-only override
+/// but the config itself (so for a build script too); `tsconfigRootDir`
+/// is left out, which typescript-eslint 8.37+ infers as the config reads
+/// `tseslint.configs`; `import-x/no-cycle`, which a test-only override
 /// doesn't turn off; oxlint in the scripts without eslint-plugin-oxlint;
 /// and two tsconfig `outDir`s the config doesn't ignore.
 #[test]
@@ -45,11 +46,10 @@ fn pnpm() {
         lint_config("lint-pnpm"),
         [
             "eslint.config.mjs:1 build-output packages/api/dist,packages/web/build (2) fix: add a global ignores entry for \"packages/api/dist/**\", \"packages/web/build/**\"",
-            "eslint.config.mjs:10 typed-js-files parserOptions (2)",
             "eslint.config.mjs:10 project-globs project (2)",
             "eslint.config.mjs:1 eslint-plugin-oxlint eslint-plugin-oxlint (1)",
             "eslint.config.mjs:14 slow-rule import-x/no-cycle (1)",
-            "eslint.config.mjs:10 tsconfig-root-dir tsconfigRootDir (1)",
+            "eslint.config.mjs:10 typed-js-files parserOptions (1)",
         ]
     );
 }

@@ -3,9 +3,10 @@
 //! them.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    rc::Rc,
 };
 
 use globset::{GlobBuilder, GlobMatcher};
@@ -81,12 +82,6 @@ impl GitIgnores {
     /// Whether a `.gitignore` file from the root down to `path` ignores
     /// it or a directory it is in.
     pub(crate) fn ignored(&mut self, path: &Path, is_dir: bool) -> bool {
-        self.ignored_by(path, is_dir, ".gitignore")
-    }
-
-    /// As [`Self::ignored`], for files named `file_name`, as
-    /// `.eslintignore`.
-    pub(crate) fn ignored_by(&mut self, path: &Path, is_dir: bool, file_name: &str) -> bool {
         let Ok(rel) = path.strip_prefix(&self.root) else { return false };
         let mut dirs = vec![self.root.clone()];
         let mut cur = self.root.clone();
@@ -94,6 +89,19 @@ impl GitIgnores {
             cur.push(c);
             dirs.push(cur.clone());
         }
+        self.ignored_by(path, is_dir, &dirs, ".gitignore")
+    }
+
+    /// Whether the root's `.eslintignore` ignores `path`: ESLint 8 reads
+    /// only the one in the directory it runs in.
+    pub(crate) fn eslintignored(&mut self, path: &Path, is_dir: bool) -> bool {
+        let root = [self.root.clone()];
+        self.ignored_by(path, is_dir, &root, ".eslintignore")
+    }
+
+    /// Whether the files named `file_name` in `dirs`, outermost first,
+    /// ignore `path`.
+    fn ignored_by(&mut self, path: &Path, is_dir: bool, dirs: &[PathBuf], file_name: &str) -> bool {
         let mut ignored = false;
         for dir in dirs {
             let file = dir.join(file_name);
@@ -218,48 +226,105 @@ fn count_linted(dir: &Path) -> usize {
         .count()
 }
 
-/// Compiled globs, by pattern: the same patterns are matched against
-/// every file.
-static GLOBS: LazyLock<Mutex<HashMap<String, Option<GlobMatcher>>>> = LazyLock::new(Mutex::default);
-
-/// Built gitignore matchers, by directory and patterns.
-type GitignoreCache = HashMap<(PathBuf, Vec<String>), Option<Arc<Gitignore>>>;
-static GITIGNORES: LazyLock<Mutex<GitignoreCache>> = LazyLock::new(Mutex::default);
-
-/// `pattern` compiled the way minimatch reads it, where `*` stays within
-/// a directory, or `None` when it isn't a valid glob.
-pub(crate) fn glob(pattern: &str) -> Option<GlobMatcher> {
-    if let Some(m) = GLOBS.lock().ok().and_then(|c| c.get(pattern).cloned()) {
-        return m;
-    }
-    let m =
-        GlobBuilder::new(pattern).literal_separator(true).build().ok().map(|g| g.compile_matcher());
-    if let Ok(mut c) = GLOBS.lock() {
-        c.insert(pattern.to_string(), m.clone());
-    }
-    m
-}
-
 /// `path` relative to `dir`, with `/`, or `None` outside it.
 pub(crate) fn relative(dir: &Path, path: &Path) -> Option<String> {
     let rel = path.strip_prefix(dir).ok()?;
     Some(rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
 }
 
-/// Whether flat config `ignores` patterns, relative to the config's
-/// directory, ignore directory `rel` (relative to it too). Patterns are
-/// matched as ESLint does, with minimatch: `dist` is only the top-level
-/// `dist`. A negated pattern may bring files back, so with one, anything
-/// counts as ignored.
-pub(crate) fn flat_ignores(patterns: &[String], rel: &str) -> bool {
-    if patterns.iter().any(|p| p.starts_with('!')) {
-        return true;
+/// Built gitignore matchers, by directory and patterns.
+type GitignoreCache = HashMap<(PathBuf, Vec<String>), Option<Rc<Gitignore>>>;
+
+/// Compiled globs and gitignore matchers, kept for one run: the same
+/// patterns are matched against every file.
+#[derive(Default)]
+pub(crate) struct Globs {
+    globs: RefCell<HashMap<String, Option<GlobMatcher>>>,
+    gitignores: RefCell<GitignoreCache>,
+}
+
+impl Globs {
+    /// `pattern` compiled the way minimatch reads it, where `*` stays
+    /// within a directory, or `None` when it isn't a valid glob.
+    pub(crate) fn glob(&self, pattern: &str) -> Option<GlobMatcher> {
+        if let Some(m) = self.globs.borrow().get(pattern) {
+            return m.clone();
+        }
+        let m = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .ok()
+            .map(|g| g.compile_matcher());
+        self.globs.borrow_mut().insert(pattern.to_string(), m.clone());
+        m
     }
-    let candidates = ancestors_and_child(rel);
-    patterns.iter().any(|p| {
-        let p = p.trim_start_matches("./").trim_end_matches('/');
-        glob(p).is_some_and(|m| candidates.iter().any(|c| m.is_match(c)))
-    })
+
+    /// Whether flat config `ignores` patterns, relative to the config's
+    /// directory, ignore directory `rel` (relative to it too). Patterns
+    /// are matched as ESLint does, with minimatch: `dist` is only the
+    /// top-level `dist`. A negated pattern may bring files back, so with
+    /// one, anything counts as ignored.
+    pub(crate) fn flat_ignores(&self, patterns: &[String], rel: &str) -> bool {
+        if patterns.iter().any(|p| p.starts_with('!')) {
+            return true;
+        }
+        let candidates = ancestors_and_child(rel);
+        patterns.iter().any(|p| {
+            let p = p.trim_start_matches("./").trim_end_matches('/');
+            self.glob(p).is_some_and(|m| candidates.iter().any(|c| m.is_match(c)))
+        })
+    }
+
+    /// Whether gitignore-style `patterns`, rooted at `dir`, ignore
+    /// directory `path` or every file in it.
+    pub(crate) fn gitignore_style_ignores(
+        &self,
+        dir: &Path,
+        patterns: &[String],
+        path: &Path,
+    ) -> bool {
+        if !path.starts_with(dir) {
+            return false;
+        }
+        let key = (dir.to_path_buf(), patterns.to_vec());
+        let cached = self.gitignores.borrow().get(&key).cloned();
+        let gi = cached.unwrap_or_else(|| {
+            let mut b = GitignoreBuilder::new(dir);
+            let ok = patterns.iter().all(|p| b.add_line(None, p).is_ok());
+            let gi = if ok { b.build().ok().map(Rc::new) } else { None };
+            self.gitignores.borrow_mut().insert(key, gi.clone());
+            gi
+        });
+        // Patterns that don't build might ignore anything.
+        let Some(gi) = gi else { return true };
+        gi.matched_path_or_any_parents(path, true).is_ignore()
+            || gi.matched_path_or_any_parents(path.join("x.js"), false).is_ignore()
+    }
+
+    /// Whether file `rel`, relative to a config's directory, matches flat
+    /// config `files` or `ignores` patterns.
+    pub(crate) fn flat_matches(&self, patterns: &[String], rel: &str) -> bool {
+        patterns.iter().any(|p| self.flat_pattern_matches(p, rel))
+    }
+
+    /// Whether file `rel` matches flat config pattern `p`.
+    pub(crate) fn flat_pattern_matches(&self, p: &str, rel: &str) -> bool {
+        let p = p.trim_start_matches("./");
+        let p = if p.ends_with('/') { format!("{p}**") } else { p.to_string() };
+        self.glob(&p).is_some_and(|m| m.is_match(rel))
+    }
+
+    /// Whether file `rel`, relative to a config's directory, matches
+    /// eslintrc `overrides` patterns: those without a slash match the
+    /// file name.
+    pub(crate) fn eslintrc_matches(&self, patterns: &[String], rel: &str) -> bool {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        patterns.iter().any(|p| {
+            let p = p.trim_start_matches("./");
+            let target = if p.contains('/') { rel } else { name };
+            self.glob(p).is_some_and(|m| m.is_match(target))
+        })
+    }
 }
 
 /// `rel`, each directory above it, and a file in it.
@@ -276,53 +341,6 @@ fn ancestors_and_child(rel: &str) -> Vec<String> {
     out
 }
 
-/// Whether gitignore-style `patterns`, rooted at `dir`, ignore directory
-/// `path` or every file in it.
-pub(crate) fn gitignore_style_ignores(dir: &Path, patterns: &[String], path: &Path) -> bool {
-    if !path.starts_with(dir) {
-        return false;
-    }
-    let key = (dir.to_path_buf(), patterns.to_vec());
-    let cached = GITIGNORES.lock().ok().and_then(|c| c.get(&key).cloned());
-    let gi = match cached {
-        Some(gi) => gi,
-        None => {
-            let mut b = GitignoreBuilder::new(dir);
-            let ok = patterns.iter().all(|p| b.add_line(None, p).is_ok());
-            let gi = if ok { b.build().ok().map(Arc::new) } else { None };
-            if let Ok(mut c) = GITIGNORES.lock() {
-                c.insert(key, gi.clone());
-            }
-            gi
-        }
-    };
-    // Patterns that don't build might ignore anything.
-    let Some(gi) = gi else { return true };
-    gi.matched_path_or_any_parents(path, true).is_ignore()
-        || gi.matched_path_or_any_parents(path.join("x.js"), false).is_ignore()
-}
-
-/// Whether file `rel`, relative to a config's directory, matches flat
-/// config `files` or `ignores` patterns.
-pub(crate) fn flat_matches(patterns: &[String], rel: &str) -> bool {
-    patterns.iter().any(|p| {
-        let p = p.trim_start_matches("./");
-        let p = if p.ends_with('/') { format!("{p}**") } else { p.to_string() };
-        glob(&p).is_some_and(|m| m.is_match(rel))
-    })
-}
-
-/// Whether file `rel`, relative to a config's directory, matches eslintrc
-/// `overrides` patterns: those without a slash match the file name.
-pub(crate) fn eslintrc_matches(patterns: &[String], rel: &str) -> bool {
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    patterns.iter().any(|p| {
-        let p = p.trim_start_matches("./");
-        let target = if p.contains('/') { rel } else { name };
-        glob(p).is_some_and(|m| m.is_match(target))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,23 +351,25 @@ mod tests {
 
     #[test]
     fn flat_patterns_are_rooted() {
-        assert!(flat_ignores(&s(&["dist"]), "dist"));
-        assert!(!flat_ignores(&s(&["dist"]), "pkg/dist"));
-        assert!(flat_ignores(&s(&["**/dist/**"]), "pkg/dist"));
-        assert!(flat_ignores(&s(&["**/dist"]), "pkg/dist"));
-        assert!(flat_ignores(&s(&["pkg/"]), "pkg/dist"));
-        assert!(flat_ignores(&s(&["pkg/*/dist/"]), "pkg/a/dist"));
-        assert!(!flat_ignores(&s(&["*.snap"]), "dist"));
-        assert!(flat_ignores(&s(&["!keep"]), "dist"));
+        let g = Globs::default();
+        assert!(g.flat_ignores(&s(&["dist"]), "dist"));
+        assert!(!g.flat_ignores(&s(&["dist"]), "pkg/dist"));
+        assert!(g.flat_ignores(&s(&["**/dist/**"]), "pkg/dist"));
+        assert!(g.flat_ignores(&s(&["**/dist"]), "pkg/dist"));
+        assert!(g.flat_ignores(&s(&["pkg/"]), "pkg/dist"));
+        assert!(g.flat_ignores(&s(&["pkg/*/dist/"]), "pkg/a/dist"));
+        assert!(!g.flat_ignores(&s(&["*.snap"]), "dist"));
+        assert!(g.flat_ignores(&s(&["!keep"]), "dist"));
     }
 
     #[test]
     fn gitignore_patterns_match_anywhere() {
+        let g = Globs::default();
         let dir = Path::new("/r");
-        assert!(gitignore_style_ignores(dir, &s(&["dist"]), Path::new("/r/pkg/dist")));
-        assert!(gitignore_style_ignores(dir, &s(&["pkg/dist/**"]), Path::new("/r/pkg/dist")));
-        assert!(!gitignore_style_ignores(dir, &s(&["/dist"]), Path::new("/r/pkg/dist")));
-        assert!(!gitignore_style_ignores(
+        assert!(g.gitignore_style_ignores(dir, &s(&["dist"]), Path::new("/r/pkg/dist")));
+        assert!(g.gitignore_style_ignores(dir, &s(&["pkg/dist/**"]), Path::new("/r/pkg/dist")));
+        assert!(!g.gitignore_style_ignores(dir, &s(&["/dist"]), Path::new("/r/pkg/dist")));
+        assert!(!g.gitignore_style_ignores(
             dir,
             &s(&["dist", "!pkg/dist"]),
             Path::new("/r/pkg/dist")
@@ -358,10 +378,11 @@ mod tests {
 
     #[test]
     fn matches_files_patterns() {
-        assert!(flat_matches(&s(&["**/*.js"]), "a/b.js"));
-        assert!(!flat_matches(&s(&["*.js"]), "a/b.js"));
-        assert!(flat_matches(&s(&["**/*.{js,mjs}"]), "b.mjs"));
-        assert!(eslintrc_matches(&s(&["*.js"]), "a/b.js"));
-        assert!(!eslintrc_matches(&s(&["src/*.js"]), "a/b.js"));
+        let g = Globs::default();
+        assert!(g.flat_matches(&s(&["**/*.js"]), "a/b.js"));
+        assert!(!g.flat_matches(&s(&["*.js"]), "a/b.js"));
+        assert!(g.flat_matches(&s(&["**/*.{js,mjs}"]), "b.mjs"));
+        assert!(g.eslintrc_matches(&s(&["*.js"]), "a/b.js"));
+        assert!(!g.eslintrc_matches(&s(&["src/*.js"]), "a/b.js"));
     }
 }
