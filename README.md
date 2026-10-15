@@ -105,6 +105,14 @@ The default thresholds are 300 modules for `bloat`, 25 modules for `barrels`, 10
 
 Every command exits with status 1 when a finding of any of its rules with `error` severity crosses its threshold, so they can gate CI. Findings with `warn` severity are reported but don't fail the run. Files that fail to parse are listed at the end of the report.
 
+A rule that can't run doesn't stop the others. In a pnpm workspace with a
+catalog but no source files, for instance, `dependencies` and
+`heavy-dependencies` find no entry files, while `catalog` and
+`duplicate-versions` still report. Each rule that failed gets a line such as
+`✗ dependencies couldn't run: no entry files found under ...`, and the run
+exits with status 1. Turn the rule off in `.oxicleanrc.json` if it doesn't
+apply to the project.
+
 ### Import Bloat Checker
 
 Detects excessive imports in JavaScript/TypeScript projects that can lead to large bundle sizes. Counts the total number of unique modules reachable from import statements (breadth-first analysis).
@@ -704,7 +712,11 @@ off, and `true` turns one on.
 ## Fixes
 
 With `--fix`, a command applies the fixes the findings of all its rules
-offer and reports only what is left. A fix is offered only when it needs no decision, such
+offer and reports only what is left. One fix can make another possible, as
+`references` making a program `composite` lets `isolated-declarations`
+turn on `isolatedDeclarations`, so the command runs again after each round
+of fixes until no new fix applies (at most 5 rounds), and reports how many
+findings it fixed in all. A fix is offered only when it needs no decision, such
 as adding build output to a tsconfig's `exclude`; findings that have one
 say `fixable with --fix` in the text report and carry a `fix` in JSON.
 Fixes to JSON files keep their comments and formatting.
@@ -737,12 +749,15 @@ Summary
 ```
 
 `--format json` prints one JSON document with the `command`, an entry in
-`rules` for each rule that ran (its `severity` and `threshold` outside any
-override, and its counts of findings, errors and warnings), a `summary`
+`rules` for each rule that is on (its `severity` and `threshold` outside any
+override, its counts of findings, errors and warnings, and an `error` that
+says why it couldn't run, or `null`), a `summary`
 (files analysed, error and warning counts, import resolution) and every
 finding with its `rule`, `severity`, `file` (relative to the root, with
 `/`), `line`, `package`, `request`, `resolved`, `value`, `threshold` and a
-`message`.
+`message`. A rule that is off outside the overrides and on in some has
+`"severity": "off"`; its findings carry the severity of their override. A
+rule that couldn't run has `null` for `severity` and `threshold`.
 
 `--format sarif` prints a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 log, which GitHub code scanning and other tools can show inline on pull requests:
@@ -754,11 +769,58 @@ log, which GitHub code scanning and other tools can show inline on pull requests
     sarif_file: oxiclean.sarif
 ```
 
-A command's log has one run that lists every rule that ran, and each
-result names its rule. Each command has its own code-scanning category
+A command's log has one run that lists every rule that is on, and each
+result names its rule. A rule that couldn't run is an `error`
+notification in the run's `invocations[0].toolExecutionNotifications`,
+pointing at the rule, and makes the invocation's `executionSuccessful`
+false. Each command has its own code-scanning category
 (`oxiclean/<command>/`), so uploading several commands for one commit keeps
 every command's alerts. Results carry `partialFingerprints` that ignore line
 numbers, so an alert stays the same alert when code above it moves.
+
+## Migrating from per-rule commands
+
+Each rule used to be a command of its own. Now each command runs a group
+of rules, and `.oxicleanrc.json` turns rules off:
+
+| Before | Now |
+|---|---|
+| `oxiclean unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` | `oxiclean unused` |
+| `oxiclean dependencies`, `heavy-dependencies`, `catalog`, `duplicate-versions` | `oxiclean dependencies` |
+| `oxiclean program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat` | `oxiclean typecheck` |
+| `oxiclean bloat`, `barrels` | `oxiclean bloat` |
+| `oxiclean depth`, `cycles`, `duplicates` | unchanged |
+
+To keep running one rule alone, as `oxiclean unused-types` did, run its
+command with the command's other rules off:
+
+```json
+{
+  "rules": {
+    "unused-exports": "off",
+    "unused-enum-members": "off",
+    "unused-namespace-members": "off"
+  }
+}
+```
+
+Other changes to look out for:
+
+- `oxiclean bloat` now also runs `barrels`, and `oxiclean dependencies` now
+  also runs `heavy-dependencies`, `catalog` and `duplicate-versions`. A CI
+  job that ran `bloat` or `dependencies` may find more; turn the new rules
+  off to keep it as it was.
+- `heavy-dependencies` now defaults to `warn`, so its findings no longer
+  fail the run. Set it to `"error"` to keep them failing.
+- JSON output names the `command` at the top level and lists each rule in
+  `rules[]`, with its own `severity`, `threshold` and counts, instead of
+  the top-level `rule` and `threshold`. Each finding names its `rule`.
+- SARIF's `automationDetails.id`, the code-scanning category, is now
+  `oxiclean/<command>/` rather than `oxiclean/<rule>/`. Alerts uploaded
+  under the old categories aren't replaced by the new ones and stay open:
+  once the new uploads run, remove the old configurations on the
+  code-scanning tool status page (or delete their analyses through the
+  API), or dismiss their alerts.
 
 ## Debugging & Logging
 
