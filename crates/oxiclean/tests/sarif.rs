@@ -44,6 +44,7 @@ const RULES: &[(&str, &str)] = &[
     ("typecheck", "complex-types"),
     ("trace", "hot-spots"),
     ("trace", "duplicate-packages"),
+    ("lint", "lint-config"),
 ];
 
 /// The commands, each once.

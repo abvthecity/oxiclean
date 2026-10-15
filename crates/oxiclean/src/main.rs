@@ -54,6 +54,12 @@ enum Commands {
     /// complex-types, each unless `.oxicleanrc.json` turns it off.
     #[command(name = "typecheck")]
     Typecheck(oxiclean_typecheck::Config),
+    /// Check for ESLint and oxlint configs that make linting slower than it needs to be
+    ///
+    /// Runs the rule lint-config (warn by default) unless `.oxicleanrc.json`
+    /// turns it off. Configs are read without running ESLint or oxlint.
+    #[command(name = "lint")]
+    Lint(oxiclean_lint::Config),
     /// Check for imports and barrel files that pull in too many modules
     ///
     /// Runs the rules bloat and barrels, each unless `.oxicleanrc.json` turns
@@ -87,6 +93,7 @@ impl Commands {
             Self::Unused(_) => "unused",
             Self::Dependencies(_) => "dependencies",
             Self::Typecheck(_) => "typecheck",
+            Self::Lint(_) => "lint",
             Self::Bloat(_) => "bloat",
             Self::Trace(_) => "trace",
             Self::Depth(_) => "depth",
@@ -101,6 +108,7 @@ impl Commands {
             Self::Unused(cfg) => oxiclean_unused_exports::run_unused_command(cfg),
             Self::Dependencies(cfg) => oxiclean_dependencies::run_dependencies_command(cfg),
             Self::Typecheck(cfg) => oxiclean_typecheck::run_typecheck_command(cfg),
+            Self::Lint(cfg) => oxiclean_lint::run_lint_command(cfg),
             Self::Bloat(cfg) => oxiclean_bloat::run_bloat_command(cfg),
             Self::Trace(cfg) => oxiclean_trace::run_trace_command(cfg),
             Self::Depth(cfg) => oxiclean_depth::run_depth_command(cfg),

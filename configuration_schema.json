@@ -220,7 +220,7 @@
       "additionalProperties": false
     },
     "Rules": {
-      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`. A rule the file doesn't set is on, at `error`,\nexcept `heavy-dependencies`, `hot-spots` and `duplicate-packages`,\nwhich are at `warn`. Each command runs a\ngroup of rules, and runs only the ones that are on.",
+      "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`. A rule the file doesn't set is on, at `error`,\nexcept `heavy-dependencies`, `hot-spots`, `duplicate-packages` and\n`lint-config`, which are at `warn`. Each command runs a\ngroup of rules, and runs only the ones that are on.",
       "type": "object",
       "properties": {
         "bloat": {
@@ -478,6 +478,17 @@
         },
         "duplicate-packages": {
           "description": "Packages a trace shows `tsc` loading from more than one directory.\nDefault threshold: 2 directories. Default severity: `warn`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lint-config": {
+          "description": "ESLint and oxlint configs that make linting slower than it needs to\nbe: type-aware parsing of JavaScript files, `parserOptions.project`\nglobs, rules that walk the import graph, ESLint without\neslint-plugin-oxlint next to oxlint, build output nothing ignores,\nand oxlint's type-aware mode with no type-aware rule on. Default\nthreshold: 1. Default severity: `warn`.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
