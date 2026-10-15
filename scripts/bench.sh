@@ -12,6 +12,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT=$(pwd)
+# shellcheck source=scripts/oxiclean-rules.sh
+source scripts/oxiclean-rules.sh
 BENCH_DIR=${OXICLEAN_BENCH_DIR:-$REPO_ROOT/target/bench-repos}
 BASELINE=$REPO_ROOT/bench/baseline.json
 RUNS=${OXICLEAN_BENCH_RUNS:-3}
@@ -31,6 +33,11 @@ done
 cargo build --release -p oxiclean >&2
 BIN=$REPO_ROOT/target/release/oxiclean
 mkdir -p "$BENCH_DIR"
+# Each check is one rule, run by its command with a config file that turns
+# the command's other rules off.
+CONFIG_DIR=$(mktemp -d)
+trap 'rm -rf "$CONFIG_DIR"' EXIT
+for check in "${CHECKS[@]}"; do only_rule_config "$check" "$CONFIG_DIR/$check.json"; done
 
 checkout() {
   local name=$1 url=$2 sha=$3 dir=$BENCH_DIR/$1
@@ -55,10 +62,20 @@ checkout() {
 
 # Prints: elapsed_ms files violations resolved total builtins
 run_check() {
-  local check=$1 dir=$2 out best_ms=
+  local check=$1 dir=$2 command out best_ms= status
+  command=$(command_of "$check")
   for _ in $(seq "$RUNS"); do
-    # Checkers exit 1 when they find violations; that is expected here
-    out=$(NO_COLOR=1 "$BIN" "$check" --root "$dir" 2>/dev/null || true)
+    # Commands exit 1 when they find violations; that is expected here, but
+    # any other exit code, a rule that couldn't run, or an error before the
+    # report is a failed benchmark.
+    status=0
+    out=$(NO_COLOR=1 "$BIN" "$command" --root "$dir" -c "$CONFIG_DIR/$check.json") || status=$?
+    if [[ $status -gt 1 ]] || grep -q "couldn't run" <<<"$out" ||
+      ! grep -q "Finished in" <<<"$out"; then
+      echo "oxiclean $command ($check) failed on $dir with exit code $status:" >&2
+      echo "$out" >&2
+      return 1
+    fi
     local ms
     ms=$(sed -nE 's/.*Finished in ([0-9]+)ms.*/\1/p' <<<"$out")
     if [[ -z $best_ms || $ms -lt $best_ms ]]; then best_ms=$ms; fi
@@ -76,7 +93,8 @@ while IFS=$'\t' read -r name url sha; do
   checkout "$name" "$url" "$sha"
   for check in "${CHECKS[@]}"; do
     echo "Running $check on $name..." >&2
-    read -r ms files violations resolved total builtins < <(run_check "$check" "$BENCH_DIR/$name")
+    stats=$(run_check "$check" "$BENCH_DIR/$name")
+    read -r ms files violations resolved total builtins <<<"$stats"
     results=$(jq -c --arg name "$name" --arg sha "$sha" --arg check "$check" \
       --argjson ms "$ms" --argjson files "$files" --argjson violations "$violations" \
       --argjson resolved "$resolved" --argjson total "$total" --argjson builtins "$builtins" \
