@@ -734,6 +734,52 @@ fn fix_sets_tsconfig_options() {
     assert_eq!(code, 0, "{out}");
 }
 
+/// `lint --fix` adds build output to the ignores of JSON configs and of
+/// flat configs written as an array, and turns off oxlint's unused
+/// type-aware mode; what needs a decision stays a warning.
+#[test]
+fn lint_fix_ignores_build_output() {
+    let lint = Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxiclean_lint/tests/fixtures");
+
+    let t = TempDir::new().unwrap();
+    copy_dir(&lint.join("lint-npm"), t.path());
+    let (code, out) = run(t.path(), &["lint", "--fix"]);
+    assert_eq!(code, 0, "warnings don't fail the run: {out}");
+    assert!(out.contains("Fixed 2 findings"), "{out}");
+    let eslintrc = fs::read_to_string(t.path().join(".eslintrc.json")).unwrap();
+    assert!(
+        eslintrc.contains("\"ignorePatterns\": [\"coverage\", \"packages/lib/build/**\"],"),
+        "{eslintrc}"
+    );
+    assert!(eslintrc.contains("// Type information for every file ESLint lints."));
+    assert_eq!(
+        fs::read_to_string(t.path().join(".oxlintrc.json")).unwrap(),
+        "{\n  \"$schema\": \"./node_modules/oxlint/configuration_schema.json\",\n  \"categories\": { \"correctness\": \"warn\" },\n  \"ignorePatterns\": [\"vendor\", \"packages/lib/build/**\"]\n}\n"
+    );
+    assert!(out.contains("import/no-unused-modules"), "{out}");
+
+    let t = TempDir::new().unwrap();
+    copy_dir(&lint.join("lint-pnpm"), t.path());
+    let (_, out) = run(t.path(), &["lint", "--fix"]);
+    assert!(out.contains("Fixed 1 findings"), "{out}");
+    let flat = fs::read_to_string(t.path().join("eslint.config.mjs")).unwrap();
+    assert!(
+        flat.contains("export default tseslint.config(\n  { ignores: ['packages/api/dist/**', 'packages/web/build/**'] },\n  ...tseslint.configs.recommendedTypeChecked,"),
+        "{flat}"
+    );
+
+    let t = TempDir::new().unwrap();
+    copy_dir(&lint.join("lint-bun"), t.path());
+    let (_, out) = run(t.path(), &["lint", "--fix"]);
+    assert!(out.contains("Fixed 2 findings"), "{out}");
+    let flat = fs::read_to_string(t.path().join("eslint.config.js")).unwrap();
+    assert!(flat.contains("{ ignores: ['packages/app/dist/**', 'packages/app/.next/**'] },"));
+    let oxlintrc = fs::read_to_string(t.path().join(".oxlintrc.json")).unwrap();
+    assert!(oxlintrc.contains("\"options\": { \"typeAware\": false },"), "{oxlintrc}");
+    // The script still passes --type-aware.
+    assert!(out.contains("package.json"), "{out}");
+}
+
 #[test]
 fn fix_turns_on_isolated_declarations() {
     let t = TempDir::new().unwrap();

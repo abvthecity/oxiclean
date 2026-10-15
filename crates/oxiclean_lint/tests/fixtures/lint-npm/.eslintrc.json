@@ -1,0 +1,18 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  // Type information for every file ESLint lints.
+  "parserOptions": { "project": "./tsconfig.eslint.json" },
+  "plugins": ["import"],
+  "ignorePatterns": ["coverage"],
+  "rules": {
+    "import/no-unused-modules": ["error", { "unusedExports": true }],
+    "import/namespace": "error"
+  },
+  "overrides": [
+    {
+      "files": ["*.test.ts"],
+      "rules": { "import/namespace": "off" }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "npm-lint",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "lint": "oxlint && eslint ."
+  },
+  "devDependencies": {
+    "@typescript-eslint/parser": "^6.21.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-import": "^2.29.0",
+    "oxlint": "^1.20.0"
+  }
+}

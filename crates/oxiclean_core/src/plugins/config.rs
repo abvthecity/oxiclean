@@ -206,7 +206,7 @@ pub(super) fn names(value: Option<&Value>) -> Vec<&str> {
 /// `airbnb` is `eslint-config-airbnb`, `@scope` is `@scope/eslint-config`
 /// and `@scope/x` is `@scope/eslint-config-x`. A subpath is kept, and a
 /// name that already has the prefix is the package itself.
-pub(super) fn prefixed(name: &str, prefix: &str) -> String {
+pub fn prefixed(name: &str, prefix: &str) -> String {
     let (scope, rest) = match name.strip_prefix('@').and_then(|n| n.split_once('/')) {
         Some((scope, rest)) => (Some(scope), rest),
         None if name.starts_with('@') => return format!("{name}/{prefix}"),

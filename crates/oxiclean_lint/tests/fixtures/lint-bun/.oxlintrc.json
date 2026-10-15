@@ -1,0 +1,6 @@
+{
+  // Only perf rules; type-aware mode left on from an experiment.
+  "categories": { "correctness": "off", "perf": "warn" },
+  "options": { "typeAware": true },
+  "rules": { "typescript/no-floating-promises": "off" }
+}

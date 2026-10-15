@@ -244,8 +244,8 @@ impl PluginSettings {
 
 /// Every rule oxiclean knows. Each is set to a severity, or to
 /// `[severity, options]`. A rule the file doesn't set is on, at `error`,
-/// except `heavy-dependencies`, `hot-spots` and `duplicate-packages`,
-/// which are at `warn`. Each command runs a
+/// except `heavy-dependencies`, `hot-spots`, `duplicate-packages` and
+/// `lint-config`, which are at `warn`. Each command runs a
 /// group of rules, and runs only the ones that are on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
@@ -349,6 +349,13 @@ pub struct Rules {
     /// Packages a trace shows `tsc` loading from more than one directory.
     /// Default threshold: 2 directories. Default severity: `warn`.
     pub duplicate_packages: Option<RuleSetting>,
+    /// ESLint and oxlint configs that make linting slower than it needs to
+    /// be: type-aware parsing of JavaScript files, `parserOptions.project`
+    /// globs, rules that walk the import graph, ESLint without
+    /// eslint-plugin-oxlint next to oxlint, build output nothing ignores,
+    /// and oxlint's type-aware mode with no type-aware rule on. Default
+    /// threshold: 1. Default severity: `warn`.
+    pub lint_config: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -380,6 +387,7 @@ impl Rules {
             "complex-types" => self.complex_types.as_ref(),
             "hot-spots" => self.hot_spots.as_ref(),
             "duplicate-packages" => self.duplicate_packages.as_ref(),
+            "lint-config" => self.lint_config.as_ref(),
             _ => None,
         }
     }
@@ -410,6 +418,7 @@ impl Rules {
             &self.complex_types,
             &self.hot_spots,
             &self.duplicate_packages,
+            &self.lint_config,
         ]
         .into_iter()
         .flatten()
@@ -616,7 +625,7 @@ impl ConfigFile {
     /// The settings of `rule`, with `default_threshold` and
     /// `default_severity` where the file sets none. Each rule passes its
     /// own defaults: most are `error`, while `heavy-dependencies`,
-    /// `hot-spots` and `duplicate-packages` are `warn`.
+    /// `hot-spots`, `duplicate-packages` and `lint-config` are `warn`.
     ///
     /// # Errors
     /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.

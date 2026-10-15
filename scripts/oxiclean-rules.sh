@@ -11,6 +11,7 @@ command_of() {
     bloat | barrels) echo bloat ;;
     hot-spots | duplicate-packages) echo trace ;;
     depth | cycles | duplicates) echo "$1" ;;
+    lint-config) echo lint ;;
     *) echo "unknown rule: $1" >&2; return 1 ;;
   esac
 }
@@ -26,6 +27,7 @@ rules_of() {
       ;;
     bloat) echo bloat barrels ;;
     trace) echo hot-spots duplicate-packages ;;
+    lint) echo lint-config ;;
     depth | cycles | duplicates) echo "$1" ;;
     *) echo "unknown command: $1" >&2; return 1 ;;
   esac
