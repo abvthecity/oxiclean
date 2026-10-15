@@ -123,3 +123,21 @@ pub const LARGE_LITERALS_STYLE: ReportStyle = ReportStyle {
     max_unit: "values",
     ok_message: "No literal or imported .json file is large enough to slow tsc.",
 };
+
+/// Name of the rule for package imports that load huge declaration trees.
+pub const TYPE_BLOAT_RULE: &str = "type-bloat";
+
+/// Imports that load this many lines of declarations are reported: in
+/// `tsc` 5.9, parsing and binding them takes about a quarter of a second.
+pub const TYPE_BLOAT_DEFAULT_THRESHOLD: usize = 100_000;
+
+/// How type bloat findings are worded in the terminal report.
+pub const TYPE_BLOAT_STYLE: ReportStyle = ReportStyle {
+    description: "Package imports whose declaration files, which tsc parses and binds in full, run to huge numbers of lines",
+    heading: "Imports load huge declaration trees",
+    threshold_unit: "lines",
+    value_label: |n| if n == 1 { "1 line".to_string() } else { format!("{n} lines") },
+    max_label: "Largest",
+    max_unit: "lines",
+    ok_message: "No import loads a huge declaration tree.",
+};

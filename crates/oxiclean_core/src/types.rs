@@ -22,4 +22,7 @@ pub enum SpecKind {
     /// `import type`, or an import or re-export of types only. It loads
     /// nothing at runtime.
     Type,
+    /// `declare module "x" { … }`: adds to `x`'s types without loading
+    /// anything itself.
+    Augmentation,
 }

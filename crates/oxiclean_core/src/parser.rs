@@ -49,7 +49,7 @@ pub fn imports_for(
         warn!("{} has syntax errors; imports may be incomplete: {error}", file.display());
     }
     let specs: Vec<Specifier> =
-        parsed.specs.into_iter().filter(|s| s.kind != SpecKind::Type).collect();
+        parsed.specs.into_iter().filter(|s| s.is_static() || s.kind == SpecKind::Dynamic).collect();
     cache.insert(file_buf, specs.clone());
     Ok(specs)
 }
@@ -316,7 +316,7 @@ impl<'a> Visit<'a> for ImportCollector {
     // import of it. Imports inside describe types, not runtime edges.
     fn visit_ts_module_declaration(&mut self, decl: &TSModuleDeclaration<'a>) {
         if let TSModuleDeclarationName::StringLiteral(module) = &decl.id {
-            self.push(&module.value, SpecKind::Type, decl.span);
+            self.push(&module.value, SpecKind::Augmentation, decl.span);
         }
     }
 }

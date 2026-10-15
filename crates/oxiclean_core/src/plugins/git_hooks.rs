@@ -116,6 +116,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Husky.scripts(dir), ["commitlint --edit $1", "npx lint-staged"]);
-        assert_eq!(LintStaged.scripts(dir), ["stylelint", "eslint --fix", "prettier --write"]);
+        assert_eq!(LintStaged.scripts(dir), ["eslint --fix", "prettier --write", "stylelint"]);
     }
 }

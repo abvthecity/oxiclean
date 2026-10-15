@@ -1,0 +1,1 @@
+{ "name": "npm-type-bloat", "private": true, "workspaces": ["packages/*"] }

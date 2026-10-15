@@ -92,6 +92,9 @@ enum Commands {
     /// Check for large literals and .json imports that tsc infers types for
     #[command(name = "large-literals")]
     LargeLiterals(oxiclean_typecheck::Config),
+    /// Check for package imports that load huge declaration trees
+    #[command(name = "type-bloat")]
+    TypeBloat(oxiclean_typecheck::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -200,6 +203,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_typecheck::run_large_literals_check(cfg)?,
             oxiclean_typecheck::LARGE_LITERALS_STYLE,
             oxiclean_typecheck::LARGE_LITERALS_RULE,
+        ),
+        Commands::TypeBloat(cfg) => (
+            oxiclean_typecheck::run_type_bloat_check(cfg)?,
+            oxiclean_typecheck::TYPE_BLOAT_STYLE,
+            oxiclean_typecheck::TYPE_BLOAT_RULE,
         ),
     };
     let fixed =

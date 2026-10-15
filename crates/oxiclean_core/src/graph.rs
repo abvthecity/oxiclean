@@ -320,7 +320,7 @@ impl ModuleGraph {
                             let followed = match imp.kind {
                                 SpecKind::Static => true,
                                 SpecKind::Dynamic => opts.follow_dynamic,
-                                SpecKind::Type => false,
+                                SpecKind::Type | SpecKind::Augmentation => false,
                             };
                             if !followed && !opts.resolve_passive {
                                 return None;
