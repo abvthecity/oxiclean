@@ -1,0 +1,1 @@
+{ "rules": { "large-literals": ["error", { "threshold": 20 }] } }

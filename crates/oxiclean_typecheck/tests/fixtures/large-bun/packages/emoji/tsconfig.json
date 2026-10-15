@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "module": "preserve", "moduleResolution": "bundler", "noEmit": true },
+  "include": ["src"]
+}

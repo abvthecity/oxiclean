@@ -441,6 +441,17 @@
             }
           ]
         },
+        "large-literals": {
+          "description": "Object and array literals, and `.json` files programs import, with\nso many values that inferring their types slows `tsc`. Default\nthreshold: 10000 values.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "overlap": {
           "description": "Files that more than one tsconfig program type-checks, from configs\nin different directories where neither extends the other. Default\nthreshold: 1 file.",
           "anyOf": [

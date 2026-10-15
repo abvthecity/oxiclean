@@ -38,6 +38,7 @@ const RULES: &[&str] = &[
     "tsconfig",
     "ambient-types",
     "isolated-declarations",
+    "large-literals",
 ];
 
 fn fixtures() -> PathBuf {
