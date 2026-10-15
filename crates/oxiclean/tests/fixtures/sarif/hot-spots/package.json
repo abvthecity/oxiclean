@@ -1,7 +1,0 @@
-{
-  "name": "bun-trace",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ]
-}

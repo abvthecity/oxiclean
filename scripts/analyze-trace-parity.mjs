@@ -9,7 +9,10 @@
 // Times may differ by TOLERANCE_MS (default 1) for rounding. Packages
 // analyze-trace finds loaded from more than one directory must be found by
 // oxiclean too, from the same directories; oxiclean may find more, as it
-// also reads createSourceFile events. Exits 1 on any difference.
+// also reads createSourceFile events. oxiclean reads no file outside the
+// root, so a frame in one (TypeScript's lib files) has offsets there where
+// analyze-trace has lines; such frames are compared without positions.
+// Exits 1 on any difference.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +24,9 @@ if (!rootArg) {
 }
 const tolerance = Number(tolArg ?? 1);
 const root = fs.realpathSync(rootArg);
+
+/** Whether `p`, as `norm` gives it, is outside the root. */
+const outside = (p) => path.isAbsolute(p);
 
 /** A path relative to the root with `/`, or absolute when outside it. */
 function norm(p) {
@@ -44,6 +50,8 @@ for (const result of at.results ?? []) {
     let name = node.description;
     if (name.startsWith("Check file ") || name === "Emit declarations file") {
       name = `${name === "Emit declarations file" ? name : "Check file"} ${norm(node.path)}`;
+    } else if (node.path && outside(norm(node.path))) {
+      name += ` ${norm(node.path)}`;
     } else if (node.startLine !== undefined) {
       name += ` ${norm(node.path)}:${node.startLine}:${node.startChar}-${node.endLine}:${node.endChar}`;
     } else if (node.startOffset !== undefined) {
@@ -74,7 +82,7 @@ const parsed = hot.map((f) => {
   else if ((m = /^(.+?)(?: in (.+?))? from \(line (\d+), char (\d+)\) to \(line (\d+), char (\d+)\)$/.exec(description)))
     name = `${m[1]} ${norm(m[2] ?? f.file)}:${m[3]}:${m[4]}-${m[5]}:${m[6]}`;
   else if ((m = /^(.+?) in (.+) from offset (\d+) to offset (\d+)$/.exec(description)))
-    name = `${m[1]} ${norm(m[2])}@${m[3]}-${m[4]}`;
+    name = outside(norm(m[2])) ? `${m[1]} ${norm(m[2])}` : `${m[1]} ${norm(m[2])}@${m[3]}-${m[4]}`;
   const inside = f.related.find((r) => r.message.startsWith("inside "));
   return { f, description, name, ms: Number(ms), parent: inside && { file: inside.file, description: inside.message.slice(7) } };
 });

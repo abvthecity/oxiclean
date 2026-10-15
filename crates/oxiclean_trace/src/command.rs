@@ -46,6 +46,29 @@ pub fn run_trace_command(cfg: &Config) -> Result<CommandResult> {
     })
 }
 
+/// Runs `hot-spots` alone, on the trace in `cfg.dir` or in `trace.dir`
+/// of the config file.
+///
+/// # Errors
+/// As [`run_trace_command`], and fails if the config file has an invalid
+/// glob.
+pub fn run_hot_spots_check(cfg: &Config) -> Result<CheckResult> {
+    let workspace = cfg.common.workspace()?;
+    let trace = Trace::load(&workspace, &trace_dir(cfg, &workspace)?, true)?;
+    hot_spots::run_on(&workspace, &trace)
+}
+
+/// Runs `duplicate-packages` alone, on the trace in `cfg.dir` or in
+/// `trace.dir` of the config file.
+///
+/// # Errors
+/// As [`run_hot_spots_check`].
+pub fn run_duplicate_packages_check(cfg: &Config) -> Result<CheckResult> {
+    let workspace = cfg.common.workspace()?;
+    let trace = Trace::load(&workspace, &trace_dir(cfg, &workspace)?, false)?;
+    duplicates::run_on(&workspace, &trace)
+}
+
 /// The trace directory: the one given, else `trace.dir` under the root.
 fn trace_dir(cfg: &Config, workspace: &Workspace) -> Result<PathBuf> {
     if let Some(dir) = &cfg.dir {

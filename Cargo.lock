@@ -1054,6 +1054,7 @@ name = "oxiclean_trace"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "memchr",
  "oxiclean_core",
  "oxiclean_typecheck",
  "rayon",

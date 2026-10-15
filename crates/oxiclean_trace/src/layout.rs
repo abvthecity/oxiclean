@@ -58,7 +58,11 @@ pub(crate) fn projects(dir: &Path) -> std::io::Result<Vec<Project>> {
             .map_err(|e| e.to_string())
             .and_then(|t| serde_json::from_str::<Vec<LegendEntry>>(&t).map_err(|e| e.to_string()))
         {
-            Ok(entries) => Some(from_legend(dir, entries)),
+            Ok(entries) if !entries.is_empty() => Some(from_legend(dir, entries)),
+            Ok(_) => {
+                warn!("{} lists no programs; reading every trace*.json instead", legend.display());
+                None
+            }
             Err(e) => {
                 warn!("Can't read {}: {e}; reading every trace*.json instead", legend.display());
                 None
@@ -71,7 +75,8 @@ pub(crate) fn projects(dir: &Path) -> std::io::Result<Vec<Project>> {
         let mut found = Vec::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
-            if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            // Following symlinks: a trace.json may link to one elsewhere.
+            if !is_regular_file(&entry.path()) {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
@@ -91,10 +96,23 @@ pub(crate) fn projects(dir: &Path) -> std::io::Result<Vec<Project>> {
         projects = Some(found);
     }
     let mut projects = projects.unwrap_or_default();
+    projects.retain(|p| {
+        let ok = is_regular_file(&p.trace);
+        if !ok {
+            warn!("Skipping {}: it isn't a file", p.trace.display());
+        }
+        ok
+    });
     for p in &mut projects {
-        p.types.retain(|t| t.path.is_file());
+        p.types.retain(|t| is_regular_file(&t.path));
     }
     Ok(projects)
+}
+
+/// Whether `path` is a regular file, following symlinks: not a FIFO or a
+/// device, which would hang or never end.
+fn is_regular_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// The projects of `legend.json`, each trace once with every types file
@@ -163,9 +181,21 @@ mod tests {
         assert_eq!(ps[0].types.len(), 2);
         assert!(ps[1].types.is_empty());
 
-        // A broken legend: every trace*.json instead.
+        // A broken or empty legend: every trace*.json instead.
         fs::write(d.join("legend.json"), "[{").unwrap();
         assert_eq!(projects(d).unwrap().len(), 2);
+        fs::write(d.join("legend.json"), "[]").unwrap();
+        assert_eq!(projects(d).unwrap().len(), 2);
+        // A trace.json that links to one elsewhere.
+        #[cfg(unix)]
+        {
+            let other = TempDir::new().unwrap();
+            fs::write(other.path().join("real.json"), "[]").unwrap();
+            fs::remove_file(d.join("trace.json")).unwrap();
+            std::os::unix::fs::symlink(other.path().join("real.json"), d.join("trace.json"))
+                .unwrap();
+            assert_eq!(projects(d).unwrap().len(), 2);
+        }
         assert!(projects(&d.join("missing")).is_err());
     }
 }

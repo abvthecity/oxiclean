@@ -466,7 +466,7 @@
           ]
         },
         "hot-spots": {
-          "description": "Spans of a `tsc --generateTrace` trace where checking took long, as\n`@typescript/analyze-trace` reports them, joined to what\n`complex-types` flags. The threshold is analyze-trace's\n`forceMillis`, and the `skipMillis` option its `skipMillis`.\nDefault threshold: 500 ms. Default severity: `warn`; a hot spot on\na type `complex-types` flags is an `error`.",
+          "description": "Spans of a `tsc --generateTrace` trace where checking took long, as\n`@typescript/analyze-trace` reports them, joined to what\n`complex-types` flags. The threshold is analyze-trace's\n`forceMillis`, and the `skipMillis` option its `skipMillis`.\nDefault threshold: 500 ms. Default severity: `warn`; a hot spot on\na type `complex-types` flags is at least as severe as that finding.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"
@@ -555,7 +555,7 @@
           }
         },
         "skipMillis": {
-          "description": "For `hot-spots`: spans of the trace shorter than this many\nmilliseconds are never reported, as analyze-trace's `skipMillis`.\nDefault: 100.",
+          "description": "For `hot-spots`: spans of the trace shorter than this many\nmilliseconds are never reported, as analyze-trace's `skipMillis`.\nDefault: 100. Read only from `rules`, as the whole trace is read\nwith one setting; in `overrides` it is ignored, with a warning.",
           "type": [
             "integer",
             "null"

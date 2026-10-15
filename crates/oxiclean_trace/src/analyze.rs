@@ -10,7 +10,10 @@
 //! that repeat `import("…")` types. Other kept spans pass their frames up
 //! to the frame they're in.
 
-use std::{cmp::Ordering, collections::HashMap, fs, path::Path};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+};
 
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -53,6 +56,17 @@ pub(crate) enum FrameKind {
     EmitDeclarations { imports: Vec<(String, usize)> },
 }
 
+impl FrameKind {
+    /// The ids of the types a comparison or variance names.
+    fn type_ids(&self) -> Vec<&Value> {
+        match self {
+            Self::Compare { source, target } => vec![source, target],
+            Self::Variance { id } => vec![id],
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// Where a frame is in its file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Range {
@@ -75,17 +89,28 @@ pub(crate) struct HotType {
 pub(crate) struct Frame {
     pub kind: FrameKind,
     /// The trace event, e.g. `checkExpression`.
-    pub event: String,
+    pub event: Box<str>,
     pub time_ms: u64,
     /// The file, as the trace names it: the file being checked, or the
     /// declaration file emitted.
     pub file: Option<String>,
     pub range: Option<Range>,
+    /// The UTF-16 offsets the trace gives a check's span, before they're
+    /// made lines and columns.
+    pub offsets: Option<(u64, u64)>,
     /// For comparisons and variances: each type, `None` where `types.json`
     /// doesn't have it. Empty when there is no `types.json`.
     pub types: Vec<Option<HotType>>,
     /// Whether the span was still open when the trace ended.
     pub unterminated: bool,
+    /// Whether the span takes at least 60% of the span it's in, which
+    /// keeps it whatever the threshold.
+    pub by_share: bool,
+    /// A hash of the source text the frame spans, when its file is here:
+    /// what it is about, wherever that moves.
+    pub text_hash: Option<u64>,
+    /// Which of the program's types files has the types it names.
+    pub types_source: Option<usize>,
     pub children: Vec<Frame>,
 }
 
@@ -122,6 +147,7 @@ struct Node {
     start: f64,
     end: f64,
     unterminated: bool,
+    by_share: bool,
     children: Vec<usize>,
 }
 
@@ -131,15 +157,12 @@ impl Node {
     }
 }
 
-/// Analyses `project`'s trace.
+/// Reads `project`'s trace, keeping spans at least `thresholds.skip`
+/// long.
 ///
 /// # Errors
 /// Fails if the trace can't be read or isn't a trace.
-pub(crate) fn analyze(
-    project: Project,
-    thresholds: Thresholds,
-    paths: &PathMap,
-) -> std::io::Result<ProjectTrace> {
+pub(crate) fn parse(project: &Project, thresholds: Thresholds) -> std::io::Result<Parsed> {
     info!("Reading {}", project.trace.display());
     let parsed = parse::parse_file(&project.trace, thresholds.skip)?;
     if !parsed.unclosed.is_empty() {
@@ -149,23 +172,29 @@ pub(crate) fn analyze(
             parsed.unclosed.len()
         );
     }
-    if !parsed.unmatched_ends.is_empty() {
-        debug!(
-            "{} has {} unmatched end events",
-            project.trace.display(),
-            parsed.unmatched_ends.len()
-        );
+    if parsed.unmatched_ends > 0 {
+        debug!("{} has {} unmatched end events", project.trace.display(), parsed.unmatched_ends);
     }
-    let Parsed { packages, checked_files, .. } = &parsed;
-    let (packages, checked_files) = (packages.clone(), *checked_files);
+    Ok(parsed)
+}
+
+/// Builds `project`'s hot-spot tree from its `parsed` trace.
+pub(crate) fn analyze(
+    project: Project,
+    mut parsed: Parsed,
+    thresholds: Thresholds,
+    paths: &PathMap,
+) -> ProjectTrace {
+    let packages = std::mem::take(&mut parsed.packages);
+    let checked_files = parsed.checked_files;
     if !thresholds.force.is_finite() {
-        return Ok(ProjectTrace { project, frames: Vec::new(), packages, checked_files });
+        return ProjectTrace { project, frames: Vec::new(), packages, checked_files };
     }
     let nodes = build_tree(parsed, thresholds.force);
-    let mut types = TypeCache::new(&project.types);
-    let mut frames = frames(&nodes, 0, None, &mut types, paths);
+    let mut frames = frames(&nodes, 0, None, &project.types, paths);
+    add_types(&mut frames, &project.types);
     resolve_positions(&mut frames, paths);
-    Ok(ProjectTrace { project, frames, packages, checked_files })
+    ProjectTrace { project, frames, packages, checked_files }
 }
 
 /// The tree of spans: analyze-trace's `buildHotPathsTree`. Node 0 is the
@@ -188,12 +217,13 @@ fn build_tree(parsed: Parsed, force: f64) -> Vec<Node> {
         start: min_time,
         end: max_time,
         unterminated: false,
+        by_share: false,
         children: Vec::new(),
     }];
-    let mut stacks: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut stacks: HashMap<u32, Vec<usize>> = HashMap::new();
     let mut too_deep = 0usize;
     for (event, start, end, unterminated) in spans {
-        let stack = stacks.entry(event.stack_key.clone()).or_insert_with(|| vec![0]);
+        let stack = stacks.entry(event.stack).or_insert_with(|| vec![0]);
         let mut i = stack.len() - 1;
         while i > 0 {
             let n = &nodes[stack[i]];
@@ -205,13 +235,21 @@ fn build_tree(parsed: Parsed, force: f64) -> Vec<Node> {
         stack.truncate(i + 1);
         let parent = stack[i];
         let duration = end - start;
-        if duration >= force || duration >= MIN_PERCENTAGE * nodes[parent].duration() {
+        let by_share = duration >= MIN_PERCENTAGE * nodes[parent].duration();
+        if duration >= force || by_share {
             if stack.len() > MAX_DEPTH {
                 too_deep += 1;
                 continue;
             }
             let id = nodes.len();
-            nodes.push(Node { event: Some(event), start, end, unterminated, children: Vec::new() });
+            nodes.push(Node {
+                event: Some(event),
+                start,
+                end,
+                unterminated,
+                by_share,
+                children: Vec::new(),
+            });
             nodes[parent].children.push(id);
             stack.push(id);
         }
@@ -222,34 +260,16 @@ fn build_tree(parsed: Parsed, force: f64) -> Vec<Node> {
     nodes
 }
 
-/// The `types.json` files of a program, read when a frame first needs one.
-struct TypeCache<'p> {
-    sources: &'p [TypeSource],
-    loaded: HashMap<usize, TypesFile>,
-}
-
-impl<'p> TypeCache<'p> {
-    fn new(sources: &'p [TypeSource]) -> Self {
-        Self { sources, loaded: HashMap::new() }
-    }
-
-    /// The types file of the checker that wrote `event`: the only one, or
-    /// the one with its `checkerId`. `None` when there's none, or it holds
-    /// no types.
-    fn for_event(&mut self, event: &Event) -> Option<&TypesFile> {
-        let index = match self.sources {
-            [] => return None,
-            [_] => 0,
-            sources => {
-                let checker = event.arg("checkerId")?;
-                sources.iter().position(|s| s.checker_id.as_ref() == Some(checker))?
-            }
-        };
-        let types = self.loaded.entry(index).or_insert_with(|| {
-            info!("Reading {}", self.sources[index].path.display());
-            TypesFile::read(&self.sources[index].path)
-        });
-        (!types.is_empty()).then_some(&*types)
+/// The types file of the checker that wrote `event`: the only one, or the
+/// one with its `checkerId`.
+fn types_source(sources: &[TypeSource], event: &Event) -> Option<usize> {
+    match sources {
+        [] => None,
+        [_] => Some(0),
+        sources => {
+            let checker = event.arg("checkerId")?;
+            sources.iter().position(|s| s.checker_id.as_ref() == Some(checker))
+        }
     }
 }
 
@@ -258,7 +278,7 @@ fn frames(
     nodes: &[Node],
     id: usize,
     file: Option<&str>,
-    types: &mut TypeCache<'_>,
+    sources: &[TypeSource],
     paths: &PathMap,
 ) -> Vec<Frame> {
     let node = &nodes[id];
@@ -275,36 +295,44 @@ fn frames(
         nodes[*b].duration().partial_cmp(&nodes[*a].duration()).unwrap_or(Ordering::Equal)
     });
     let children: Vec<Frame> =
-        order.into_iter().flat_map(|child| frames(nodes, child, file, types, paths)).collect();
+        order.into_iter().flat_map(|child| frames(nodes, child, file, sources, paths)).collect();
     let Some(event) = &node.event else { return children };
-    match frame(event, file, types, paths) {
-        Some((kind, frame_file, range, hot_types)) => vec![Frame {
+    match frame(event, file, paths) {
+        Some((kind, frame_file, range)) => vec![Frame {
+            types_source: if kind.type_ids().is_empty() {
+                None
+            } else {
+                types_source(sources, event)
+            },
             kind,
             event: event.name.clone(),
             time_ms: round_ms(node.duration()),
             file: frame_file,
+            offsets: match range {
+                Some(Range::Offsets { start, end }) => Some((start, end)),
+                _ => None,
+            },
             range,
-            types: hot_types,
+            types: Vec::new(),
             unterminated: node.unterminated,
+            by_share: node.by_share,
+            text_hash: None,
             children,
         }],
         None => children,
     }
 }
 
-type Made = (FrameKind, Option<String>, Option<Range>, Vec<Option<HotType>>);
-
 /// The frame `event` makes, if any: analyze-trace's `makeHotFrame`.
 fn frame(
     event: &Event,
     file: Option<&str>,
-    types: &mut TypeCache<'_>,
     paths: &PathMap,
-) -> Option<Made> {
-    match event.name.as_str() {
+) -> Option<(FrameKind, Option<String>, Option<Range>)> {
+    match &*event.name {
         "emitDeclarationFileOrBundle" => {
             let dts = event.arg_str("declarationFilePath")?;
-            let text = read_source(&paths.local(dts)?)?;
+            let text = paths.read_source(&paths.local(dts)?)?;
             let mut imports: Vec<(String, usize)> = trivia::count_import_types(&text)
                 .into_iter()
                 .filter(|(_, n)| *n >= IMPORT_EXPRESSION_THRESHOLD)
@@ -313,50 +341,66 @@ fn frame(
             if imports.is_empty() {
                 return None;
             }
-            Some((FrameKind::EmitDeclarations { imports }, Some(dts.to_string()), None, Vec::new()))
+            Some((FrameKind::EmitDeclarations { imports }, Some(dts.to_string()), None))
         }
-        "checkSourceFile" => {
-            Some((FrameKind::CheckFile, Some(file?.to_string()), None, Vec::new()))
-        }
+        "checkSourceFile" => Some((FrameKind::CheckFile, Some(file?.to_string()), None)),
         "structuredTypeRelatedTo" => {
             event.args.as_ref()?;
             let source = event.arg("sourceId").cloned().unwrap_or(Value::Null);
             let target = event.arg("targetId").cloned().unwrap_or(Value::Null);
-            let hot = hot_types(types, event, &[&source, &target]);
-            Some((FrameKind::Compare { source, target }, file.map(str::to_string), None, hot))
+            Some((FrameKind::Compare { source, target }, file.map(str::to_string), None))
         }
         "getVariancesWorker" => {
             event.args.as_ref()?;
             let id = event.arg("id").cloned().unwrap_or(Value::Null);
-            let hot = hot_types(types, event, &[&id]);
-            Some((FrameKind::Variance { id }, file.map(str::to_string), None, hot))
+            Some((FrameKind::Variance { id }, file.map(str::to_string), None))
         }
         _ => {
             if event.cat.as_deref() != Some("check") {
                 return None;
             }
             let (start, end) = (event.arg_u64("pos")?, event.arg_u64("end")?);
-            Some((
-                FrameKind::Check,
-                Some(file?.to_string()),
-                Some(Range::Offsets { start, end }),
-                Vec::new(),
-            ))
+            Some((FrameKind::Check, Some(file?.to_string()), Some(Range::Offsets { start, end })))
         }
     }
 }
 
-/// The types `ids` name, from the types file of `event`'s checker; empty
-/// when there's none.
-fn hot_types(types: &mut TypeCache<'_>, event: &Event, ids: &[&Value]) -> Vec<Option<HotType>> {
-    let Some(file) = types.for_event(event) else { return Vec::new() };
-    ids.iter()
-        .map(|id| {
-            let id = id.as_u64()?;
-            let record = file.get(id)?;
-            Some(HotType { ty: simplify(id, &record), line_char: None })
+/// Names the types of comparisons and variances from `sources`, reading
+/// each types file once for just the types the frames name. A frame whose
+/// checker has no types file, or one with no types, names none.
+fn add_types(frames: &mut [Frame], sources: &[TypeSource]) {
+    let mut wanted: HashMap<usize, HashSet<u64>> = HashMap::new();
+    visit(frames, &mut |f| {
+        if let Some(source) = f.types_source {
+            let ids = wanted.entry(source).or_default();
+            ids.extend(f.kind.type_ids().iter().filter_map(|id| id.as_u64()));
+        }
+    });
+    if wanted.is_empty() {
+        return;
+    }
+    let loaded: HashMap<usize, TypesFile> = wanted
+        .into_iter()
+        .map(|(source, ids)| {
+            info!("Reading {} for {} types", sources[source].path.display(), ids.len());
+            (source, TypesFile::read(&sources[source].path, &ids))
         })
-        .collect()
+        .collect();
+    visit_mut(frames, &mut |f| {
+        let Some(file) = f.types_source.and_then(|s| loaded.get(&s)).filter(|t| !t.is_empty())
+        else {
+            return;
+        };
+        f.types = f
+            .kind
+            .type_ids()
+            .iter()
+            .map(|id| {
+                let id = id.as_u64()?;
+                Some(HotType { ty: simplify(id, file.get(id)?), line_char: None })
+            })
+            .collect();
+    });
 }
 
 /// `Math.round(micros / 1000)`.
@@ -365,66 +409,124 @@ fn round_ms(micros: f64) -> u64 {
     if ms.is_finite() && ms > 0.0 { ms as u64 } else { 0 }
 }
 
+/// The positions in one file to make readable, and the ranges of offsets
+/// whose text to hash.
+type Wanted = (Vec<RawPosition>, Vec<(u64, u64)>);
+
+/// What one file's text says about the frames in it.
+struct Resolved {
+    positions: HashMap<RawPosition, LineChar>,
+    /// The hash of the text of each range of offsets.
+    hashes: HashMap<(u64, u64), u64>,
+}
+
 /// Turns the offsets of `frames` and the locations of their types into
-/// lines and columns, reading each file they're in once.
+/// lines and columns, and hashes the text each frame spans, reading each
+/// file they're in once.
 fn resolve_positions(frames: &mut [Frame], paths: &PathMap) {
-    let mut wanted: HashMap<String, Vec<RawPosition>> = HashMap::new();
+    // Per file: the positions to resolve, and the ranges to hash.
+    let mut wanted: HashMap<String, Wanted> = HashMap::new();
     visit(frames, &mut |f| {
         if let (Some(file), Some(Range::Offsets { start, end })) = (&f.file, f.range) {
             let w = wanted.entry(file.clone()).or_default();
-            w.push(RawPosition::Start(start));
-            w.push(RawPosition::End(end));
+            w.0.push(RawPosition::Start(start));
+            w.0.push(RawPosition::End(end));
+            w.1.push((start, end));
         }
         for t in f.types.iter().flatten() {
             if let Some(loc) = &t.ty.location {
                 wanted
                     .entry(loc.path.clone())
                     .or_default()
+                    .0
                     .push(RawPosition::LineChar(loc.line, loc.char));
             }
         }
     });
-    let mut resolved: HashMap<String, HashMap<RawPosition, LineChar>> = HashMap::new();
-    for (file, positions) in wanted {
-        let Some(local) = paths.local(&file) else {
-            debug!("{file} isn't on this machine; reporting offsets");
+    let mut resolved: HashMap<String, Resolved> = HashMap::new();
+    for (file, (positions, ranges)) in wanted {
+        let Some(local) = paths.here(&file) else {
+            debug!("{file} isn't under the root; reporting offsets");
             continue;
         };
-        match read_source(&local) {
+        match paths.read_source(&local) {
             Some(text) => {
-                resolved.insert(file, trivia::normalize(&text, &positions));
+                let hashes = hash_ranges(&text, ranges);
+                resolved.insert(
+                    file,
+                    Resolved { positions: trivia::normalize(&text, &positions), hashes },
+                );
             }
             None => debug!("Can't read {}", local.display()),
         }
     }
     visit_mut(frames, &mut |f| {
         if let (Some(file), Some(Range::Offsets { start, end })) = (&f.file, f.range)
-            && let Some(map) = resolved.get(file)
-            && let (Some(s), Some(e)) =
-                (map.get(&RawPosition::Start(start)), map.get(&RawPosition::End(end)))
+            && let Some(r) = resolved.get(file)
+            && let (Some(s), Some(e)) = (
+                r.positions.get(&RawPosition::Start(start)),
+                r.positions.get(&RawPosition::End(end)),
+            )
         {
             f.range = Some(Range::Lines { start: *s, end: *e });
+            f.text_hash = r.hashes.get(&(start, end)).copied();
         }
         for t in f.types.iter_mut().flatten() {
             if let Some(loc) = &t.ty.location {
                 t.line_char = resolved
                     .get(&loc.path)
-                    .and_then(|m| m.get(&RawPosition::LineChar(loc.line, loc.char)))
+                    .and_then(|r| r.positions.get(&RawPosition::LineChar(loc.line, loc.char)))
                     .copied();
             }
         }
     });
 }
 
-/// A source file's text, without a byte order mark, which `tsc` leaves
-/// out of its offsets.
-fn read_source(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
+/// The hash of the text of each of `ranges`, UTF-16 offsets into `text`,
+/// with its whitespace collapsed.
+fn hash_ranges(text: &str, ranges: Vec<(u64, u64)>) -> HashMap<(u64, u64), u64> {
+    if ranges.is_empty() {
+        return HashMap::new();
+    }
+    let units: Vec<u16> = text.encode_utf16().collect();
+    ranges
+        .into_iter()
+        .map(|(start, end)| {
+            let at = |o: u64| usize::try_from(o).unwrap_or(usize::MAX).min(units.len());
+            let slice = String::from_utf16_lossy(&units[at(start)..at(end).max(at(start))]);
+            let mut hash = StableHash::new();
+            for word in slice.split_whitespace() {
+                hash.write(word.as_bytes());
+                hash.write(b" ");
+            }
+            ((start, end), hash.finish())
+        })
+        .collect()
 }
 
-fn visit(frames: &[Frame], f: &mut impl FnMut(&Frame)) {
+/// FNV-1a: a hash that is the same on every machine and Rust version, for
+/// identities that must stay put across runs.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StableHash(u64);
+
+impl StableHash {
+    pub(crate) fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    pub(crate) fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 ^= u64::from(*b);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+pub(crate) fn visit(frames: &[Frame], f: &mut impl FnMut(&Frame)) {
     for frame in frames {
         f(frame);
         visit(&frame.children, f);
@@ -441,6 +543,7 @@ fn visit_mut(frames: &mut [Frame], f: &mut impl FnMut(&mut Frame)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::Path};
     use tempfile::TempDir;
 
     fn project(dir: &Path, trace: &str, types: Option<&str>) -> Project {
@@ -451,6 +554,11 @@ mod tests {
             sources.push(TypeSource { path: dir.join("types.json"), checker_id: None });
         }
         Project { config_file: None, trace: dir.join("trace.json"), types: sources }
+    }
+
+    fn run(p: Project, thresholds: Thresholds, root: &Path) -> ProjectTrace {
+        let parsed = parse(&p, thresholds).unwrap();
+        analyze(p, parsed, thresholds, &PathMap::new(root))
     }
 
     /// `name (ms) [children]`, one line per frame.
@@ -482,7 +590,7 @@ mod tests {
         );
         let p = project(&root, &trace, Some(&types));
         let thresholds = Thresholds { force: 500_000.0, skip: 100_000.0 };
-        let result = analyze(p, thresholds, &PathMap::new(&root)).unwrap();
+        let result = run(p, thresholds, &root);
         let mut lines = Vec::new();
         outline(&result.frames, 0, &mut lines);
         assert_eq!(
@@ -505,7 +613,7 @@ mod tests {
     #[test]
     fn spans_left_open_run_to_the_end() {
         let t = TempDir::new().unwrap();
-        let root = t.path().to_path_buf();
+        let root = t.path().canonicalize().unwrap();
         let trace = r#"[
             {"ph":"B","name":"checkSourceFile","cat":"check","ts":0,"args":{"path":"/gone/a.ts"}},
             {"ph":"X","name":"checkExpression","cat":"check","ts":1000,"dur":900000,"args":{"pos":5,"end":9}},
@@ -514,7 +622,7 @@ mod tests {
         "#;
         let p = project(&root, trace, None);
         let thresholds = Thresholds { force: 500_000.0, skip: 0.0 };
-        let result = analyze(p, thresholds, &PathMap::new(&root)).unwrap();
+        let result = run(p, thresholds, &root);
         let mut lines = Vec::new();
         outline(&result.frames, 0, &mut lines);
         assert_eq!(
@@ -530,7 +638,7 @@ mod tests {
     #[test]
     fn spans_nested_too_deep_are_left_out() {
         let t = TempDir::new().unwrap();
-        let root = t.path().to_path_buf();
+        let root = t.path().canonicalize().unwrap();
         let n = 5000;
         let mut events = Vec::new();
         for i in 0..n {
@@ -546,7 +654,7 @@ mod tests {
         }
         let p = project(&root, &format!("[{}]", events.join(",")), None);
         let thresholds = Thresholds { force: 1000.0, skip: 0.0 };
-        let result = analyze(p, thresholds, &PathMap::new(&root)).unwrap();
+        let result = run(p, thresholds, &root);
         let mut depth = 0;
         let mut level = &result.frames;
         while let Some(f) = level.first() {

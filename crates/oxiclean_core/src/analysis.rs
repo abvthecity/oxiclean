@@ -18,7 +18,7 @@ use crate::{
     plugins::Plugins,
     report::{CheckResult, Finding, sort_findings},
     resolve,
-    settings::file_globs,
+    settings::{ResolvedRule, file_globs},
 };
 
 /// Command-line options every checker accepts. Everything else is set in
@@ -321,6 +321,25 @@ impl Workspace {
         self.config.policy(rule, default_threshold, default_severity)
     }
 
+    /// As [`Self::finish`], with `decide` choosing which findings are
+    /// reported, and how severely, from each one's file's settings
+    /// instead of comparing its value with the threshold: `None` drops a
+    /// finding. `decide` sees the findings in the order given, so it can
+    /// keep a finding because of one before it.
+    #[must_use]
+    pub fn finish_with(
+        &self,
+        policy: &RulePolicy,
+        findings: Vec<Finding>,
+        files_analyzed: usize,
+        decide: impl FnMut(&Finding, &ResolvedRule) -> Option<Severity>,
+    ) -> CheckResult {
+        CheckResult {
+            findings: apply_policy_with(&self.root, &self.project, policy, findings, decide),
+            ..self.finish(policy, Vec::new(), files_analyzed)
+        }
+    }
+
     /// As [`Analysis::finish`], for a check of `files_analyzed` files.
     #[must_use]
     pub fn finish(
@@ -350,17 +369,30 @@ fn apply_policy(
     policy: &RulePolicy,
     findings: Vec<Finding>,
 ) -> Vec<Finding> {
+    apply_policy_with(root, project, policy, findings, |f, rule| {
+        rule.reports(f.value).then_some(rule.severity)
+    })
+}
+
+/// `findings` as `decide` keeps them, given each one's file's settings:
+/// `None` drops a finding, `Some` keeps it with that severity. Each kept
+/// finding gets its file's threshold and package; the result is sorted.
+/// `decide` sees the findings in the order given.
+fn apply_policy_with(
+    root: &Path,
+    project: &Project,
+    policy: &RulePolicy,
+    findings: Vec<Finding>,
+    mut decide: impl FnMut(&Finding, &ResolvedRule) -> Option<Severity>,
+) -> Vec<Finding> {
     let mut findings: Vec<Finding> = findings
         .into_iter()
         .filter_map(|mut f| {
             let package = project.package_for(&f.file);
             let rel = f.file.strip_prefix(root).unwrap_or(&f.file);
             let rule = policy.resolve(rel, package);
-            if !rule.reports(f.value) {
-                return None;
-            }
+            f.severity = decide(&f, &rule)?;
             f.threshold = rule.threshold;
-            f.severity = rule.severity;
             f.package = package.map(str::to_string);
             Some(f)
         })

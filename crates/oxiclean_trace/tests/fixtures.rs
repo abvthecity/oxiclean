@@ -368,3 +368,222 @@ fn a_file_that_is_not_a_trace_fails_the_command() {
     let e = run_trace_command(&cfg).unwrap_err().to_string();
     assert!(e.contains("not a trace"), "{e}");
 }
+
+/// Each finding of `rule` as `file code key`: what its SARIF fingerprint
+/// is made of.
+fn fingerprints(result: &CommandResult, rule: &str) -> Vec<String> {
+    let r = result.rules.iter().find(|r| r.rule == rule).unwrap();
+    let mut out: Vec<String> = r
+        .result
+        .findings
+        .iter()
+        .map(|f| {
+            let FindingKind::Issue(issue) = &f.kind else { panic!("{f:?}") };
+            let file = f.file.strip_prefix(&result.root).unwrap_or(&f.file);
+            format!("{} {} {}", file.to_string_lossy().replace('\\', "/"), issue.code, issue.key)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Rewrites each event of the traces in `dir` with `f`.
+fn rewrite_events(dir: &Path, f: impl Fn(&mut serde_json::Map<String, serde_json::Value>)) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !name.starts_with("trace") {
+            continue;
+        }
+        let mut events: Vec<serde_json::Value> =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        for e in &mut events {
+            f(e.as_object_mut().unwrap());
+        }
+        fs::write(&path, serde_json::to_string(&events).unwrap()).unwrap();
+    }
+}
+
+/// Another trace of the same code, by another process at another time and
+/// with its files named after that process, reports the same findings
+/// under the same fingerprints.
+#[test]
+fn fingerprints_stay_put_from_one_trace_to_the_next() {
+    for name in ["pnpm", "npm", "deno"] {
+        let before = run(&fixture(name), None);
+        let t = copy(name);
+        let trace = t.path().join("trace");
+        rewrite_events(&trace, |e| {
+            e.insert("pid".into(), 4242.into());
+            let ts = e["ts"].as_f64().unwrap();
+            e.insert("ts".into(), (ts + 54_321.5).into());
+        });
+        for entry in fs::read_dir(&trace).unwrap() {
+            let path = entry.unwrap().path();
+            let renamed = path.to_string_lossy().replace("12347", "777");
+            fs::rename(&path, renamed).unwrap();
+        }
+        if trace.join("legend.json").exists() {
+            let legend = fs::read_to_string(trace.join("legend.json")).unwrap();
+            fs::write(trace.join("legend.json"), legend.replace("12347", "777")).unwrap();
+        }
+        let after = run(t.path(), None);
+        for rule in ["hot-spots", "duplicate-packages"] {
+            let (b, a) = (fingerprints(&before, rule), fingerprints(&after, rule));
+            assert!(!b.is_empty(), "{name} {rule}");
+            assert_eq!(b, a, "{name} {rule}");
+            let mut unique = b.clone();
+            unique.dedup();
+            assert_eq!(unique, b, "{name} {rule}: two findings share a fingerprint");
+        }
+    }
+}
+
+/// A trace recorded through a symlink to the root, as in a symlinked
+/// checkout, is found under the root.
+#[cfg(unix)]
+#[test]
+fn a_trace_recorded_through_a_symlinked_root() {
+    let t = TempDir::new().unwrap();
+    let real = t.path().canonicalize().unwrap().join("repo");
+    copy_dir(&fixture("bun"), &real);
+    let link = t.path().canonicalize().unwrap().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = real.join("trace/trace.json");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace("/Users/dev/bun-repo", &link.to_string_lossy())).unwrap();
+    let result = run(&real, None);
+    assert_eq!(summary(&result, "hot-spots"), summary(&run(&fixture("bun"), None), "hot-spots"));
+}
+
+/// The threshold of the file a hot spot is reported on applies to it; a
+/// frame under it is still reported when it takes most of a frame that
+/// is.
+#[test]
+fn each_hot_spot_has_its_own_files_threshold() {
+    let t = copy("bun");
+    fs::write(
+        t.path().join(".oxicleanrc.json"),
+        r#"{ "trace": { "dir": "trace" },
+             "rules": { "hot-spots": ["warn", { "threshold": 10, "skipMillis": 2 }] },
+             "overrides": [{ "files": ["packages/server/src/main.ts"], "rules": { "hot-spots": ["warn", { "threshold": 16 }] } },
+                           { "files": ["packages/server/src/config.ts"], "rules": { "hot-spots": ["error", { "threshold": 1000 }] } }] }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        summary(&run(t.path(), None), "hot-spots"),
+        [
+            // 309ms is under config.ts's 1000ms, and nothing in it is kept.
+            "packages/server/src/main.ts:0 check-source-file (17) warn",
+            // 15ms is under main.ts's 16ms, but most of the 17ms file check,
+            // and 10ms most of those 15ms.
+            "packages/server/src/main.ts:5 check-expression (15) warn",
+            "packages/server/src/main.ts:5 check-expression (10) warn",
+            "packages/server/src/range.ts:0 check-source-file (26) warn",
+        ]
+    );
+}
+
+/// A confirmed hot spot takes the severity of the complex-types finding it
+/// confirms when that's higher than its own, and no higher.
+#[test]
+fn a_confirmed_hot_spot_is_as_severe_as_what_it_confirms() {
+    let t = copy("bun");
+    let config = |complex: &str| {
+        fs::write(
+            t.path().join(".oxicleanrc.json"),
+            format!(
+                r#"{{ "trace": {{ "dir": "trace" }}, "rules": {{ "complex-types": "{complex}", "hot-spots": ["warn", {{ "threshold": 100, "skipMillis": 2 }}] }} }}"#
+            ),
+        )
+        .unwrap();
+    };
+    config("warn");
+    assert_eq!(
+        summary(&run(t.path(), None), "hot-spots"),
+        [
+            "packages/server/src/config.ts:0 check-source-file (309) warn",
+            "packages/server/src/config.ts:3 check-variable-declaration (277) warn confirmed",
+        ]
+    );
+    config("error");
+    assert_eq!(
+        summary(&run(t.path(), None), "hot-spots")[1],
+        "packages/server/src/config.ts:3 check-variable-declaration (277) error confirmed"
+    );
+}
+
+/// A trace of files that aren't under the root reports on the root's
+/// package.json, never a path outside the root.
+#[test]
+fn findings_stay_under_the_root() {
+    let t = copy("bun");
+    let elsewhere = TempDir::new().unwrap();
+    copy_dir(&fixture("bun").join("trace"), elsewhere.path());
+    // The trace names files of another checkout altogether.
+    let path = elsewhere.path().join("trace.json");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace("/Users/dev/bun-repo/packages/server", "/Users/dev/other"))
+        .unwrap();
+    let result = run(t.path(), Some(elsewhere.path().to_path_buf()));
+    for rule in ["hot-spots", "duplicate-packages"] {
+        let r = result.rules.iter().find(|r| r.rule == rule).unwrap();
+        for f in &r.result.findings {
+            assert!(f.file.starts_with(&result.root), "{rule}: {}", f.file.display());
+        }
+    }
+    let hot = summary(&result, "hot-spots");
+    assert!(!hot.is_empty() && hot.iter().all(|l| l.starts_with("package.json:0")), "{hot:?}");
+    // Not confirmed: the trace isn't of this code.
+    assert!(hot.iter().all(|l| !l.contains("confirmed")), "{hot:?}");
+}
+
+/// Directories that are one directory through symlinks are one copy, and
+/// a package several programs load twice is one finding.
+#[cfg(unix)]
+#[test]
+fn symlinked_copies_are_one_and_programs_merge() {
+    let t = copy("pnpm");
+    let root = t.path().canonicalize().unwrap();
+    // As `preserveSymlinks` would load it: csstype 3.1.3 through the link
+    // pnpm makes in packages/ui, besides from the store.
+    let store = root.join("node_modules/.pnpm/csstype@3.1.3/node_modules/csstype");
+    fs::create_dir_all(root.join("packages/ui/node_modules")).unwrap();
+    std::os::unix::fs::symlink(&store, root.join("packages/ui/node_modules/csstype")).unwrap();
+    let trace = root.join("trace");
+    rewrite_events(&trace, |e| {
+        if e["name"] == "createSourceFile"
+            && let Some(path) = e["args"]["path"].as_str()
+            && path.contains("csstype@3.1.3")
+        {
+            let linked = path.replace(
+                "node_modules/.pnpm/csstype@3.1.3/node_modules/csstype",
+                "packages/ui/node_modules/csstype",
+            );
+            e["args"]["path"] = linked.into();
+        }
+    });
+    // The second program loads both copies too.
+    let first = fs::read_to_string(trace.join("trace.12347-1.json")).unwrap();
+    let mut events: Vec<serde_json::Value> = serde_json::from_str(&first).unwrap();
+    events.retain(|e| e["name"] == "createSourceFile");
+    let second = trace.join("trace.12347-2.json");
+    let mut theirs: Vec<serde_json::Value> =
+        serde_json::from_str(&fs::read_to_string(&second).unwrap()).unwrap();
+    theirs.extend(events);
+    fs::write(&second, serde_json::to_string(&theirs).unwrap()).unwrap();
+
+    let result = run(&root, None);
+    assert_eq!(
+        summary(&result, "duplicate-packages"),
+        [
+            "node_modules/.pnpm/csstype@3.1.2/node_modules/csstype/package.json:0 duplicate-package (2) warn"
+        ]
+    );
+    let (message, _) = finding(&result, "duplicate-packages", "csstype");
+    assert!(
+        message.contains("3.1.3 at node_modules/.pnpm/csstype@3.1.3/node_modules/csstype"),
+        "{message}"
+    );
+    assert!(message.ends_with("(in 2 programs)"), "{message}");
+}

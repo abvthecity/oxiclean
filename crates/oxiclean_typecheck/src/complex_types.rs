@@ -408,9 +408,13 @@ fn check_all(
         .par_iter()
         .map(|path| {
             let file = &files[*path];
+            let found = types.check_file(path, file);
+            if found.is_empty() {
+                return Vec::new();
+            }
+            // Only for the files with findings.
             let lines = LineIndex::new(&file.src);
-            types
-                .check_file(path, file)
+            found
                 .into_iter()
                 .map(|(f, end)| {
                     let end_line = lines.line(end as usize).max(f.line());
@@ -1413,7 +1417,6 @@ impl<'a> Types<'a> {
     /// offset where the declaration, type or chain it is about ends.
     fn check_file(&self, path: &'a Path, types: &'a FileTypes) -> Vec<(Finding, u32)> {
         let mut findings = Vec::new();
-        let mut ends = Vec::new();
         let mut ranges: Vec<((&'a Path, &'a str), String, Vec<RangeUse>)> = Vec::new();
         for site in &types.sites {
             let ty = match &site.ty {
@@ -1424,19 +1427,14 @@ impl<'a> Types<'a> {
                 },
             };
             self.check_site(path, types, site, ty, &mut ranges, &mut findings);
-            ends.resize(findings.len(), site.end);
         }
         for (_, name, uses) in ranges {
-            // The use with the largest `N`, which the finding points at.
-            let end = uses.iter().rev().max_by_key(|u| u.n).map_or(0, |u| u.at.end);
             findings.extend(self.report_ranges(path, &name, uses));
-            ends.resize(findings.len(), end);
         }
         for chain in &types.chains {
             findings.extend(self.check_chain(path, types, chain));
-            ends.resize(findings.len(), chain.end);
         }
-        findings.into_iter().zip(ends).collect()
+        findings
     }
 
     fn check_site(
@@ -1446,7 +1444,7 @@ impl<'a> Types<'a> {
         site: &Site,
         ty: &'a Ty,
         ranges: &mut Vec<((&'a Path, &'a str), String, Vec<RangeUse>)>,
-        findings: &mut Vec<Finding>,
+        findings: &mut Vec<(Finding, u32)>,
     ) {
         let ctx = Ctx::new(self);
         let env = Env::default();
@@ -1466,7 +1464,9 @@ impl<'a> Types<'a> {
                     let Decl::Alias(alias) = found.decl else { return true };
                     if is_paths(found.name, alias, &|helper| self.has_template(found.file, helper))
                     {
-                        findings.extend(self.check_paths(path, name, args, *at, &ctx));
+                        findings.extend(
+                            self.check_paths(path, name, args, *at, &ctx).map(|f| (f, site.end)),
+                        );
                     } else if let Some((range, n)) = ctx.range(path, &env, &found, alias, args) {
                         // Only a use of the alias itself can be written out.
                         let fix = ((range.file, range.name) == (found.file, found.name)
@@ -1495,7 +1495,7 @@ impl<'a> Types<'a> {
         if let Some(product) = largest
             && product.value >= self.threshold
         {
-            findings.push(self.report_product(path, site, product));
+            findings.push((self.report_product(path, site, product), site.end));
         }
     }
 
@@ -1552,11 +1552,16 @@ impl<'a> Types<'a> {
 
     /// A finding for the uses of one `Range<N>`-style alias in `path`: `tsc`
     /// builds the tuples for the largest `N` and reuses them for the
-    /// others.
-    fn report_ranges(&self, path: &Path, name: &str, uses: Vec<RangeUse>) -> Option<Finding> {
+    /// others. It ends where the use it points at does.
+    fn report_ranges(
+        &self,
+        path: &Path,
+        name: &str,
+        uses: Vec<RangeUse>,
+    ) -> Option<(Finding, u32)> {
         // The first of the largest.
         let largest = uses.iter().rev().max_by_key(|u| u.n)?;
-        let n = largest.n;
+        let (n, end) = (largest.n, largest.at.end);
         let types = n.saturating_mul(n.saturating_add(1)) / 2;
         if types < self.threshold {
             return None;
@@ -1592,11 +1597,12 @@ impl<'a> Types<'a> {
             };
             issue = issue.with_fix(Fix::new(path.to_path_buf(), description, ops));
         }
-        Some(Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(types)))
+        Some((Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(types)), end))
     }
 
-    /// A finding for a chain of builder calls that ends a chain.
-    fn check_chain(&self, path: &Path, types: &FileTypes, chain: &Chain) -> Option<Finding> {
+    /// A finding for a chain of builder calls that ends a chain, with where
+    /// the chain ends.
+    fn check_chain(&self, path: &Path, types: &FileTypes, chain: &Chain) -> Option<(Finding, u32)> {
         // A chain another continues is counted there.
         if let Some(name) = &chain.name
             && types.chains.iter().any(|c| c.root == *name)
@@ -1619,7 +1625,7 @@ impl<'a> Types<'a> {
             );
         }
         let issue = Issue::new("builder-chain", *package, message, chain.line);
-        Some(Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(cost)))
+        Some((Finding::new(path.to_path_buf(), FindingKind::Issue(issue), clamp(cost)), chain.end))
     }
 
     fn json_paths(&self, from: &Path, module: &str) -> Option<u64> {

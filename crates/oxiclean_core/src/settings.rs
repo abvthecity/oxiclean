@@ -344,7 +344,7 @@ pub struct Rules {
     /// `complex-types` flags. The threshold is analyze-trace's
     /// `forceMillis`, and the `skipMillis` option its `skipMillis`.
     /// Default threshold: 500 ms. Default severity: `warn`; a hot spot on
-    /// a type `complex-types` flags is an `error`.
+    /// a type `complex-types` flags is at least as severe as that finding.
     pub hot_spots: Option<RuleSetting>,
     /// Packages a trace shows `tsc` loading from more than one directory.
     /// Default threshold: 2 directories. Default severity: `warn`.
@@ -453,7 +453,8 @@ pub struct RuleOptions {
     pub fields: Option<Vec<DependencyField>>,
     /// For `hot-spots`: spans of the trace shorter than this many
     /// milliseconds are never reported, as analyze-trace's `skipMillis`.
-    /// Default: 100.
+    /// Default: 100. Read only from `rules`, as the whole trace is read
+    /// with one setting; in `overrides` it is ignored, with a warning.
     pub skip_millis: Option<usize>,
 }
 

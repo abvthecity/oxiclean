@@ -55,7 +55,10 @@ jobs:
           node-version: 22
 
       - name: Install TypeScript and analyze-trace
-        run: npm install --prefix "$RUNNER_TEMP/tools" --ignore-scripts "typescript@${{ inputs.typescript }}" @typescript/analyze-trace@0.11.1
+        # The input reaches the shell as a variable, never as script text.
+        env:
+          TYPESCRIPT_VERSION: ${{ inputs.typescript }}
+        run: npm install --prefix "$RUNNER_TEMP/tools" --ignore-scripts "typescript@$TYPESCRIPT_VERSION" @typescript/analyze-trace@0.11.1
 
       - name: Check out lit
         run: |

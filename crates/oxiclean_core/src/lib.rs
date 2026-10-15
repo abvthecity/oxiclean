@@ -57,8 +57,8 @@ pub use report::{
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
 pub use settings::{
-    ConfigFile, DependencyField, DependencyFields, PluginSettings, RuleOptions, RulePolicy,
-    Severity, TraceSettings,
+    ConfigFile, DependencyField, DependencyFields, PluginSettings, ResolvedRule, RuleOptions,
+    RulePolicy, Severity, TraceSettings,
 };
 pub use types::{SpecKind, Specifier};
 pub use uses::{ModuleUses, Usage, Used};

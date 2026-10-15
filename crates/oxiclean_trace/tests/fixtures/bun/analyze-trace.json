@@ -1,0 +1,70 @@
+{
+  "results": [
+    {
+      "project": {
+        "tracePath": "<trace>/trace.json",
+        "typesPath": "<trace>/types.json",
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types.json"
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Check file <root>/packages/server/src/config.ts",
+            "timeMs": 309,
+            "path": "<root>/packages/server/src/config.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 277,
+                "path": "<root>/packages/server/src/config.ts",
+                "startLine": 3,
+                "startChar": 14,
+                "endLine": 3,
+                "endChar": 35,
+                "children": []
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/server/src/range.ts",
+            "timeMs": 26,
+            "path": "<root>/packages/server/src/range.ts",
+            "children": []
+          },
+          {
+            "description": "Check file <root>/packages/server/src/main.ts",
+            "timeMs": 17,
+            "path": "<root>/packages/server/src/main.ts",
+            "children": [
+              {
+                "description": "Check expression",
+                "timeMs": 15,
+                "path": "<root>/packages/server/src/main.ts",
+                "startLine": 5,
+                "startChar": 1,
+                "endLine": 5,
+                "endChar": 41,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 10,
+                    "path": "<root>/packages/server/src/main.ts",
+                    "startLine": 5,
+                    "startChar": 5,
+                    "endLine": 5,
+                    "endChar": 40,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

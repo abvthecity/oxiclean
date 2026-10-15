@@ -1,68 +1,70 @@
 //! `types.json`: one record per type the checker built, in order of id.
 //!
 //! The file grows with the number of types and can run to gigabytes, so
-//! it is read only when a hot spot names a type, each record is kept as
-//! raw text, and only the records a report needs are parsed. A file cut
-//! short, as when `tsc` ran out of memory, keeps the records before the
-//! cut.
+//! it is read only when a hot spot names a type, once, keeping only the
+//! records of the types the hot spots name; the others are skipped
+//! without being parsed. A file cut short, as when `tsc` ran out of
+//! memory, keeps the records before the cut.
 
-use std::{fmt, fs::File, io::BufReader, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    fs::File,
+    io::BufReader,
+    path::Path,
+};
 
-use serde::de::{DeserializeSeed, Deserializer, SeqAccess, Visitor};
-use serde_json::{Map, Value, value::RawValue};
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, SeqAccess, Visitor};
+use serde_json::{Map, Value};
 use tracing::warn;
 
-/// The records of a `types.json`, unparsed.
+/// The records of a `types.json` that were asked for, by id.
 #[derive(Debug, Default)]
 pub(crate) struct TypesFile {
-    records: Vec<Box<RawValue>>,
+    records: HashMap<u64, Map<String, Value>>,
+    /// How many records the file holds, read or not.
+    count: u64,
 }
 
 impl TypesFile {
-    /// Reads `path`; an unreadable or malformed file keeps what was read
-    /// before the problem, with a warning.
-    pub(crate) fn read(path: &Path) -> Self {
+    /// Reads the records of `ids` from `path`; an unreadable or malformed
+    /// file keeps what was read before the problem, with a warning.
+    pub(crate) fn read(path: &Path, ids: &HashSet<u64>) -> Self {
+        let mut out = Self::default();
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) => {
                 warn!("Can't read {}: {e}", path.display());
-                return Self::default();
+                return out;
             }
         };
-        let mut records = Vec::new();
-        let mut de = serde_json::Deserializer::from_reader(BufReader::new(file));
-        if let Err(e) = (&mut de).deserialize_seq(Records(&mut records)) {
+        let mut de = serde_json::Deserializer::from_reader(BufReader::with_capacity(1 << 16, file));
+        if let Err(e) = (&mut de).deserialize_seq(Records { ids, out: &mut out }) {
             warn!(
                 "{} is cut short or malformed ({e}); using its first {} types",
                 path.display(),
-                records.len()
+                out.count
             );
         }
-        Self { records }
+        out
     }
 
     /// Whether the file holds no types.
     pub(crate) fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.count == 0
     }
 
-    /// The type with `id`, as its record says.
-    pub(crate) fn get(&self, id: u64) -> Option<Map<String, Value>> {
-        let index = usize::try_from(id.checked_sub(1)?).ok()?;
-        serde_json::from_str(self.records.get(index)?.get()).ok()
+    /// The type with `id`, when it was asked for and the file has it.
+    pub(crate) fn get(&self, id: u64) -> Option<&Map<String, Value>> {
+        self.records.get(&id)
     }
 }
 
-/// Collects a JSON array's elements into a vector, keeping those before an
-/// error.
-struct Records<'v>(&'v mut Vec<Box<RawValue>>);
-
-impl<'de> DeserializeSeed<'de> for Records<'_> {
-    type Value = ();
-
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
-        d.deserialize_seq(self)
-    }
+/// Reads a JSON array's elements, the ones asked for into a map and the
+/// others into nothing, keeping those before an error.
+struct Records<'a> {
+    ids: &'a HashSet<u64>,
+    out: &'a mut TypesFile,
 }
 
 impl<'de> Visitor<'de> for Records<'_> {
@@ -73,10 +75,31 @@ impl<'de> Visitor<'de> for Records<'_> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while let Some(record) = seq.next_element::<Box<RawValue>>()? {
-            self.0.push(record);
+        loop {
+            // Ids start at 1, at index 0.
+            let id = self.out.count + 1;
+            let read = if self.ids.contains(&id) {
+                seq.next_element::<Value>()?.map(|record| {
+                    if let Value::Object(record) = record {
+                        self.out.records.insert(id, record);
+                    }
+                })
+            } else {
+                seq.next_element::<IgnoredAny>()?.map(|_| ())
+            };
+            if read.is_none() {
+                return Ok(());
+            }
+            self.out.count += 1;
         }
-        Ok(())
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for Records<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
     }
 }
 
@@ -327,15 +350,22 @@ mod tests {
     fn a_file_cut_short_keeps_what_came_before() {
         let t = TempDir::new().unwrap();
         let path = t.path().join("types.json");
-        fs::write(&path, "[{\"id\":1,\"intrinsicName\":\"any\"},\n{\"id\":2,\"intrinsicName\":\"string\"},\n{\"id\":3,\"intr").unwrap();
-        let types = TypesFile::read(&path);
+        fs::write(&path, "[{\"id\":1,\"intrinsicName\":\"any\"},\n{\"id\":2,\"intrinsicName\":\"string\"},\nnull,\n{\"id\":4,\"intr").unwrap();
+        let ids: HashSet<u64> = [0, 2, 3, 4].into();
+        let types = TypesFile::read(&path, &ids);
         assert_eq!(
             types.get(2).and_then(|t| t.get("intrinsicName").cloned()),
             Some(Value::from("string"))
         );
-        assert!(types.get(3).is_none() && types.get(0).is_none());
-        assert!(TypesFile::read(&t.path().join("missing.json")).get(1).is_none());
+        assert!(types.get(1).is_none(), "type 1 wasn't asked for");
+        assert!(types.get(3).is_none() && types.get(4).is_none() && types.get(0).is_none());
+        assert!(!types.is_empty());
+        assert!(TypesFile::read(&t.path().join("missing.json"), &ids).is_empty());
         fs::write(&path, "{\"not\": \"an array\"}").unwrap();
-        assert!(TypesFile::read(&path).get(1).is_none());
+        assert!(TypesFile::read(&path, &ids).is_empty());
+        // A record that isn't an object loses only itself.
+        fs::write(&path, "[1, {\"id\":2}]").unwrap();
+        let types = TypesFile::read(&path, &[1, 2].into());
+        assert!(types.get(1).is_none() && types.get(2).is_some());
     }
 }

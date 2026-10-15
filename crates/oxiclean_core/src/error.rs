@@ -49,7 +49,13 @@ pub enum Error {
     NoTraceDir,
 
     #[error("could not read the trace in {}: {message}", path.display())]
-    Trace { path: PathBuf, message: String },
+    Trace {
+        path: PathBuf,
+        message: String,
+        /// The I/O or parse error behind it, when there is one.
+        #[source]
+        source: Option<io::Error>,
+    },
 
     #[error("could not apply fixes to {}", path.display())]
     Fix {

@@ -1,7 +1,0 @@
-{
-  "name": "npm-trace",
-  "private": true,
-  "workspaces": [
-    "packages/*"
-  ]
-}

@@ -2,6 +2,7 @@
 //
 //   node crates/oxiclean_trace/tests/fixtures/regenerate.mjs path/to/tsc
 //   node crates/oxiclean_trace/tests/fixtures/regenerate.mjs --raw OUT path/to/tsc
+//   node crates/oxiclean_trace/tests/fixtures/regenerate.mjs --golden path/to/analyze-trace
 //
 // With `--raw OUT`, each fixture is set up in OUT/<name>/repo with its
 // trace, untouched, in OUT/<name>/repo/trace, and the fixtures are left
@@ -21,6 +22,14 @@
 //
 // Timings differ from run to run, so the expected output in tests/fixtures.rs
 // changes with every regeneration.
+//
+// With `--golden`, nothing is traced: analyze-trace (0.11.1) reads each
+// fixture's committed trace, with the paths in it pointing at the fixture
+// so it can read the sources, at the fixture's hot-spot settings, and its
+// JSON output is written to <fixture>/analyze-trace.json with the fixture's
+// path as `<root>` and the trace directory as `<trace>`. The parity test in
+// src/hot_spots/parity.rs compares oxiclean's hot spots with it. Run it after
+// regenerating the traces.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31,7 +40,7 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const args = process.argv.slice(2);
 const raw = args[0] === "--raw" ? path.resolve(args[1]) : undefined;
 const tsc = raw ? args[2] : args[0];
-if (!tsc || (args[0] === "--raw" && !args[1])) {
+if (args[0] !== "--golden" && (!tsc || (args[0] === "--raw" && !args[1]))) {
   console.error("usage: node regenerate.mjs [--raw OUT] path/to/tsc");
   process.exit(2);
 }
@@ -52,7 +61,8 @@ const fixtures = {
     keep: ["packages/ui/dist", "packages/app/dist"],
   },
   npm: { args: ["-p", "packages/web"], prefix: "/home/runner/work/npm-repo", links: {} },
-  bun: { args: ["-p", "packages/server"], prefix: "/Users/dev/bun-repo", links: {} },
+  // Its hot spots compare no types, so it keeps no types.json.
+  bun: { args: ["-p", "packages/server"], prefix: "/Users/dev/bun-repo", links: {}, types: false },
   deno: {
     args: ["-p", "packages/api"],
     prefix: "c:/users/ci/deno-repo",
@@ -64,6 +74,11 @@ const fixtures = {
     },
   },
 };
+
+if (args[0] === "--golden") {
+  golden(args[1]);
+  process.exit(0);
+}
 
 for (const [name, fixture] of Object.entries(fixtures)) {
   const src = path.join(here, name);
@@ -121,7 +136,7 @@ for (const [name, fixture] of Object.entries(fixtures)) {
     }
     fs.writeFileSync(path.join(dest, file), rewrite("[\n" + events.map((e) => JSON.stringify(e)).join(",\n") + "\n]\n"));
     const typesFile = "types" + file.slice("trace".length);
-    if (fs.existsSync(path.join(out, typesFile))) {
+    if (fixture.types !== false && fs.existsSync(path.join(out, typesFile))) {
       const types = JSON.parse(fs.readFileSync(path.join(out, typesFile), "utf8"));
       // Types past this id are left out, to keep the file small; the
       // trace then names types types.json doesn't have, as a trace whose
@@ -149,4 +164,41 @@ for (const [name, fixture] of Object.entries(fixtures)) {
   }
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`${name}: ${fs.readdirSync(dest).join(", ")}`);
+}
+
+/** Writes each fixture's analyze-trace.json with the analyze-trace at `analyzeTrace`. */
+function golden(analyzeTrace) {
+  if (!analyzeTrace) {
+    console.error("usage: node regenerate.mjs --golden path/to/analyze-trace");
+    process.exit(2);
+  }
+  for (const [name, fixture] of Object.entries(fixtures)) {
+    const root = fs.realpathSync(path.join(here, name));
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `oxiclean-golden-${name}-`)));
+    const trace = path.join(tmp, "trace");
+    fs.mkdirSync(trace);
+    for (const file of fs.readdirSync(path.join(root, "trace"))) {
+      const text = fs.readFileSync(path.join(root, "trace", file), "utf8");
+      // tsc lowercases paths on Windows; the fixture's are lowercase there.
+      fs.writeFileSync(path.join(trace, file), text.split(fixture.prefix).join(root));
+    }
+    const rc = JSON.parse(fs.readFileSync(path.join(root, ".oxicleanrc.json"), "utf8"));
+    const [, { threshold, skipMillis }] = rc.rules["hot-spots"];
+    let out;
+    try {
+      out = execFileSync(
+        analyzeTrace,
+        [trace, "--json", "--forceMillis", String(threshold), "--skipMillis", String(skipMillis)],
+        { encoding: "utf8" },
+      );
+    } catch (e) {
+      // analyze-trace exits 1 when it finds nothing.
+      if (e.status !== 1) throw e;
+      out = e.stdout;
+    }
+    const json = JSON.parse(out.split(trace).join("<trace>").split(root).join("<root>"));
+    fs.writeFileSync(path.join(root, "analyze-trace.json"), JSON.stringify(json, null, 2) + "\n");
+    fs.rmSync(tmp, { recursive: true, force: true });
+    console.log(`${name}: analyze-trace.json`);
+  }
 }

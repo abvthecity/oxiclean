@@ -670,8 +670,13 @@ is read. Positions are shown as `(line, char)` like analyze-trace's, and
 types are named from `types.json`. A span that was still running when the
 trace ended (tsc ran out of memory, or the file was cut short) runs to the
 end of the trace. A hot spot inside a type that `complex-types` reports
-says so, links to that finding and is raised to `error`: the estimate and
-the measurement agree.
+says so, links to that finding and is at least as severe as it (an
+`error` by default): the estimate and the measurement agree. Each hot
+spot is held to the threshold of the file it's reported on, so
+`overrides` can raise or lower it per package or path; a span under its
+threshold is still reported when it takes most of a span that is.
+`skipMillis` applies to the whole trace, so it is read only from
+`rules`.
 
 `duplicate-packages` reports packages `tsc` loaded from more than one
 directory, under `node_modules` in npm, Yarn, Bun and pnpm layouts and
@@ -681,9 +686,15 @@ deduping or aligning versions would fix it. analyze-trace reads only
 `node_modules`, so oxiclean also reads `createSourceFile`.
 
 Paths in the trace may come from another machine (a CI runner, or
-Windows): files are found under the root by the longest tail of their
-path that exists there. Spans in files outside the root are reported on
-the nearest enclosing span in a file inside it.
+Windows), a symlinked checkout or a lowercased path: oxiclean learns the
+directory the trace was recorded in, from a `tsc --build` legend's
+tsconfig files or else the files the trace checked, and finds every path
+under the root through it, so an unrelated `src/index.ts` elsewhere is
+never taken for the root's. Spans in files outside the root are reported
+on the nearest enclosing span in a file inside it, else on the trace file
+or the root's package.json; oxiclean reads only regular files under the
+root. Copies of a package that are one directory through symlinks are
+one copy.
 
 ```
 ⚠ Hot spots in the trace (threshold: 10 ms)
