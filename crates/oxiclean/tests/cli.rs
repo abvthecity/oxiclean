@@ -622,3 +622,29 @@ fn fix_adds_and_removes_references() {
     let (_, out) = run(t.path(), &["references"]);
     assert!(out.contains("Total violations: 2"), "{out}");
 }
+
+#[test]
+fn fix_sets_tsconfig_options_and_types() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/options-pnpm");
+    copy_dir(&fixture, t.path());
+    let (code, out) = run(t.path(), &["tsconfig", "--fix"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Fixed 3 findings"), "{out}");
+    let (code, out) = run(t.path(), &["ambient-types", "--fix"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Fixed 1 finding"), "{out}");
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/app/tsconfig.json")).unwrap(),
+        "{\n  \"extends\": \"../../tsconfig.base.json\",\n  \"compilerOptions\": {\n    \"extendedDiagnostics\": false,\n    \"incremental\": true,\n    \"types\": [\"node\", \"react\"]\n  },\n  \"include\": [\"src\"]\n}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(t.path().join("tsconfig.base.json")).unwrap(),
+        "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"skipLibCheck\": true\n  }\n}\n"
+    );
+    for rule in ["tsconfig", "ambient-types"] {
+        let (code, out) = run(t.path(), &[rule]);
+        assert_eq!(code, 0, "{rule}: {out}");
+    }
+}

@@ -52,6 +52,12 @@ oxiclean overlap --root ./my-project
 # Find project references that don't match what packages import
 oxiclean references --root ./my-project
 
+# Find compiler options that slow every tsc run, such as skipLibCheck left unset
+oxiclean tsconfig --root ./my-project
+
+# Find programs that load @types packages nothing declares
+oxiclean ambient-types --root ./my-project
+
 # Apply the fixes a check offers
 oxiclean program-files --fix --root ./my-project
 
@@ -466,6 +472,38 @@ packages/app/tsconfig.json
 └──  line 4: imports @acme/ui but doesn't reference its tsconfig, so `tsc -b` checks it again instead of reading its .d.ts (1 config)
         packages/app/src/main.ts:1: imports @acme/ui
         fixable with --fix: add { "path": "../ui" } to "references"
+```
+
+### tsconfig Options Checker
+
+`tsconfig` reports compiler options that make every `tsc` run slower:
+
+| Code | Meaning | `--fix` |
+|---|---|---|
+| `skip-lib-check` | Programs leave `skipLibCheck` unset, so `tsc` checks every `.d.ts` in `node_modules` each run. Reported once on the config they extend | Sets it on that config |
+| `incremental` | A package.json script runs plain `tsc` (not `tsc -b`) on a config that isn't `incremental` or `composite`, so each run starts over | Sets `incremental` |
+| `debug-option` | A config turns on `diagnostics`, `extendedDiagnostics`, `generateTrace`, `listFiles`, `listEmittedFiles`, `explainFiles` or `traceResolution` | Turns it off (not `generateTrace`) |
+
+Programs whose `extends` chain names a config that isn't installed are
+skipped, since it may set these options.
+
+### Ambient Types Checker
+
+Without `compilerOptions.types`, `tsc` loads every package in each
+`node_modules/@types` from the program's directory up, used or not. In a
+monorepo that includes whatever other packages install and the package
+manager hoists. `ambient-types` reports programs that load `@types`
+packages neither their package.json nor the root one declares, and
+`--fix` sets `types` to the ones they do. Imports of a package still find
+its types without it being listed.
+
+```
+⚠ Programs load @types packages they don't declare
+
+packages/app/tsconfig.json
+└──  line 3: sets no compilerOptions.types, so tsc loads every @types package it can see, including @types/jest that no package.json here declares (1 package)
+        node_modules/@types/jest/index.d.ts: not declared
+        fixable with --fix: set "compilerOptions.types": ["node","react"]
 ```
 
 Deno doesn't read tsconfig files, so these checks find nothing in a Deno

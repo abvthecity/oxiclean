@@ -296,6 +296,14 @@ pub struct Rules {
     /// exist; and, in repos without references, package source that two or
     /// more other packages type-check. Default threshold: 1.
     pub references: Option<RuleSetting>,
+    /// Compiler options that slow every `tsc` run: `skipLibCheck` unset,
+    /// configs scripts run with `tsc` that aren't `incremental`, and debug
+    /// options such as `extendedDiagnostics` left on. Default threshold: 1.
+    pub tsconfig: Option<RuleSetting>,
+    /// Programs without `compilerOptions.types` that load `@types` packages
+    /// neither their package.json nor the root one declares. Default
+    /// threshold: 1 package.
+    pub ambient_types: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -319,6 +327,8 @@ impl Rules {
             "program-files" => self.program_files.as_ref(),
             "overlap" => self.overlap.as_ref(),
             "references" => self.references.as_ref(),
+            "tsconfig" => self.tsconfig.as_ref(),
+            "ambient-types" => self.ambient_types.as_ref(),
             _ => None,
         }
     }
@@ -341,6 +351,8 @@ impl Rules {
             &self.program_files,
             &self.overlap,
             &self.references,
+            &self.tsconfig,
+            &self.ambient_types,
         ]
         .into_iter()
         .flatten()

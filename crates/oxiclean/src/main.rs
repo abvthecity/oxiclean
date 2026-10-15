@@ -80,6 +80,12 @@ enum Commands {
     /// Check for project references that don't match what packages import
     #[command(name = "references")]
     References(oxiclean_typecheck::Config),
+    /// Check for compiler options that slow every tsc run
+    #[command(name = "tsconfig")]
+    Tsconfig(oxiclean_typecheck::Config),
+    /// Check for programs that load @types packages nothing declares
+    #[command(name = "ambient-types")]
+    AmbientTypes(oxiclean_typecheck::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -168,6 +174,16 @@ fn main() -> Result<ExitCode> {
             oxiclean_typecheck::run_references_check(cfg)?,
             oxiclean_typecheck::REFERENCES_STYLE,
             oxiclean_typecheck::REFERENCES_RULE,
+        ),
+        Commands::Tsconfig(cfg) => (
+            oxiclean_typecheck::run_tsconfig_check(cfg)?,
+            oxiclean_typecheck::TSCONFIG_STYLE,
+            oxiclean_typecheck::TSCONFIG_RULE,
+        ),
+        Commands::AmbientTypes(cfg) => (
+            oxiclean_typecheck::run_ambient_types_check(cfg)?,
+            oxiclean_typecheck::AMBIENT_TYPES_STYLE,
+            oxiclean_typecheck::AMBIENT_TYPES_RULE,
         ),
     };
     let fixed =

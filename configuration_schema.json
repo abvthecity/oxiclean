@@ -320,6 +320,17 @@
       "description": "Every rule oxiclean knows. Each is set to a severity, or to\n`[severity, options]`.",
       "type": "object",
       "properties": {
+        "ambient-types": {
+          "description": "Programs without `compilerOptions.types` that load `@types` packages\nneither their package.json nor the root one declares. Default\nthreshold: 1 package.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "barrels": {
           "description": "Barrel files, modules that mostly re-export others, that pull in\ntoo many modules when imported. Default threshold: 25 modules.",
           "anyOf": [
@@ -443,6 +454,17 @@
         },
         "references": {
           "description": "Project references that don't match what packages import: missing,\nstale, cyclic or pointing at configs that aren't `composite` or don't\nexist; and, in repos without references, package source that two or\nmore other packages type-check. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tsconfig": {
+          "description": "Compiler options that slow every `tsc` run: `skipLibCheck` unset,\nconfigs scripts run with `tsc` that aren't `incremental`, and debug\noptions such as `extendedDiagnostics` left on. Default threshold: 1.",
           "anyOf": [
             {
               "$ref": "#/$defs/RuleSetting"

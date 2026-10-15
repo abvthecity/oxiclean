@@ -61,6 +61,9 @@ pub struct TsConfigFile {
     pub extends: Vec<PathBuf>,
     /// Every config it extends, directly or not.
     pub ancestors: BTreeSet<PathBuf>,
+    /// Whether a config in its `extends` chain couldn't be found, so its
+    /// options are only partly known.
+    pub partial: bool,
     /// Merged `compilerOptions`, with path options and `paths` targets made
     /// absolute.
     pub options: Map<String, Value>,
@@ -226,6 +229,9 @@ fn find_configs(root: &Path) -> Vec<PathBuf> {
 struct Raw {
     doc: JsoncDoc,
     extends: Vec<PathBuf>,
+    /// Whether an `extends` entry couldn't be found, such as a package
+    /// that isn't installed.
+    unresolved: bool,
 }
 
 /// Reads `path` and, recursively, what it extends into `raw`.
@@ -259,7 +265,8 @@ fn read_raw(project: &Project, path: &Path, raw: &mut HashMap<PathBuf, Option<Ra
     for e in &extends {
         read_raw(project, e, raw, depth + 1);
     }
-    raw.insert(path.to_path_buf(), Some(Raw { doc, extends }));
+    let unresolved = extends.len() < names.len();
+    raw.insert(path.to_path_buf(), Some(Raw { doc, extends, unresolved }));
 }
 
 /// The tsconfig `extends` names from `dir`: a path, or a package's
@@ -303,6 +310,10 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
     merge(path, raw, &mut merged, &mut BTreeSet::new(), 0);
     let mut ancestors = BTreeSet::new();
     collect_ancestors(path, raw, &mut ancestors, 0);
+    let partial = own.unresolved
+        || ancestors
+            .iter()
+            .any(|a| raw.get(a).and_then(Option::as_ref).is_some_and(|r| r.unresolved));
 
     let config_dir = dir.to_string_lossy().into_owned();
     let resolve = |d: &Declared<Value>| -> Value {
@@ -372,6 +383,7 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
         dir,
         extends: own.extends,
         ancestors,
+        partial,
         options,
         include: patterns(&merged.include),
         exclude: patterns(&merged.exclude),

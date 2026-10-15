@@ -1,0 +1,1 @@
+{ "name": "server", "devDependencies": { "@types/bun": "^1.0.0" } }
