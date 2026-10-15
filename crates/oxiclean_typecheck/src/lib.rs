@@ -24,6 +24,8 @@
 //!   their types slows `tsc`.
 //! - `type-bloat` ([`run_type_bloat_check`]): package imports that load
 //!   huge declaration trees.
+//! - `complex-types` ([`run_complex_types_check`]): type shapes that make
+//!   `tsc` build huge numbers of types.
 //!
 //! The `typecheck` command ([`run_typecheck_command`]) runs each of these
 //! rules the config file leaves on, reading the tsconfig files once.
@@ -35,6 +37,7 @@ mod config;
 mod declarations;
 mod isolated_declarations;
 mod large_literals;
+mod lines;
 mod overlap;
 mod program_files;
 mod references;

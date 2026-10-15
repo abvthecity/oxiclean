@@ -47,6 +47,7 @@ use tracing::{info, warn};
 use crate::{
     config::{Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE},
     declarations::is_typescript,
+    lines::LineIndex,
     tsconfig::{TsConfigFile, TsConfigs},
     typescript::typescript_version,
 };
@@ -298,11 +299,8 @@ fn analyze(file: &Path) -> Option<FileReport> {
     if !parsed.errors.is_empty() {
         return None;
     }
-    let line_starts: Vec<usize> =
-        std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect();
-    let line = |offset: usize| {
-        u32::try_from(line_starts.partition_point(|&s| s <= offset)).unwrap_or(u32::MAX)
-    };
+    let lines = LineIndex::new(&src);
+    let line = |offset: usize| lines.line(offset);
     let mut report = FileReport::default();
     let mut is_module = false;
     for statement in &parsed.program.body {
