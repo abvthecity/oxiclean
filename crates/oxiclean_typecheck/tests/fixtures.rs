@@ -419,25 +419,26 @@ fn complex_types_npm() {
     );
 }
 
-/// Bun: `Range<200>` in the usual shape, which `--fix` writes out, and a
-/// `Tup<120>` that builds tuples it can't; not reported: `Range<10>`.
+/// Bun: `Range<200>` in the usual shape, which `--fix` writes out with
+/// the `Range<10>` that reuses its tuples, and a `Tup<120>` that builds
+/// tuples it can't.
 #[test]
 fn complex_types_bun() {
     assert_eq!(
         complex_types("complex-bun"),
         [
-            "packages/server/src/config.ts:3 tuple-arithmetic Range (20100) fix: write Range<200> out as a union",
+            "packages/server/src/config.ts:3 tuple-arithmetic Range (20100) fix: write the 2 uses of Range out as unions",
             "packages/server/src/config.ts:5 tuple-arithmetic Tup (7260)",
         ]
     );
 }
 
-/// Deno: a 45-link zod chain (45 × 46 / 2 rebuilds); not reported: a
-/// two-link chain.
+/// Deno: a zod chain of 44 `.extend()` calls (115 × 44 + 44² types);
+/// not reported: a two-link chain.
 #[test]
 fn complex_types_deno() {
     assert_eq!(
         complex_types("complex-deno"),
-        ["packages/api/src/main.ts:3 builder-chain zod (1035)"]
+        ["packages/api/src/main.ts:3 builder-chain zod (6996)"]
     );
 }

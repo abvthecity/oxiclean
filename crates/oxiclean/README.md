@@ -27,7 +27,7 @@ or off, and a rule that is off doesn't run.
 |---|---|
 | `unused` | `unused-exports`, `unused-types`, `unused-enum-members`, `unused-namespace-members` |
 | `dependencies` | `dependencies`, `heavy-dependencies` (`warn` by default), `catalog`, `duplicate-versions` |
-| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat` |
+| `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat`, `complex-types` |
 | `bloat` | `bloat`, `barrels` |
 | `depth`, `cycles`, `duplicates` | the rule of the same name |
 

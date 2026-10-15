@@ -603,24 +603,28 @@ across files, and reports those it estimates build at least 1000 types:
 | Code | Shape | Estimate |
 |---|---|---|
 | `template-product` | a template literal type whose holes are unions, such as `` `${State}${Prefix}-${Color}-${Shade}` `` | the product of the union sizes |
-| `union-intersection` | an intersection of unions, which `tsc` normalizes into a union of every combination | the product of the union sizes |
-| `recursive-paths` | a `Paths<T>`-style alias with no depth limit, used on a `.json` import or an object type | the key paths it builds |
-| `tuple-arithmetic` | a `Range<N>`-style alias that grows a tuple one element at a time | N(N+1)/2 |
-| `builder-chain` | a chain of zod, tRPC, Hono, Elysia or Drizzle calls, each rebuilding the type built so far | links(links+1)/2 |
+| `union-intersection` | an intersection of unions, which `tsc` normalizes into a union of every combination | the product of the union sizes; an intersection of literal unions is their common members, and `A & A` is `A` |
+| `recursive-paths` | a `Paths<T>`-style alias with no depth limit, recursing in a template literal or through a helper such as `Join<K, Paths<T[K]>>`, used on a `.json` import, an object type or an interface | the key paths it builds |
+| `tuple-arithmetic` | a `Range<N>`-style alias that grows a tuple one element at a time | N(N+1)/2 for the largest `N` in each file, whose tuples the others reuse |
+| `builder-chain` | a chain of zod, tRPC, Hono, Elysia or Drizzle calls whose methods each rebuild the type built so far, such as zod's `.extend()` but not `.min()`, followed through the local `const`s it starts from | 115·links + links², fitted to zod `.extend()` chains |
 
 These are estimates, not measurements; `tsc --generateTrace` shows what
-the types cost. `--fix` writes `Range<N>` out as the union
-`0 | 1 | … | N-1` when the alias has the usual shape
+the types cost. Type parameters hide aliases of the same name, and so do
+types declared in namespaces, functions and `declare module` blocks.
+`--fix` writes each `Range<N>` in a file out as the union
+`0 | 1 | … | N-1`, in parentheses where the union would otherwise bind
+differently, when the alias has the usual shape
 (`A['length'] extends N ? A[number] : Range<N, [...A, A['length']]>`) and
 N is at most 256. In the Bun fixture this cut `tsc`'s type count from
-22289 to 8566.
+22289 to 8528.
 
 ```
 ⚠ Types that expand to huge numbers of types (threshold: 1000 types)
 
 packages/server/src/config.ts
-├──  line 3: `Range<200>` builds 200 tuples, each one element longer than the last (about 20100 types); write the union out, or use number and check it at runtime (20100 types)
-│       fixable with --fix: write Range<200> out as a union
+├──  line 3: `Range<200>` builds 200 tuples, each one element longer than the last (about 20100 types), which the other use in this file reuses; write the union out, or use number and check it at runtime (20100 types)
+│       packages/server/src/config.ts:4: `Range<10>` reuses them
+│       fixable with --fix: write the 2 uses of Range out as unions
 └──  line 5: `Tup<120>` builds 120 tuples, each one element longer than the last (about 7260 types); write the union out, or use number and check it at runtime (7260 types)
 ```
 

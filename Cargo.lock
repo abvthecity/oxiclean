@@ -1062,6 +1062,7 @@ dependencies = [
  "oxc_isolated_declarations",
  "oxc_parser",
  "oxc_span",
+ "oxc_syntax",
  "oxiclean_core",
  "path-clean",
  "rayon",
