@@ -291,6 +291,11 @@ pub struct Rules {
     /// in different directories where neither extends the other. Default
     /// threshold: 1 file.
     pub overlap: Option<RuleSetting>,
+    /// Project references that don't match what packages import: missing,
+    /// stale, cyclic or pointing at configs that aren't `composite` or don't
+    /// exist; and, in repos without references, package source that two or
+    /// more other packages type-check. Default threshold: 1.
+    pub references: Option<RuleSetting>,
 }
 
 impl Rules {
@@ -313,6 +318,7 @@ impl Rules {
             "duplicate-versions" => self.duplicate_versions.as_ref(),
             "program-files" => self.program_files.as_ref(),
             "overlap" => self.overlap.as_ref(),
+            "references" => self.references.as_ref(),
             _ => None,
         }
     }
@@ -334,6 +340,7 @@ impl Rules {
             &self.duplicate_versions,
             &self.program_files,
             &self.overlap,
+            &self.references,
         ]
         .into_iter()
         .flatten()

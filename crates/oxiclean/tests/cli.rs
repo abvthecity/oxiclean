@@ -600,3 +600,25 @@ fn fix_excludes_build_output_and_keeps_comments() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("No tsconfig program checks files it doesn't need."), "{out}");
 }
+
+#[test]
+fn fix_adds_and_removes_references() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/references-pnpm");
+    copy_dir(&fixture, t.path());
+    let (code, out) = run(t.path(), &["references", "--fix"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Fixed 3 findings"), "{out}");
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/app/tsconfig.json")).unwrap(),
+        "{\n  \"compilerOptions\": { \"composite\": true },\n  \"include\": [\"src\"],\n  \"references\": [{ \"path\": \"../ui\" }]\n}\n"
+    );
+    assert!(
+        fs::read_to_string(t.path().join("packages/legacy/tsconfig.json"))
+            .unwrap()
+            .contains("\"composite\": true")
+    );
+    let (_, out) = run(t.path(), &["references"]);
+    assert!(out.contains("Total violations: 2"), "{out}");
+}

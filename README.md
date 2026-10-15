@@ -49,6 +49,9 @@ oxiclean program-files --root ./my-project
 # Find files more than one tsconfig type-checks
 oxiclean overlap --root ./my-project
 
+# Find project references that don't match what packages import
+oxiclean references --root ./my-project
+
 # Apply the fixes a check offers
 oxiclean program-files --fix --root ./my-project
 
@@ -426,6 +429,37 @@ the other's directory.
 
 tsconfig.eslint.json
 └──  line 3: type-checks files that packages/ui/tsconfig.json also type-checks, so they are checked more than once (48 files)
+```
+
+### References Checker
+
+With project references, `tsc -b` checks each package once and the packages
+that import it read the `.d.ts` it emits. Without them, or with them out of
+date, every program that imports a sibling package's source checks that
+source again. `references` compares each program's references with the
+workspace packages its files import (type-only imports included):
+
+| Code | Meaning | `--fix` |
+|---|---|---|
+| `missing-reference` | A program that builds with references imports a workspace package it doesn't reference | Adds the reference |
+| `stale-reference` | It references a workspace package none of its files import | Removes it |
+| `not-composite` | A referenced config isn't `composite`, which `tsc -b` rejects | Sets `composite` |
+| `missing-target` | A reference points at a config that doesn't exist | |
+| `reference-cycle` | Configs reference each other, which `tsc -b` can't order | |
+| `source-imports` | In a repo without references, two or more packages type-check another package's source, through `paths` or a package.json `types` or `exports` pointing at `.ts` | |
+
+A program builds with references when it has some, something references
+it, or it is `composite`. Missing and stale references are only reported
+in repos that use references; repos that don't get `source-imports`
+instead.
+
+```
+⚠ Project references don't match imports
+
+packages/app/tsconfig.json
+└──  line 4: imports @acme/ui but doesn't reference its tsconfig, so `tsc -b` checks it again instead of reading its .d.ts (1 config)
+        packages/app/src/main.ts:1: imports @acme/ui
+        fixable with --fix: add { "path": "../ui" } to "references"
 ```
 
 Deno doesn't read tsconfig files, so these checks find nothing in a Deno
