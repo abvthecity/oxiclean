@@ -86,6 +86,9 @@ enum Commands {
     /// Check for programs that load @types packages nothing declares
     #[command(name = "ambient-types")]
     AmbientTypes(oxiclean_typecheck::Config),
+    /// Check for packages that could emit declarations without type-checking
+    #[command(name = "isolated-declarations")]
+    IsolatedDeclarations(oxiclean_typecheck::Config),
 }
 
 fn main() -> Result<ExitCode> {
@@ -184,6 +187,11 @@ fn main() -> Result<ExitCode> {
             oxiclean_typecheck::run_ambient_types_check(cfg)?,
             oxiclean_typecheck::AMBIENT_TYPES_STYLE,
             oxiclean_typecheck::AMBIENT_TYPES_RULE,
+        ),
+        Commands::IsolatedDeclarations(cfg) => (
+            oxiclean_typecheck::run_isolated_declarations_check(cfg)?,
+            oxiclean_typecheck::ISOLATED_DECLARATIONS_STYLE,
+            oxiclean_typecheck::ISOLATED_DECLARATIONS_RULE,
         ),
     };
     let fixed =

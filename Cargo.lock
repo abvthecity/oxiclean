@@ -827,6 +827,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxc_isolated_declarations"
+version = "0.97.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7056d5f8dca0c235c0d0f65bb2535939b0b0001ab42316eeb71cddbcb1f49fe4"
+dependencies = [
+ "bitflags",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_diagnostics",
+ "oxc_ecmascript",
+ "oxc_span",
+ "oxc_syntax",
+ "rustc-hash",
+]
+
+[[package]]
 name = "oxc_parser"
 version = "0.97.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1029,6 +1046,10 @@ dependencies = [
  "dashmap",
  "globset",
  "ignore",
+ "oxc_allocator",
+ "oxc_isolated_declarations",
+ "oxc_parser",
+ "oxc_span",
  "oxiclean_core",
  "path-clean",
  "rayon",

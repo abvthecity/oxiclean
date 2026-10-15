@@ -643,3 +643,18 @@ fn fix_sets_tsconfig_options() {
     let (code, out) = run(t.path(), &["tsconfig"]);
     assert_eq!(code, 0, "{out}");
 }
+
+#[test]
+fn fix_turns_on_isolated_declarations() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/isolated-pnpm");
+    copy_dir(&fixture, t.path());
+    let (code, out) = run(t.path(), &["isolated-declarations", "--fix"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Fixed 1 findings"), "{out}");
+    assert_eq!(
+        fs::read_to_string(t.path().join("packages/ready/tsconfig.json")).unwrap(),
+        "{\n  \"compilerOptions\": {\n    \"composite\": true,\n    \"outDir\": \"dist\",\n    \"isolatedDeclarations\": true\n  },\n  \"include\": [\"src\"]\n}\n"
+    );
+}

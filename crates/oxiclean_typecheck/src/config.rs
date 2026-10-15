@@ -87,3 +87,18 @@ pub const AMBIENT_TYPES_STYLE: ReportStyle = ReportStyle {
     max_unit: "packages",
     ok_message: "Every program loads only the @types packages it declares.",
 };
+
+/// Name of the rule for packages that could emit declarations without
+/// type-checking.
+pub const ISOLATED_DECLARATIONS_RULE: &str = "isolated-declarations";
+
+/// How isolated declarations findings are worded in the terminal report.
+pub const ISOLATED_DECLARATIONS_STYLE: ReportStyle = ReportStyle {
+    description: "Packages that emit .d.ts files and could do it without type-checking, with isolatedDeclarations, and JSR packages with slow types",
+    heading: "Packages could emit declarations without type-checking",
+    threshold_unit: "",
+    value_label: |n| if n == 1 { "1 annotation".to_string() } else { format!("{n} annotations") },
+    max_label: "",
+    max_unit: "",
+    ok_message: "No package is close to isolatedDeclarations, and no JSR package has slow types.",
+};

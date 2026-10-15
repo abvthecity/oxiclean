@@ -58,6 +58,9 @@ oxiclean tsconfig --root ./my-project
 # Find programs that load @types packages nothing declares
 oxiclean ambient-types --root ./my-project
 
+# Find packages that could emit .d.ts files without type-checking, and JSR slow types
+oxiclean isolated-declarations --root ./my-project
+
 # Apply the fixes a check offers
 oxiclean program-files --fix --root ./my-project
 
@@ -507,6 +510,28 @@ without it being listed.
 packages/app/tsconfig.json
 └──  line 3: loads every @types package it can see, including @types/jest that no package.json here declares; list the ones it uses in compilerOptions.types, such as ["node", "react"] (1 package)
         node_modules/@types/jest/index.d.ts: not declared
+```
+
+### Isolated Declarations Checker
+
+With `isolatedDeclarations`, every export carries the types its `.d.ts`
+needs, so `tsc`, oxc or `tsgo` can write declaration files a file at a
+time without checking the program, and `tsc -b` can start dependents
+before their dependencies finish. `isolated-declarations` runs oxc's
+isolated declarations on each program that emits declarations:
+
+| Code | Meaning | `--fix` |
+|---|---|---|
+| `can-enable` | Every export already has the types it needs | Turns `isolatedDeclarations` on, which keeps it that way |
+| `few-annotations` | Up to 10 exports need an explicit type; each is listed | |
+| `slow-types` | A Deno package with `exports` (a JSR package) has exports without explicit types in its public files, which JSR calls slow types | |
+
+```
+⚠ Packages could emit declarations without type-checking
+
+packages/near/tsconfig.json
+└──  line 2: emits declarations and is 1 annotation away from isolatedDeclarations, which lets tools write .d.ts files without type-checking (1 annotation)
+        packages/near/src/index.ts:3: TS9010: Variable must have an explicit type annotation with --isolatedDeclarations.
 ```
 
 These checks skip tsconfigs in test input directories (`fixtures`,

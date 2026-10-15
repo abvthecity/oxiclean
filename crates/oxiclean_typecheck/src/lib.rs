@@ -16,9 +16,13 @@
 //!   every run, such as `skipLibCheck` left unset.
 //! - `ambient-types` ([`run_ambient_types_check`]): programs that load
 //!   `@types` packages nothing here declares.
+//! - `isolated-declarations` ([`run_isolated_declarations_check`]):
+//!   packages that could emit `.d.ts` files without type-checking, and JSR
+//!   packages with slow types.
 
 mod ambient_types;
 mod config;
+mod isolated_declarations;
 mod overlap;
 mod program_files;
 mod references;
@@ -28,10 +32,11 @@ mod tsconfig_options;
 
 pub use ambient_types::run_ambient_types_check;
 pub use config::{
-    AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, OVERLAP_RULE,
-    OVERLAP_STYLE, PROGRAM_FILES_RULE, PROGRAM_FILES_STYLE, REFERENCES_RULE, REFERENCES_STYLE,
-    TSCONFIG_RULE, TSCONFIG_STYLE,
+    AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
+    ISOLATED_DECLARATIONS_STYLE, OVERLAP_RULE, OVERLAP_STYLE, PROGRAM_FILES_RULE,
+    PROGRAM_FILES_STYLE, REFERENCES_RULE, REFERENCES_STYLE, TSCONFIG_RULE, TSCONFIG_STYLE,
 };
+pub use isolated_declarations::run_isolated_declarations_check;
 pub use overlap::run_overlap_check;
 pub use oxiclean_core::{CheckResult, Finding, FindingKind, Issue};
 pub use program_files::run_program_files_check;

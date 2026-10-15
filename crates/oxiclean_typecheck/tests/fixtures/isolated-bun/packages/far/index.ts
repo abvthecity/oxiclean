@@ -1,0 +1,12 @@
+export const v0 = Math.random();
+export const v1 = Math.random();
+export const v2 = Math.random();
+export const v3 = Math.random();
+export const v4 = Math.random();
+export const v5 = Math.random();
+export const v6 = Math.random();
+export const v7 = Math.random();
+export const v8 = Math.random();
+export const v9 = Math.random();
+export const v10 = Math.random();
+export const v11 = Math.random();

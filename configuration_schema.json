@@ -430,6 +430,17 @@
             }
           ]
         },
+        "isolated-declarations": {
+          "description": "Programs that emit declarations and already have, or are a few\nannotations from, the explicit types `isolatedDeclarations` needs;\nand Deno packages with `exports` whose public files have JSR slow\ntypes. Default threshold: 1.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "overlap": {
           "description": "Files that more than one tsconfig program type-checks, from configs\nin different directories where neither extends the other. Default\nthreshold: 1 file.",
           "anyOf": [
