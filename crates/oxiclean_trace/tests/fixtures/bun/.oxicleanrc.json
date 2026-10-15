@@ -1,0 +1,1 @@
+{ "trace": { "dir": "trace" }, "rules": { "hot-spots": ["warn", { "threshold": 10, "skipMillis": 2 }] } }

@@ -1,0 +1,91 @@
+name: analyze-trace parity
+
+# Runs scripts/analyze-trace-parity.sh: traces the trace fixtures and the
+# core packages of lit with tsc, and checks that `oxiclean trace` finds the
+# hot spots and duplicate packages @typescript/analyze-trace does. Manual
+# only (Actions > analyze-trace parity > Run workflow); timings make it
+# too slow and noisy for every push.
+on:
+  workflow_dispatch:
+    inputs:
+      typescript:
+        description: TypeScript version to trace with
+        type: string
+        default: 5.9.3
+      force-millis:
+        description: forceMillis, and the hot-spots threshold
+        type: string
+        default: "30"
+      skip-millis:
+        description: skipMillis
+        type: string
+        default: "5"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  CARGO_INCREMENTAL: 0
+  # A real npm workspace whose core packages build with `tsc -b`.
+  LIT_REPO: https://github.com/lit/lit
+  LIT_SHA: 01dbc6673cdc211543932afd0ca04e223e567366
+
+jobs:
+  parity:
+    name: analyze-trace parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install TypeScript and analyze-trace
+        run: npm install --prefix "$RUNNER_TEMP/tools" --ignore-scripts "typescript@${{ inputs.typescript }}" @typescript/analyze-trace@0.11.1
+
+      - name: Check out lit
+        run: |
+          git init -q "$RUNNER_TEMP/lit"
+          git -C "$RUNNER_TEMP/lit" fetch -q --depth 1 "$LIT_REPO" "$LIT_SHA"
+          git -C "$RUNNER_TEMP/lit" checkout -q FETCH_HEAD
+          # Its lockfile is out of date, so `npm ci` refuses it.
+          cd "$RUNNER_TEMP/lit" && npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Build oxiclean
+        run: cargo build --release -p oxiclean
+
+      - name: Compare
+        shell: bash
+        env:
+          TSC: ${{ runner.temp }}/tools/node_modules/.bin/tsc
+          ANALYZE_TRACE: ${{ runner.temp }}/tools/node_modules/.bin/analyze-trace
+          FORCE_MILLIS: ${{ inputs.force-millis }}
+          SKIP_MILLIS: ${{ inputs.skip-millis }}
+          WORK: ${{ runner.temp }}/parity
+        run: >-
+          scripts/analyze-trace-parity.sh "$RUNNER_TEMP/lit" -b --force
+          packages/labs/ssr-dom-shim packages/reactive-element packages/lit-html
+          packages/lit-element packages/lit
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze-trace-parity
+          path: |
+            ${{ runner.temp }}/parity/*/*.json
+          if-no-files-found: ignore

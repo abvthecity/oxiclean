@@ -1,0 +1,13 @@
+export declare const button0: import("@acme/ui").Button;
+export declare const button1: import("@acme/ui").Button;
+export declare const button2: import("@acme/ui").Button;
+export declare const button3: import("@acme/ui").Button;
+export declare const button4: import("@acme/ui").Button;
+export declare const button5: import("@acme/ui").Button;
+export declare const button6: import("@acme/ui").Button;
+export declare const button7: import("@acme/ui").Button;
+export declare const button8: import("@acme/ui").Button;
+export declare const button9: import("@acme/ui").Button;
+export declare const button10: import("@acme/ui").Button;
+export declare const button11: import("@acme/ui").Button;
+export declare const accent: string;

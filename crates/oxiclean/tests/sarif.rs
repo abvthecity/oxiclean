@@ -42,6 +42,8 @@ const RULES: &[(&str, &str)] = &[
     ("typecheck", "large-literals"),
     ("typecheck", "type-bloat"),
     ("typecheck", "complex-types"),
+    ("trace", "hot-spots"),
+    ("trace", "duplicate-packages"),
 ];
 
 /// The commands, each once.

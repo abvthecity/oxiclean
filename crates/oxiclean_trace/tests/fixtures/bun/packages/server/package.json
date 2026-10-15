@@ -1,0 +1,8 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "dependencies": {
+    "@acme/shared": "1.0.0",
+    "logger": "1.0.0"
+  }
+}

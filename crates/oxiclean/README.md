@@ -30,6 +30,7 @@ or off, and a rule that is off doesn't run.
 | `typecheck` | `program-files`, `overlap`, `references`, `tsconfig`, `ambient-types`, `isolated-declarations`, `large-literals`, `type-bloat`, `complex-types` |
 | `bloat` | `bloat`, `barrels` |
 | `depth`, `cycles`, `duplicates` | the rule of the same name |
+| `trace` | `hot-spots`, `duplicate-packages` (both `warn` by default); reads an existing `tsc --generateTrace` directory |
 
 ```bash
 oxiclean unused --root ./my-project

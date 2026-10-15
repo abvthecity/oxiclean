@@ -1,0 +1,30 @@
+import type { Properties } from "csstype";
+import { theme } from "theme-kit";
+import { cn } from "./classes";
+
+export const c0 = cn("dark:border-lime-50", "hover:text-amber-900", "ring-red-100");
+export const c1 = cn("md:outline-green-300", "hover:outline-red-900", "hover:ring-rose-900");
+export const c2 = cn("outline-red-300", "border-slate-600", "focus:text-pink-400");
+export const c3 = cn("focus:text-pink-900", "active:stroke-green-800", "hover:bg-pink-300");
+export const c4 = cn("lg:outline-amber-700", "lg:stroke-slate-300", "focus:ring-green-900");
+export const c5 = cn("disabled:shadow-amber-700", "disabled:text-green-800", "md:border-amber-200");
+export const c6 = cn("lg:outline-red-100", "dark:stroke-violet-500", "lg:shadow-green-100");
+export const c7 = cn("disabled:shadow-violet-100", "fill-rose-900", "lg:fill-violet-600");
+export const c8 = cn("dark:bg-teal-500", "focus:text-teal-50", "active:fill-blue-300");
+export const c9 = cn("md:outline-teal-100", "focus:shadow-lime-800", "disabled:border-lime-800");
+export const c10 = cn("disabled:outline-amber-600", "active:border-green-200", "focus:ring-rose-300");
+export const c11 = cn("shadow-pink-200", "disabled:fill-red-200", "md:stroke-pink-900");
+export const c12 = cn("dark:border-violet-800", "shadow-rose-800", "md:outline-lime-600");
+export const c13 = cn("hover:shadow-rose-600", "ring-green-300", "lg:border-green-500");
+export const c14 = cn("text-red-900", "focus:text-amber-900", "text-gray-900");
+export const c15 = cn("md:border-rose-400", "dark:stroke-teal-100", "hover:shadow-teal-700");
+export const c16 = cn("lg:fill-green-200", "hover:stroke-violet-400", "lg:border-cyan-50");
+export const c17 = cn("active:stroke-blue-800", "fill-rose-100", "disabled:stroke-blue-500");
+export const c18 = cn("active:stroke-rose-300", "active:ring-lime-300", "active:shadow-amber-50");
+export const c19 = cn("fill-teal-400", "active:stroke-teal-500", "dark:text-gray-100");
+export const c20 = cn("active:shadow-gray-500", "active:shadow-pink-900", "shadow-rose-500");
+export const c21 = cn("hover:text-lime-300", "lg:border-lime-500", "hover:outline-teal-600");
+export const c22 = cn("hover:border-blue-200", "border-pink-700", "focus:shadow-rose-500");
+export const c23 = cn("focus:border-red-50", "hover:border-lime-300", "active:bg-slate-300");
+
+export const style: Properties = { color: theme.color };

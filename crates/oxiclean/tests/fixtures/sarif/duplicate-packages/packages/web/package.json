@@ -1,0 +1,8 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "dependencies": {
+    "date-lib": "^3.0.0",
+    "legacy-picker": "^1.0.0"
+  }
+}
