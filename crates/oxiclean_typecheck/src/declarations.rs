@@ -1,6 +1,9 @@
 //! How `tsc` finds the files it loads for an import.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use oxiclean_core::Project;
 use serde_json::Value;
@@ -35,43 +38,18 @@ pub(crate) fn paths_target(
         .find_map(|t| resolve_typed(project, Path::new(&t.replacen('*', star, 1))))
 }
 
-/// Whether `program`'s module resolution reads package.json `exports`:
-/// `node16`, `nodenext` and `bundler` do, `node10` and `classic` don't.
-fn reads_exports(program: &TsConfigFile) -> bool {
-    let option = |k: &str| program.options.get(k).and_then(Value::as_str).map(str::to_lowercase);
-    match option("moduleResolution").as_deref() {
-        Some("node16" | "nodenext" | "bundler") => true,
-        Some(_) => false,
-        None => matches!(
-            option("module").as_deref(),
-            Some("node16" | "node18" | "node20" | "nodenext" | "preserve")
-        ),
-    }
-}
-
-/// The `exports` conditions `tsc` matches for `program`.
-fn conditions(program: &TsConfigFile) -> Vec<String> {
-    let mut out: Vec<String> =
-        ["types", "import", "require", "node", "default"].iter().map(ToString::to_string).collect();
-    if let Some(Value::Array(custom)) = program.options.get("customConditions") {
-        out.extend(custom.iter().filter_map(Value::as_str).map(str::to_string));
-    }
-    out
-}
-
 /// The target of an `exports` entry: the first condition in key order
-/// that `conditions` has (`types@<version>` counting as `types`).
-pub(crate) fn condition_target<'a>(entry: &'a Value, conditions: &[String]) -> Option<&'a str> {
+/// that `accepts` takes.
+pub(crate) fn condition_target<'a>(
+    entry: &'a Value,
+    accepts: &dyn Fn(&str) -> bool,
+) -> Option<&'a str> {
     match entry {
         Value::String(s) => Some(s),
-        Value::Array(items) => items.iter().find_map(|i| condition_target(i, conditions)),
-        Value::Object(map) => map
-            .iter()
-            .filter(|(k, _)| {
-                let k = k.split('@').next().unwrap_or(k);
-                conditions.iter().any(|c| c == k)
-            })
-            .find_map(|(_, v)| condition_target(v, conditions)),
+        Value::Array(items) => items.iter().find_map(|i| condition_target(i, accepts)),
+        Value::Object(map) => {
+            map.iter().filter(|(k, _)| accepts(k)).find_map(|(_, v)| condition_target(v, accepts))
+        }
         _ => None,
     }
 }
@@ -132,13 +110,34 @@ pub(crate) fn resolve_file_only(path: &Path) -> Option<PathBuf> {
         .find(|c| c.is_file())
 }
 
-/// How a program resolves packages: whether it reads `exports`, with
-/// which conditions, and the TypeScript version `typesVersions` is matched
-/// against.
+/// The module resolution `tsc` uses for a program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Resolution {
+    /// `node10` or `classic`: no `exports`.
+    Node10,
+    /// `node16` or `nodenext`: `exports` with `node`, and `import` or
+    /// `require` by the importing file's format.
+    Node16,
+    /// `bundler`: `exports` with `import`.
+    Bundler,
+}
+
+/// Whether the importing file is an ES module, for `node16` resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Format {
+    Esm,
+    Cjs,
+    /// Not known: `import` and `require` both match.
+    Unknown,
+}
+
+/// How a program resolves packages: its resolution, its
+/// `customConditions`, and the TypeScript version `typesVersions` and
+/// `types@<range>` conditions are matched against.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Mode {
-    pub(crate) exports: bool,
-    pub(crate) conditions: Vec<String>,
+    pub(crate) resolution: Resolution,
+    custom: Vec<String>,
     pub(crate) typescript: (u64, u64),
 }
 
@@ -147,17 +146,74 @@ impl Mode {
     /// it's taken to be the newest, which matches the ranges packages
     /// usually list first.
     pub(crate) fn of(project: &Project, program: &TsConfigFile) -> Self {
-        Self {
-            exports: reads_exports(program),
-            conditions: conditions(program),
-            typescript: typescript_version(project, &program.dir).unwrap_or((u64::MAX, 0)),
-        }
+        let typescript = typescript_version(project, &program.dir).unwrap_or((u64::MAX, 0));
+        let custom = match program.options.get("customConditions") {
+            Some(Value::Array(custom)) => {
+                custom.iter().filter_map(Value::as_str).map(str::to_string).collect()
+            }
+            _ => Vec::new(),
+        };
+        Self { resolution: resolution(program, typescript), custom, typescript }
     }
 
     /// Resolution without `exports`, for following a program's local
     /// imports.
     pub(crate) fn local() -> Self {
-        Self { exports: false, conditions: Vec::new(), typescript: (u64::MAX, 0) }
+        Self { resolution: Resolution::Node10, custom: Vec::new(), typescript: (u64::MAX, 0) }
+    }
+
+    /// The format `node16` resolution reads `from` as: by extension, else
+    /// by the nearest package.json's `type`. `Unknown` for other
+    /// resolutions, where it doesn't matter.
+    pub(crate) fn format(&self, project: &Project, from: &Path) -> Format {
+        if self.resolution != Resolution::Node16 {
+            return Format::Unknown;
+        }
+        let name = from.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+        if [".mts", ".mjs"].iter().any(|e| name.ends_with(e)) {
+            return Format::Esm;
+        }
+        if [".cts", ".cjs"].iter().any(|e| name.ends_with(e)) {
+            return Format::Cjs;
+        }
+        let module = from
+            .ancestors()
+            .skip(1)
+            .find_map(|d| project.package_json(d))
+            .is_some_and(|p| p.get("type").and_then(Value::as_str) == Some("module"));
+        if module { Format::Esm } else { Format::Cjs }
+    }
+
+    /// Whether `exports` condition `key` matches for a file of `format`.
+    fn accepts(&self, key: &str, format: Format) -> bool {
+        if let Some(range) = key.strip_prefix("types@") {
+            return version_matches(range, self.typescript);
+        }
+        match key {
+            "types" | "default" => true,
+            "import" => format != Format::Cjs,
+            "require" => self.resolution == Resolution::Node16 && format != Format::Esm,
+            "node" => self.resolution == Resolution::Node16,
+            _ => self.custom.iter().any(|c| c == key),
+        }
+    }
+}
+
+/// The resolution of `program` for TypeScript `version`. With no
+/// `moduleResolution`, `module` decides; from TypeScript 6 everything but
+/// `node16` and `nodenext` resolves like `bundler`.
+fn resolution(program: &TsConfigFile, version: (u64, u64)) -> Resolution {
+    let option = |k: &str| program.options.get(k).and_then(Value::as_str).map(str::to_lowercase);
+    match option("moduleResolution").as_deref() {
+        Some("node16" | "nodenext") => Resolution::Node16,
+        Some("bundler") => Resolution::Bundler,
+        Some(_) => Resolution::Node10,
+        None => match option("module").as_deref() {
+            Some("node16" | "node18" | "node20" | "nodenext") => Resolution::Node16,
+            Some("preserve") => Resolution::Bundler,
+            _ if version.0 >= 6 => Resolution::Bundler,
+            _ => Resolution::Node10,
+        },
     }
 }
 
@@ -213,6 +269,7 @@ pub(crate) fn in_node_modules(file: &Path) -> bool {
 pub(crate) fn resolve_types(
     project: &Project,
     mode: &Mode,
+    format: Format,
     from: &Path,
     request: &str,
 ) -> Option<PathBuf> {
@@ -231,19 +288,23 @@ pub(crate) fn resolve_types(
         let name = f.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
         [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e))
     };
-    dir.ancestors().find_map(|a| {
+    let found = dir.ancestors().find_map(|a| {
         let modules = a.join("node_modules");
-        package_file(project, mode, &modules.join(name), sub)
+        package_file(project, mode, format, &modules.join(name), sub)
             .filter(typed)
-            .or_else(|| package_file(project, mode, &modules.join(&types_name), sub))
-    })
+            .or_else(|| package_file(project, mode, format, &modules.join(&types_name), sub))
+    })?;
+    // `tsc` reads a file once, by its real path, and looks its imports up
+    // from there: through pnpm's symlinks, and past `..` in a path.
+    Some(fs::canonicalize(&found).unwrap_or(found))
 }
 
 /// The file `tsc` loads for the subpath `sub` (empty for the package
-/// itself) of the package in `dir`.
+/// itself) of the package in `dir`, imported from a file of `format`.
 pub(crate) fn package_file(
     project: &Project,
     mode: &Mode,
+    format: Format,
     dir: &Path,
     sub: &str,
 ) -> Option<PathBuf> {
@@ -251,12 +312,12 @@ pub(crate) fn package_file(
         return None;
     }
     let pkg = project.package_json(dir);
-    if mode.exports
+    if mode.resolution != Resolution::Node10
         && let Some(exports) = pkg.as_ref().and_then(|p| p.get("exports"))
     {
         let key = if sub.is_empty() { ".".to_string() } else { format!("./{sub}") };
         let (entry, star) = export_entry(exports, &key)?;
-        let target = condition_target(entry, &mode.conditions)?.replace('*', star);
+        let target = condition_target(entry, &|k| mode.accepts(k, format))?.replace('*', star);
         return resolve_typed(project, &dir.join(target));
     }
     if sub.is_empty() {
@@ -415,12 +476,26 @@ mod tests {
 
     #[test]
     fn condition_target_takes_first_known_condition() {
-        let conditions: Vec<String> =
-            ["types", "import", "default"].iter().map(ToString::to_string).collect();
-        let entry = json!({ "browser": "./b.js", "types@>=5": "./t.d.ts", "default": "./d.js" });
-        assert_eq!(condition_target(&entry, &conditions), Some("./t.d.ts"));
+        let mode = |resolution| Mode {
+            resolution,
+            custom: vec!["internal".to_string()],
+            typescript: (5, 9),
+        };
+        let bundler = mode(Resolution::Bundler);
+        let node16 = mode(Resolution::Node16);
+        let target = |entry: &Value, mode: &Mode, format| {
+            condition_target(entry, &|k| mode.accepts(k, format)).map(str::to_string)
+        };
+        let entry = json!({ "browser": "./b.js", "types@<5": "./old.d.ts", "types@>=5": "./t.d.ts", "default": "./d.js" });
+        assert_eq!(target(&entry, &bundler, Format::Unknown).as_deref(), Some("./t.d.ts"));
         let nested = json!([{ "worker": "./w.js" }, { "import": { "types": "./i.d.ts" } }]);
-        assert_eq!(condition_target(&nested, &conditions), Some("./i.d.ts"));
+        assert_eq!(target(&nested, &bundler, Format::Unknown).as_deref(), Some("./i.d.ts"));
+        let by_format = json!({ "node": { "require": "./n.d.cts" }, "require": "./r.d.cts", "import": "./i.d.mts" });
+        assert_eq!(target(&by_format, &bundler, Format::Unknown).as_deref(), Some("./i.d.mts"));
+        assert_eq!(target(&by_format, &node16, Format::Cjs).as_deref(), Some("./n.d.cts"));
+        assert_eq!(target(&by_format, &node16, Format::Esm).as_deref(), Some("./i.d.mts"));
+        let custom = json!({ "internal": "./x.d.ts", "default": "./d.d.ts" });
+        assert_eq!(target(&custom, &bundler, Format::Unknown).as_deref(), Some("./x.d.ts"));
     }
 
     #[test]

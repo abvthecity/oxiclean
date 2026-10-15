@@ -9,15 +9,20 @@
 //! package `@googleapis/drive` loads 25 thousand. Reported, as `code`:
 //!
 //! - `heavy-types`: an import of a package whose declarations, beyond what
-//!   the program loads anyway (its `@types` packages), have at least the
-//!   threshold's lines. The value is those lines.
+//!   the program loads anyway, have at least the threshold's lines. The
+//!   value is those lines. What the program loads anyway is its `@types`
+//!   packages, its own declaration files, such as `env.d.ts`, and the JSX
+//!   runtime under `react-jsx`. Declarations two imports share count for
+//!   both.
 //!
 //! Packages are resolved the way `tsc` does for each program: `paths`,
 //! then `node_modules` from the importing file up, the package before its
-//! `@types` package, with `exports` (and the `types` condition) when the
-//! program's module resolution reads it, else `typesVersions`, `types`,
-//! `typings` and `main`. Each program's source is followed through its
-//! local imports.
+//! `@types` package, with `exports` when the program's module resolution
+//! reads it (its conditions matched by the importing file's format under
+//! `node16`), else `typesVersions`, `types`, `typings` and `main`. Files
+//! are read once by their real path and their imports looked up from
+//! there, as with pnpm's links. Each program's source is followed through
+//! its local imports; a `declare module` block loads nothing.
 //!
 //! Imports inside declaration files are resolved without the program's
 //! `paths`, which `tsc` applies there too; packages rarely rely on them.
@@ -39,7 +44,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Result, parse_imports, split_package_request,
+    CheckResult, Finding, FindingKind, Issue, Project, Result, SpecKind, parse_imports,
+    split_package_request,
 };
 use rayon::prelude::*;
 use serde_json::Value;
@@ -49,8 +55,8 @@ use crate::{
     ambient_types::{loads_all_types, visible_types},
     config::{Config, TYPE_BLOAT_DEFAULT_THRESHOLD, TYPE_BLOAT_RULE},
     declarations::{
-        Mode, in_node_modules, is_declaration, is_relative, is_source, package_file, paths_target,
-        resolve_file_only, resolve_types, types_package_name,
+        Format, Mode, in_node_modules, is_declaration, is_relative, is_source, package_file,
+        paths_target, resolve_file_only, resolve_types, types_package_name,
     },
     tsconfig::{TsConfigFile, TsConfigs},
 };
@@ -112,11 +118,13 @@ pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
     for program in &programs {
         let mode = Mode::of(project, program);
         let id = graph.mode_id(&mode);
-        let baseline = graph.closure(id, &ambient_entries(project, program, &mode));
+        let baseline = graph.closure(id, &baseline_entries(project, program, &mode));
         for import in program_imports(project, program, &mode, &sources) {
+            let format = mode.format(project, import.file);
             let entry = paths_target(project, program, import.request)
-                .or_else(|| resolve_types(project, &mode, import.file, import.request));
+                .or_else(|| resolve_types(project, &mode, format, import.file, import.request));
             let Some(entry) = entry.filter(|e| is_declaration(e)) else { continue };
+            let entry = fs::canonicalize(&entry).unwrap_or(entry);
             let reach = graph.closure(id, &[entry]);
             let (lines, files) = reach
                 .iter()
@@ -136,9 +144,14 @@ pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
     let findings = costs
         .into_iter()
         .map(|((file, request), Cost { line, lines, files })| {
-            let (name, _) = split_package_request(&request);
+            let (name, sub) = split_package_request(&request);
+            let advice = if sub.is_empty() {
+                format!("import what you use from a narrower entry, such as a subpath of {name}, or from a smaller package")
+            } else {
+                "import from a smaller package, or from fewer programs".to_string()
+            };
             let message = format!(
-                "loads {lines} lines of declarations in {files} files that tsc parses and binds in every program that imports it; import what you use from a narrower entry, such as a subpath of {name} or a smaller package"
+                "'{request}' loads {lines} lines of declarations in {files} files that tsc parses and binds in every program that imports it; {advice}"
             );
             let issue = Issue::new("heavy-types", request, message, line);
             Finding::new(file, FindingKind::Issue(issue), lines)
@@ -178,7 +191,7 @@ fn read_sources(
                 let local = specs
                     .iter()
                     .filter(|s| is_relative(&s.request))
-                    .filter_map(|s| resolve_types(project, &mode, &f, &s.request))
+                    .filter_map(|s| resolve_types(project, &mode, Format::Unknown, &f, &s.request))
                     .filter(|l| is_source(l) && !in_node_modules(l))
                     .collect();
                 Some((f, specs, local))
@@ -215,14 +228,14 @@ fn program_imports<'a>(
         let Some(specs) = sources.get(file) else { continue };
         for s in specs {
             if is_relative(&s.request) {
-                let next = resolve_types(project, mode, file, &s.request)
+                let next = resolve_types(project, mode, Format::Unknown, file, &s.request)
                     .and_then(|l| sources.get_key_value(&l).map(|(p, _)| p.as_path()));
                 if let Some(next) = next
                     && seen.insert(next)
                 {
                     stack.push(next);
                 }
-            } else if !oxiclean_core::is_builtin(&s.request) {
+            } else if s.kind != SpecKind::Augmentation && !oxiclean_core::is_builtin(&s.request) {
                 out.push(PackageImport { file, request: &s.request, line: s.line });
             }
         }
@@ -231,12 +244,34 @@ fn program_imports<'a>(
 }
 
 /// The declaration files `program` loads whatever it imports: the
-/// `@types` packages in its `types`, or every visible one.
+/// `@types` packages in its `types`, or every visible one; its own
+/// declaration files; and the JSX runtime `react-jsx` imports into every
+/// module.
+fn baseline_entries(project: &Project, program: &TsConfigFile, mode: &Mode) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> =
+        program.root_files.iter().filter(|f| is_declaration(f)).cloned().collect();
+    let option = |k: &str| program.options.get(k).and_then(Value::as_str);
+    let runtime = match option("jsx").map(str::to_lowercase).as_deref() {
+        Some("react-jsx") => Some("jsx-runtime"),
+        Some("react-jsxdev") => Some("jsx-dev-runtime"),
+        _ => None,
+    };
+    if let Some(runtime) = runtime {
+        let source = option("jsxImportSource").unwrap_or("react");
+        let from = program.dir.join("index.tsx");
+        let format = mode.format(project, &from);
+        out.extend(resolve_types(project, mode, format, &from, &format!("{source}/{runtime}")));
+    }
+    out.extend(ambient_entries(project, program, mode));
+    out
+}
+
+/// The `@types` packages `program` loads: those in its `types`, or every
+/// visible one, in any `node_modules/@types` from its directory up.
 fn ambient_entries(project: &Project, program: &TsConfigFile, mode: &Mode) -> Vec<PathBuf> {
-    let dirs: Vec<&Path> =
-        program.dir.ancestors().take_while(|a| a.starts_with(&project.root)).collect();
+    let dirs: Vec<&Path> = program.dir.ancestors().collect();
     let names: Vec<String> = if loads_all_types(project, program) {
-        visible_types(&dirs, &project.root).into_iter().map(|(n, _)| n).collect()
+        visible_types(&dirs, Path::new("/")).into_iter().map(|(n, _)| n).collect()
     } else if let Some(Value::Array(types)) = program.options.get("types") {
         types.iter().filter_map(Value::as_str).map(str::to_string).collect()
     } else {
@@ -247,10 +282,12 @@ fn ambient_entries(project: &Project, program: &TsConfigFile, mode: &Mode) -> Ve
         .filter_map(|name| {
             dirs.iter().find_map(|d| {
                 let modules = d.join("node_modules");
-                package_file(project, mode, &modules.join(types_package_name(name)), "")
-                    .or_else(|| package_file(project, mode, &modules.join(name), ""))
+                let dir = |n: &str| modules.join(n);
+                package_file(project, mode, Format::Unknown, &dir(&types_package_name(name)), "")
+                    .or_else(|| package_file(project, mode, Format::Unknown, &dir(name), ""))
             })
         })
+        .map(|f| fs::canonicalize(&f).unwrap_or(f))
         .collect()
 }
 
@@ -261,7 +298,7 @@ struct DeclGraph<'p> {
     /// The distinct modes of the programs; caches key on their index.
     modes: Vec<Mode>,
     files: DashMap<PathBuf, Arc<DeclFile>>,
-    resolved: DashMap<(usize, PathBuf, Request), Option<PathBuf>>,
+    resolved: DashMap<(usize, Format, PathBuf, Request), Option<PathBuf>>,
     closures: DashMap<(usize, PathBuf), Arc<HashSet<PathBuf>>>,
 }
 
@@ -323,16 +360,18 @@ impl<'p> DeclGraph<'p> {
 
     fn resolve(&self, mode: usize, from: &Path, request: &Request) -> Option<PathBuf> {
         let dir = from.parent().unwrap_or(from).to_path_buf();
-        let key = (mode, dir, request.clone());
+        let format = self.modes[mode].format(self.project, from);
+        let key = (mode, format, dir, request.clone());
         if let Some(hit) = self.resolved.get(&key) {
             return hit.clone();
         }
         let found = match request {
-            Request::Module(m) => resolve_types(self.project, &self.modes[mode], from, m),
+            Request::Module(m) => resolve_types(self.project, &self.modes[mode], format, from, m),
             // `tsc` adds an extension to a path that has none.
-            Request::Path(p) => resolve_file_only(&path_clean::clean(key.1.join(p))),
+            Request::Path(p) => resolve_file_only(&path_clean::clean(key.2.join(p))),
         }
-        .filter(|f| is_declaration(f));
+        .filter(|f| is_declaration(f))
+        .map(|f| fs::canonicalize(&f).unwrap_or(f));
         self.resolved.insert(key, found.clone());
         found
     }
@@ -476,6 +515,57 @@ mod tests {
             references(src),
             [Request::Module("node".into()), Request::Path("./globals.d.ts".into())]
         );
+    }
+
+    /// pnpm links each package into `.pnpm`, with its dependencies beside
+    /// it there; `tsc` follows the links, and reads a file once however
+    /// many links lead to it.
+    #[cfg(unix)]
+    #[test]
+    fn follows_pnpm_links_to_real_paths() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::TempDir::new().unwrap();
+        let root = t.path();
+        let write = |path: &str, text: &str| {
+            let p = root.join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        };
+        let lines = |n: usize, p: &str| {
+            (0..n).map(|i| format!("export declare const {p}{i}: number;\n")).collect::<String>()
+        };
+        write("package.json", r#"{ "name": "app" }"#);
+        write(
+            ".oxicleanrc.json",
+            r#"{ "rules": { "type-bloat": ["error", { "threshold": 100 }] } }"#,
+        );
+        write(
+            "tsconfig.json",
+            r#"{ "compilerOptions": { "moduleResolution": "bundler", "module": "esnext", "types": [] }, "include": ["src"] }"#,
+        );
+        write("src/index.ts", "import { a0 } from \"sdk\";\nexport const x = a0;\n");
+        let sdk = "node_modules/.pnpm/sdk@1.0.0/node_modules/sdk";
+        let core = "node_modules/.pnpm/core@1.0.0/node_modules/core";
+        write(&format!("{sdk}/package.json"), r#"{ "name": "sdk", "types": "index.d.ts" }"#);
+        write(
+            &format!("{sdk}/index.d.ts"),
+            &format!(
+                "export * from \"core\";\nexport * from \"./more/../extra\";\n{}",
+                lines(50, "a")
+            ),
+        );
+        write(&format!("{sdk}/extra.d.ts"), &lines(30, "e"));
+        write(&format!("{core}/package.json"), r#"{ "name": "core", "types": "index.d.ts" }"#);
+        write(&format!("{core}/index.d.ts"), &lines(200, "c"));
+        fs::create_dir_all(root.join(format!("{sdk}/more"))).unwrap();
+        symlink(root.join(sdk), root.join("node_modules/sdk")).unwrap();
+        symlink(root.join(core), root.join("node_modules/.pnpm/sdk@1.0.0/node_modules/core"))
+            .unwrap();
+        let cfg = Config { common: oxiclean_core::CommonArgs::with_root(root.to_path_buf()) };
+        let result = run_type_bloat_check(&cfg).unwrap();
+        let values: Vec<usize> = result.findings.iter().map(|f| f.value).collect();
+        // index.d.ts 52 lines, extra.d.ts 30 and core's 200, each once.
+        assert_eq!(values, [282]);
     }
 
     #[test]

@@ -349,6 +349,18 @@ fn type_bloat_paths_and_conditions() {
     );
 }
 
+/// bun: what the program loads anyway isn't counted: a package its own
+/// `env.d.ts` references, and `@types/react`, which `react-jsx` loads for
+/// the JSX runtime; nor is a `declare module` block. The values match
+/// `tsc --listFiles`.
+#[test]
+fn type_bloat_baseline() {
+    assert_eq!(
+        type_bloat("bloat-baseline"),
+        ["packages/site/src/app.tsx:2 heavy-types huge-ui (900)"]
+    );
+}
+
 /// npm: a package typed only by its `@types` package, which pulls in more
 /// with `/// <reference path>`; not reported: a small package and a
 /// built-in module.
