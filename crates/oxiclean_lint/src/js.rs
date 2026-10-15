@@ -25,6 +25,11 @@ use serde_json::Value;
 /// How deep a value is read, so that constants naming each other end.
 const MAX_DEPTH: usize = 48;
 
+/// How deeply brackets, braces and parentheses may nest in a module that
+/// is read: oxc's parser recurses, and would overflow the stack on a
+/// hostile file nested thousands deep.
+const MAX_SOURCE_NESTING: usize = 256;
+
 /// How many imports deep other modules are read.
 const MAX_MODULE_DEPTH: usize = 4;
 
@@ -283,14 +288,20 @@ fn is_json(file: &Path) -> bool {
 /// when it isn't one.
 pub(crate) fn json_value(src: &str) -> Option<Val> {
     let src = src.trim_start_matches('\u{feff}');
+    // Values nested deeper than `MAX_DEPTH` aren't plain data once read,
+    // and oxc's recursive parser would overflow the stack on a hostile
+    // file long before its depth matters.
+    if nests_deeper_than(src, MAX_DEPTH + 1) {
+        return None;
+    }
     // `(` keeps every line where it was.
     let wrapped = format!("({src}\n)");
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, &wrapped, SourceType::mjs()).parse();
-    if !ret.errors.is_empty() || ret.program.body.len() != 1 {
+    if !ret.errors.is_empty() {
         return None;
     }
-    let Statement::ExpressionStatement(s) = &ret.program.body[0] else { return None };
+    let [Statement::ExpressionStatement(s)] = ret.program.body.as_slice() else { return None };
     let mut ctx = Ctx::new(None);
     let mut reader = Reader::new(&mut ctx, &wrapped, Module::default(), PathBuf::new(), None, 0);
     let v = reader.value(&s.expression, 0);
@@ -305,6 +316,49 @@ pub(crate) fn strict_json_value(src: &str) -> Option<Val> {
     let src = src.trim_start_matches('\u{feff}');
     serde_json::from_str::<Value>(&without_comments(src)).ok()?;
     json_value(src)
+}
+
+/// Whether brackets and braces in `src`, outside strings and comments,
+/// nest more than `max` deep.
+fn nests_deeper_than(src: &str, max: usize) -> bool {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                _ if c == q => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"' | '\'' | '`', _) => quote = Some(c),
+            ('/', Some('/')) => while chars.next_if(|&n| n != '\n').is_some() {},
+            ('/', Some('*')) => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+            }
+            ('[' | '{' | '(', _) => {
+                depth += 1;
+                if depth > max {
+                    return true;
+                }
+            }
+            (']' | '}' | ')', _) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `src` with its `//` and `/* */` comments blanked out, strings kept.
@@ -407,6 +461,9 @@ fn module_export(
     }
     let src = fs::read_to_string(file).ok()?;
     let source_type = SourceType::from_path(file).ok()?;
+    if nests_deeper_than(&src, MAX_SOURCE_NESTING) {
+        return None;
+    }
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, &src, source_type).parse();
     if ret.panicked || !ret.errors.is_empty() {
@@ -892,6 +949,9 @@ type Elements<'s, 'a> = (Vec<(Span, Option<&'s Expression<'a>>)>, usize);
 /// `defineConfig`/`tseslint.config`) written in the file.
 pub(crate) fn flat_fix_site(file: &Path, src: &str) -> Option<(FixSite, char)> {
     let source_type = SourceType::from_path(file).ok()?;
+    if nests_deeper_than(src, MAX_SOURCE_NESTING) {
+        return None;
+    }
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, src, source_type).parse();
     if !ret.errors.is_empty() {
@@ -1183,6 +1243,30 @@ mod tests {
         assert_eq!(site("export default antfu({});"), None);
         assert!(matches!(site("export default [...a, {}];"), Some(FixSite::Insert { .. })));
         assert_eq!(site("export default [, {}];"), None);
+    }
+
+    #[test]
+    fn deeply_nested_configs_are_unreadable_without_overflowing() {
+        // Test threads have small stacks; oxc's parser would overflow on
+        // this before the depth limit cut it short.
+        let deep = format!("{{ \"a\": {}1{} }}", "[".repeat(100_000), "]".repeat(100_000));
+        assert!(json_value(&deep).is_none());
+        // Brackets in strings and comments don't count.
+        let quoted = format!("{{ \"a\": \"{}\" /* {} */ }}", "[".repeat(1000), "{".repeat(1000));
+        assert!(json_value(&quoted).is_some());
+        let t = tempfile::TempDir::new().unwrap();
+        let file = t.path().join("eslint.config.js");
+        let module = format!("export default {}1{};\n", "[".repeat(100_000), "]".repeat(100_000));
+        fs::write(&file, &module).unwrap();
+        let project = Project::new(t.path());
+        assert_eq!(load(&file, &Resolver { project: &project }).value, None);
+        assert_eq!(flat_fix_site(&file, &module), None);
+        // Just under the limit, the parser still fits the stack.
+        let n = MAX_SOURCE_NESTING - 1;
+        fs::write(&file, format!("export default {}1{};\n", "[".repeat(n), "]".repeat(n))).unwrap();
+        assert!(matches!(load(&file, &Resolver { project: &project }).value, Some(Val::Arr(_))));
+        let at_limit = format!("{}1{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+        assert!(json_value(&at_limit).is_some());
     }
 
     #[test]

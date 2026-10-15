@@ -13,6 +13,24 @@
 //!
 //! The `lint` command ([`run_lint_command`]) runs it unless the config
 //! file turns it off.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use oxiclean_core::CommonArgs;
+//! use oxiclean_lint::{Config, run_lint_command, run_lint_config_check};
+//!
+//! # fn main() -> oxiclean_core::Result<()> {
+//! let cfg = Config { common: CommonArgs::with_root("/repo") };
+//! // Each config that slows linting down, with what it does.
+//! let found: Vec<_> =
+//!     run_lint_config_check(&cfg)?.findings.into_iter().map(|f| (f.file, f.kind)).collect();
+//! # let _ = found;
+//! let all = run_lint_command(&cfg)?;
+//! assert_eq!(all.rules.len(), 1);
+//! # Ok(())
+//! # }
+//! ```
 
 mod command;
 mod config;

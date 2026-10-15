@@ -466,7 +466,7 @@ fn in_dot_dir(dir: &Path, path: &Path, is_dir: bool) -> bool {
     path.strip_prefix(dir).is_ok_and(|rel| {
         let dirs = if is_dir { Some(rel) } else { rel.parent() };
         dirs.is_some_and(|p| {
-            p.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+            p.components().any(|c| c.as_os_str().as_encoded_bytes().starts_with(b"."))
         })
     })
 }
@@ -870,8 +870,7 @@ fn build_output(ctx: &mut Ctx<'_>) -> Vec<Finding> {
     out
 }
 
-/// `patterns` that aren't among `existing`, quoted with `quote`; `None`
-/// when all are.
+/// `patterns` that aren't among `existing`; `None` when all are.
 fn new_patterns(patterns: &[String], existing: &[String]) -> Option<Vec<String>> {
     let new: Vec<String> = patterns.iter().filter(|p| !existing.contains(p)).cloned().collect();
     (!new.is_empty()).then_some(new)

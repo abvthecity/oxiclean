@@ -3,6 +3,7 @@
 //! them.
 
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
@@ -68,57 +69,64 @@ pub(crate) struct OutputDir {
     pub gitignored: bool,
 }
 
+/// Ignore files read so far, by directory: `None` where there is none.
+type IgnoreFiles = HashMap<PathBuf, Option<Gitignore>>;
+
 /// The `.gitignore` files of a project, read as needed.
 pub(crate) struct GitIgnores {
     root: PathBuf,
-    cache: HashMap<PathBuf, Option<Gitignore>>,
+    gitignores: IgnoreFiles,
+    eslintignores: IgnoreFiles,
 }
 
 impl GitIgnores {
     pub(crate) fn new(root: &Path) -> Self {
-        Self { root: root.to_path_buf(), cache: HashMap::new() }
+        Self { root: root.to_path_buf(), gitignores: HashMap::new(), eslintignores: HashMap::new() }
     }
 
     /// Whether a `.gitignore` file from the root down to `path` ignores
     /// it or a directory it is in.
     pub(crate) fn ignored(&mut self, path: &Path, is_dir: bool) -> bool {
         let Ok(rel) = path.strip_prefix(&self.root) else { return false };
-        let mut dirs = vec![self.root.clone()];
-        let mut cur = self.root.clone();
+        let mut dir = self.root.clone();
+        let mut ignored =
+            matches(read(&mut self.gitignores, &dir, ".gitignore"), path, is_dir).unwrap_or(false);
         for c in rel.parent().into_iter().flat_map(Path::components) {
-            cur.push(c);
-            dirs.push(cur.clone());
+            dir.push(c);
+            ignored = matches(read(&mut self.gitignores, &dir, ".gitignore"), path, is_dir)
+                .unwrap_or(ignored);
         }
-        self.ignored_by(path, is_dir, &dirs, ".gitignore")
+        ignored
     }
 
     /// Whether the root's `.eslintignore` ignores `path`: ESLint 8 reads
     /// only the one in the directory it runs in.
     pub(crate) fn eslintignored(&mut self, path: &Path, is_dir: bool) -> bool {
-        let root = [self.root.clone()];
-        self.ignored_by(path, is_dir, &root, ".eslintignore")
+        let gi = read(&mut self.eslintignores, &self.root, ".eslintignore");
+        matches(gi, path, is_dir).unwrap_or(false)
     }
+}
 
-    /// Whether the files named `file_name` in `dirs`, outermost first,
-    /// ignore `path`.
-    fn ignored_by(&mut self, path: &Path, is_dir: bool, dirs: &[PathBuf], file_name: &str) -> bool {
-        let mut ignored = false;
-        for dir in dirs {
-            let file = dir.join(file_name);
-            let gi = self
-                .cache
-                .entry(file.clone())
-                .or_insert_with(|| file.is_file().then(|| Gitignore::new(&file).0));
-            if let Some(gi) = gi {
-                let m = gi.matched_path_or_any_parents(path, is_dir);
-                if m.is_ignore() {
-                    ignored = true;
-                } else if m.is_whitelist() {
-                    ignored = false;
-                }
-            }
-        }
-        ignored
+/// The ignore file `file_name` in `dir`, read once into `cache`.
+fn read<'c>(cache: &'c mut IgnoreFiles, dir: &Path, file_name: &str) -> Option<&'c Gitignore> {
+    if !cache.contains_key(dir) {
+        let file = dir.join(file_name);
+        let gi = file.is_file().then(|| Gitignore::new(&file).0);
+        cache.insert(dir.to_path_buf(), gi);
+    }
+    cache.get(dir)?.as_ref()
+}
+
+/// Whether ignore file `gi` ignores `path` (`Some(true)`), brings it back
+/// with a negated pattern (`Some(false)`), or says nothing of it.
+fn matches(gi: Option<&Gitignore>, path: &Path, is_dir: bool) -> Option<bool> {
+    let m = gi?.matched_path_or_any_parents(path, is_dir);
+    if m.is_ignore() {
+        Some(true)
+    } else if m.is_whitelist() {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -228,25 +236,32 @@ fn count_linted(dir: &Path) -> usize {
 
 /// `path` relative to `dir`, with `/`, or `None` outside it.
 pub(crate) fn relative(dir: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(dir).ok()?;
-    Some(rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+    let mut out = String::new();
+    for c in path.strip_prefix(dir).ok()?.components() {
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(&c.as_os_str().to_string_lossy());
+    }
+    Some(out)
 }
 
-/// Built gitignore matchers, by directory and patterns.
-type GitignoreCache = HashMap<(PathBuf, Vec<String>), Option<Rc<Gitignore>>>;
+/// Built gitignore matchers, by directory and then patterns, so that a
+/// lookup borrows both.
+type GitignoreCache = HashMap<PathBuf, HashMap<Vec<String>, Option<Rc<Gitignore>>>>;
 
 /// Compiled globs and gitignore matchers, kept for one run: the same
 /// patterns are matched against every file.
 #[derive(Default)]
 pub(crate) struct Globs {
-    globs: RefCell<HashMap<String, Option<GlobMatcher>>>,
+    globs: RefCell<HashMap<String, Option<Rc<GlobMatcher>>>>,
     gitignores: RefCell<GitignoreCache>,
 }
 
 impl Globs {
     /// `pattern` compiled the way minimatch reads it, where `*` stays
     /// within a directory, or `None` when it isn't a valid glob.
-    pub(crate) fn glob(&self, pattern: &str) -> Option<GlobMatcher> {
+    pub(crate) fn glob(&self, pattern: &str) -> Option<Rc<GlobMatcher>> {
         if let Some(m) = self.globs.borrow().get(pattern) {
             return m.clone();
         }
@@ -254,7 +269,7 @@ impl Globs {
             .literal_separator(true)
             .build()
             .ok()
-            .map(|g| g.compile_matcher());
+            .map(|g| Rc::new(g.compile_matcher()));
         self.globs.borrow_mut().insert(pattern.to_string(), m.clone());
         m
     }
@@ -286,13 +301,16 @@ impl Globs {
         if !path.starts_with(dir) {
             return false;
         }
-        let key = (dir.to_path_buf(), patterns.to_vec());
-        let cached = self.gitignores.borrow().get(&key).cloned();
+        let cached = self.gitignores.borrow().get(dir).and_then(|m| m.get(patterns)).cloned();
         let gi = cached.unwrap_or_else(|| {
             let mut b = GitignoreBuilder::new(dir);
             let ok = patterns.iter().all(|p| b.add_line(None, p).is_ok());
             let gi = if ok { b.build().ok().map(Rc::new) } else { None };
-            self.gitignores.borrow_mut().insert(key, gi.clone());
+            self.gitignores
+                .borrow_mut()
+                .entry(dir.to_path_buf())
+                .or_default()
+                .insert(patterns.to_vec(), gi.clone());
             gi
         });
         // Patterns that don't build might ignore anything.
@@ -310,7 +328,7 @@ impl Globs {
     /// Whether file `rel` matches flat config pattern `p`.
     pub(crate) fn flat_pattern_matches(&self, p: &str, rel: &str) -> bool {
         let p = p.trim_start_matches("./");
-        let p = if p.ends_with('/') { format!("{p}**") } else { p.to_string() };
+        let p: Cow<'_, str> = if p.ends_with('/') { format!("{p}**").into() } else { p.into() };
         self.glob(&p).is_some_and(|m| m.is_match(rel))
     }
 
