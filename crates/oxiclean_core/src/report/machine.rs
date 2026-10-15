@@ -8,7 +8,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{CheckResult, Finding, FindingKind, ReportStyle};
+use super::{CommandResult, Finding, FindingKind, ReportStyle, RuleResult};
 use crate::settings::Severity;
 
 /// Output format of a report.
@@ -24,12 +24,11 @@ pub enum OutputFormat {
     Sarif,
 }
 
-/// What a machine-readable report says about the rule and the tool.
+/// What a machine-readable report says about the command and the tool.
 #[derive(Debug, Clone, Copy)]
 pub struct ReportMeta<'a> {
-    /// The rule's name, e.g. `bloat`.
-    pub rule: &'a str,
-    pub style: &'a ReportStyle,
+    /// The command's name, e.g. `unused`.
+    pub command: &'a str,
     /// Version of the tool, e.g. `env!("CARGO_PKG_VERSION")`.
     pub version: &'a str,
     pub elapsed_ms: u128,
@@ -92,29 +91,31 @@ pub fn message(style: &ReportStyle, f: &Finding, root: &Path) -> String {
     }
 }
 
-/// Writes the result as one JSON document. Paths are relative to the root and
-/// always use `/`.
+/// Writes the result as one JSON document, with an entry per rule that ran
+/// and every rule's findings, each naming its rule. Paths are relative to
+/// the root and always use `/`.
 ///
 /// # Errors
 /// Returns any error from writing to `writer`.
 pub fn write_json<W: Write>(
     writer: &mut W,
     meta: ReportMeta<'_>,
-    result: &CheckResult,
+    result: &CommandResult,
 ) -> io::Result<()> {
     let root = &result.root;
     let findings: Vec<Value> = result
-        .findings
+        .rules
         .iter()
-        .map(|f| {
+        .flat_map(|r| r.result.findings.iter().map(move |f| (r, f)))
+        .map(|(RuleResult { rule, style, .. }, f)| {
             let mut v = json!({
-                "rule": meta.rule,
+                "rule": rule,
                 "severity": f.severity,
                 "file": rel(&f.file, root),
                 "package": f.package,
                 "value": f.value,
                 "threshold": f.threshold,
-                "message": message(meta.style, f, root),
+                "message": message(style, f, root),
             });
             match &f.kind {
                 FindingKind::Import { request, resolved, line } => {
@@ -202,17 +203,43 @@ pub fn write_json<W: Write>(
             v
         })
         .collect();
-    let res = &result.resolution;
+    let rules: Vec<Value> = result
+        .rules
+        .iter()
+        .map(|r| {
+            let errors = r.result.error_count();
+            // The rule's level outside the overrides: "off" when it runs
+            // only for the files an override turns it on for. A rule that
+            // couldn't run has no settings to show.
+            let (severity, threshold) = match (&r.error, r.result.severity) {
+                (Some(_), _) => (Value::Null, Value::Null),
+                (None, Some(severity)) => (json!(severity), json!(r.result.threshold)),
+                (None, None) => (json!("off"), json!(r.result.threshold)),
+            };
+            json!({
+                "rule": r.rule,
+                "severity": severity,
+                "threshold": threshold,
+                "files_analyzed": r.result.files_analyzed,
+                "findings": r.result.findings.len(),
+                "errors": errors,
+                "warnings": r.result.findings.len() - errors,
+                "error": r.error,
+            })
+        })
+        .collect();
+    let res = result.resolution();
+    let (count, errors) = (result.finding_count(), result.error_count());
     let doc = json!({
         "tool": { "name": "oxiclean", "version": meta.version },
-        "rule": meta.rule,
+        "command": meta.command,
         "root": root.to_string_lossy(),
-        "threshold": result.threshold,
+        "rules": rules,
         "summary": {
-            "files_analyzed": result.files_analyzed,
-            "findings": result.findings.len(),
-            "errors": result.error_count(),
-            "warnings": result.findings.len() - result.error_count(),
+            "files_analyzed": result.files_analyzed(),
+            "findings": count,
+            "errors": errors,
+            "warnings": count - errors,
             "elapsed_ms": meta.elapsed_ms,
             "imports": {
                 "resolved": res.resolved,
@@ -221,7 +248,7 @@ pub fn write_json<W: Write>(
             },
         },
         "findings": findings,
-        "parse_failures": result.parse_failures.iter().map(|p| json!({
+        "parse_failures": result.parse_failures().iter().map(|p| json!({
             "file": rel(&p.path, root),
             "message": p.message,
         })).collect::<Vec<_>>(),
@@ -230,32 +257,36 @@ pub fn write_json<W: Write>(
     writeln!(writer)
 }
 
-/// Writes the result as a SARIF 2.1.0 log with one run. File locations are
-/// relative to the `%SRCROOT%` base, which is the project root.
+/// Writes the result as a SARIF 2.1.0 log with one run, which lists every
+/// rule that ran. File locations are relative to the `%SRCROOT%` base,
+/// which is the project root.
 ///
 /// # Errors
 /// Returns any error from writing to `writer`.
 pub fn write_sarif<W: Write>(
     writer: &mut W,
     meta: ReportMeta<'_>,
-    result: &CheckResult,
+    result: &CommandResult,
 ) -> io::Result<()> {
     let root = &result.root;
     let results: Vec<Value> = result
-        .findings
+        .rules
         .iter()
-        .map(|f| {
+        .enumerate()
+        .flat_map(|(i, r)| r.result.findings.iter().map(move |f| (i, r, f)))
+        .map(|(index, RuleResult { rule, style, .. }, f)| {
             let mut result = json!({
-                "ruleId": meta.rule,
+                "ruleId": rule,
+                "ruleIndex": index,
                 "level": match f.severity {
                     Severity::Error => "error",
                     Severity::Warn => "warning",
                 },
-                "message": { "text": message(meta.style, f, root) },
+                "message": { "text": message(style, f, root) },
                 // GitHub code scanning needs a region; a finding about the
                 // whole file points at its first line.
                 "locations": [{ "physicalLocation": physical_location(&f.file, f.line().max(1), root) }],
-                "partialFingerprints": { FINGERPRINT_KEY: fingerprint(meta.rule, f, root) },
+                "partialFingerprints": { FINGERPRINT_KEY: fingerprint(rule, f, root) },
                 "properties": { "value": f.value, "threshold": f.threshold },
             });
             // The other places the finding involves, so code-scanning UIs
@@ -306,6 +337,36 @@ pub fn write_sarif<W: Write>(
         })
         .collect();
 
+    let rules: Vec<Value> = result
+        .rules
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.rule,
+                "shortDescription": { "text": r.style.description },
+                "helpUri": format!("{INFORMATION_URI}#tools"),
+            })
+        })
+        .collect();
+    // A rule that couldn't run is a tool execution notification, so code
+    // scanning shows the run as incomplete rather than clean.
+    let notifications: Vec<Value> = result
+        .rules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, r)| {
+            let error = r.error.as_deref()?;
+            Some(json!({
+                "level": "error",
+                "message": { "text": format!("{} couldn't run: {error}", r.rule) },
+                "associatedRule": { "id": r.rule, "index": index },
+            }))
+        })
+        .collect();
+    let mut invocation = json!({ "executionSuccessful": notifications.is_empty() });
+    if !notifications.is_empty() {
+        invocation["toolExecutionNotifications"] = Value::Array(notifications);
+    }
     let mut root_uri = url_path(root);
     if !root_uri.ends_with('/') {
         root_uri.push('/');
@@ -318,16 +379,13 @@ pub fn write_sarif<W: Write>(
                 "name": "oxiclean",
                 "version": meta.version,
                 "informationUri": INFORMATION_URI,
-                "rules": [{
-                    "id": meta.rule,
-                    "shortDescription": { "text": meta.style.description },
-                    "helpUri": format!("{INFORMATION_URI}#tools"),
-                }],
+                "rules": rules,
             }},
             // Code scanning keeps one set of alerts per tool and category, so
-            // each rule gets its own category or its uploads replace each
+            // each command gets its own category or its uploads replace each
             // other's.
-            "automationDetails": { "id": format!("oxiclean/{}/", meta.rule) },
+            "automationDetails": { "id": format!("oxiclean/{}/", meta.command) },
+            "invocations": [invocation],
             "originalUriBaseIds": { "%SRCROOT%": { "uri": root_uri } },
             "results": results,
         }],
@@ -427,6 +485,10 @@ fn percent_encode(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        exports::ExportKind,
+        report::{CheckResult, UnusedExport},
+    };
     use std::path::PathBuf;
 
     const STYLE: ReportStyle = ReportStyle {
@@ -439,7 +501,7 @@ mod tests {
         ok_message: "No bloat detected.",
     };
 
-    fn result() -> CheckResult {
+    fn result() -> CommandResult {
         let root = PathBuf::from("/repo");
         let mut import = Finding::new(
             root.join("pkg/src/a.ts"),
@@ -455,17 +517,36 @@ mod tests {
         let mut entry = Finding::new(root.join("pkg/src/a.ts"), FindingKind::WholeGraph, 13);
         entry.threshold = 10;
         entry.severity = Severity::Warn;
-        CheckResult {
+        let bloat = CheckResult {
             findings: vec![entry, import],
-            root,
+            root: root.clone(),
             files_analyzed: 14,
             threshold: 10,
+            severity: Some(Severity::Error),
             ..CheckResult::default()
-        }
+        };
+        let mut unused = Finding::new(
+            root.join("pkg/src/b.ts"),
+            FindingKind::UnusedExport(UnusedExport::new("b".into(), 2, ExportKind::Value)),
+            1,
+        );
+        unused.threshold = 1;
+        let unused = CheckResult {
+            findings: vec![unused],
+            root: root.clone(),
+            files_analyzed: 9,
+            threshold: 1,
+            ..CheckResult::default()
+        };
+        let mut result = CommandResult::new(root.clone());
+        result.push("bloat", STYLE, bloat);
+        result.push("unused-exports", STYLE, unused);
+        result.push("depth", STYLE, CheckResult { root, ..CheckResult::default() });
+        result
     }
 
     fn meta() -> ReportMeta<'static> {
-        ReportMeta { rule: "bloat", style: &STYLE, version: "0.1.0", elapsed_ms: 5 }
+        ReportMeta { command: "mixed", version: "0.1.0", elapsed_ms: 5 }
     }
 
     #[test]
@@ -473,9 +554,25 @@ mod tests {
         let mut out = Vec::new();
         write_json(&mut out, meta(), &result()).unwrap();
         let v: Value = serde_json::from_slice(&out).unwrap();
-        assert_eq!(v["rule"], "bloat");
-        assert_eq!(v["summary"]["errors"], 1);
+        assert_eq!(v["command"], "mixed");
+        assert_eq!(v["summary"]["files_analyzed"], 14);
+        assert_eq!(v["summary"]["errors"], 2);
         assert_eq!(v["summary"]["warnings"], 1);
+        let rules: Vec<&str> =
+            v["rules"].as_array().unwrap().iter().map(|r| r["rule"].as_str().unwrap()).collect();
+        assert_eq!(rules, ["bloat", "unused-exports", "depth"]);
+        assert_eq!(v["rules"][0]["threshold"], 10);
+        assert_eq!(v["rules"][0]["severity"], "error");
+        assert_eq!(v["rules"][0]["error"], Value::Null);
+        // Off outside the overrides: it ran only where one turns it on.
+        assert_eq!(v["rules"][1]["severity"], "off");
+        assert_eq!(v["rules"][0]["findings"], 2);
+        assert_eq!(v["rules"][0]["warnings"], 1);
+        assert_eq!(v["rules"][1]["errors"], 1);
+        assert_eq!(v["rules"][2]["findings"], 0);
+        assert_eq!(v["findings"][0]["rule"], "bloat");
+        assert_eq!(v["findings"][2]["rule"], "unused-exports");
+        assert_eq!(v["findings"][2]["name"], "b");
         let import = &v["findings"][1];
         assert_eq!(import["kind"], "import");
         assert_eq!(import["file"], "pkg/src/a.ts");
@@ -496,7 +593,14 @@ mod tests {
         let v: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(v["version"], "2.1.0");
         let run = &v["runs"][0];
-        assert_eq!(run["tool"]["driver"]["rules"][0]["id"], "bloat");
+        let ids: Vec<&str> = run["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["bloat", "unused-exports", "depth"]);
+        assert_eq!(run["automationDetails"]["id"], "oxiclean/mixed/");
         assert_eq!(run["originalUriBaseIds"]["%SRCROOT%"]["uri"], "file:///repo/");
         let results = run["results"].as_array().unwrap();
         assert_eq!(results[0]["level"], "warning");
@@ -505,6 +609,46 @@ mod tests {
         let loc = &results[1]["locations"][0]["physicalLocation"];
         assert_eq!(loc["artifactLocation"]["uri"], "pkg/src/a.ts");
         assert_eq!(loc["region"]["startLine"], 3);
+        assert_eq!(
+            (&results[2]["ruleId"], &results[2]["ruleIndex"]),
+            (&json!("unused-exports"), &json!(1))
+        );
+        assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+        assert!(run["invocations"][0].get("toolExecutionNotifications").is_none());
+    }
+
+    #[test]
+    fn failed_rules_are_reported() {
+        let mut result = result();
+        result.rules.insert(
+            1,
+            RuleResult::failed("broken", STYLE, PathBuf::from("/repo"), "no entry files found"),
+        );
+
+        let mut out = Vec::new();
+        write_json(&mut out, meta(), &result).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let broken = &v["rules"][1];
+        assert_eq!(broken["rule"], "broken");
+        assert_eq!(broken["error"], "no entry files found");
+        assert_eq!((&broken["severity"], &broken["threshold"]), (&Value::Null, &Value::Null));
+        assert_eq!(v["rules"][0]["error"], Value::Null);
+
+        let mut out = Vec::new();
+        write_sarif(&mut out, meta(), &result).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let run = &v["runs"][0];
+        assert_eq!(run["tool"]["driver"]["rules"][1]["id"], "broken");
+        let invocation = &run["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], false);
+        let notification = &invocation["toolExecutionNotifications"][0];
+        assert_eq!(notification["level"], "error");
+        assert_eq!(notification["message"]["text"], "broken couldn't run: no entry files found");
+        assert_eq!(notification["associatedRule"], json!({ "id": "broken", "index": 1 }));
+        // The results of the rules after it keep pointing at their own rule.
+        let unused =
+            run["results"].as_array().unwrap().iter().find(|r| r["ruleId"] == "unused-exports");
+        assert_eq!(unused.unwrap()["ruleIndex"], 2);
     }
 
     #[test]

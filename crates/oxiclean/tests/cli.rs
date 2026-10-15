@@ -41,6 +41,19 @@ fn rule_config(rule: &str, threshold: usize, entries: &[&str]) -> String {
     )
 }
 
+/// A config with `rules` turned off.
+fn off_config(rules: &[&str]) -> String {
+    let off: Vec<String> = rules.iter().map(|r| format!(r#""{r}": "off""#)).collect();
+    format!(r#"{{ "rules": {{ {} }} }}"#, off.join(", "))
+}
+
+/// A config that leaves only `rule` of the `typecheck` command on.
+fn typecheck_only(rule: &str) -> String {
+    let others: Vec<&str> =
+        oxiclean_typecheck::rules().into_iter().filter(|r| *r != rule).collect();
+    off_config(&others)
+}
+
 fn cycle_fixture() -> TempDir {
     let t = TempDir::new().unwrap();
     write(t.path(), "src/e.ts", "import './a'; import './b';");
@@ -177,6 +190,57 @@ fn no_entries_is_a_clear_error() {
 }
 
 #[test]
+fn single_rule_commands_honour_off() {
+    let t = cycle_fixture();
+    for command in ["depth", "cycles", "duplicates"] {
+        configure(t.path(), &off_config(&[command]));
+        let (code, out) = run(t.path(), &[command]);
+        assert_eq!(code, 0, "{command}: {out}");
+        assert!(
+            out.contains(&format!("The config file turns off every rule {command} runs.")),
+            "{command}: {out}"
+        );
+        assert!(!out.contains("depth:") && !out.contains("No "), "{command}: nothing ran: {out}");
+
+        let (code, out) = run_stdout(t.path(), &[command, "--format", "json"]);
+        assert_eq!(code, 0, "{command}: {out}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["rules"], serde_json::json!([]), "{command}: {out}");
+    }
+}
+
+#[test]
+fn bloat_runs_barrels_alone() {
+    let t = TempDir::new().unwrap();
+    for i in 1..=3 {
+        write(t.path(), &format!("src/m{i}.ts"), &format!("export const v{i} = {i};"));
+    }
+    write(
+        t.path(),
+        "src/barrel.ts",
+        "export * from './m1';\nexport * from './m2';\nexport * from './m3';",
+    );
+    write(t.path(), "src/main.ts", "import { v1 } from './barrel';");
+    configure(
+        t.path(),
+        r#"{ "entries": ["src/main.ts"],
+             "rules": { "bloat": "off", "barrels": ["error", { "threshold": 2 }] } }"#,
+    );
+    let (code, out) = run_stdout(t.path(), &["bloat", "--format", "json"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let rules: Vec<&str> =
+        v["rules"].as_array().unwrap().iter().map(|r| r["rule"].as_str().unwrap()).collect();
+    assert_eq!(rules, ["barrels"], "{out}");
+    let findings = v["findings"].as_array().unwrap();
+    assert!(!findings.is_empty() && findings.iter().all(|f| f["rule"] == "barrels"), "{out}");
+    assert!(findings.iter().any(|f| f["file"] == "src/barrel.ts"), "{out}");
+
+    let (_, out) = run(t.path(), &["bloat"]);
+    assert!(!out.contains("No bloat detected") && !out.contains("Ran "), "{out}");
+}
+
+#[test]
 fn rule_options_are_not_command_line_flags() {
     let t = TempDir::new().unwrap();
     write(t.path(), "src/a.ts", "");
@@ -291,8 +355,14 @@ fn json_output() {
     let (code, out) = run_stdout(t.path(), &["bloat", "--format", "json"]);
     assert_eq!(code, 1, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["rule"], "bloat");
+    assert_eq!(v["command"], "bloat");
+    assert_eq!(v["rules"][0]["rule"], "bloat");
+    assert_eq!(v["rules"][0]["threshold"], 2);
+    assert_eq!(v["rules"][0]["errors"], 3);
+    assert_eq!(v["rules"][1]["rule"], "barrels");
+    assert_eq!(v["rules"][1]["findings"], 0);
     assert_eq!(v["summary"]["errors"], 3);
+    assert!(v["findings"].as_array().unwrap().iter().all(|f| f["rule"] == "bloat"), "{out}");
     let first = &v["findings"][0];
     assert_eq!(first["package"], "@acme/web");
     assert_eq!(first["file"], "packages/web/src/a.ts");
@@ -468,23 +538,33 @@ fn unused_exports_and_types_in_every_format() {
         "export const Button = 1;\nexport const unusedHelper = 2;\nexport type Size = 'sm';",
     );
 
-    let (code, out) = run(t.path(), &["unused-exports"]);
+    let (code, out) = run(t.path(), &["unused"]);
     assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Unused exports detected"), "{out}");
     assert!(out.contains("export 'unusedHelper' (never imported)"), "{out}");
-    assert!(!out.contains("'Button'") && !out.contains("'Size'"), "{out}");
+    assert!(out.contains("Unused exported types detected"), "{out}");
+    assert!(out.contains("export 'Size' (never imported)"), "{out}");
+    assert!(out.contains("No unused enum members detected."), "{out}");
+    assert!(!out.contains("'Button'"), "{out}");
+    assert!(out.contains("Ran 4 rules"), "{out}");
 
-    let (_, out) = run_stdout(t.path(), &["unused-types", "--format", "json"]);
+    let (_, out) = run_stdout(t.path(), &["unused", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
-    let finding = &v["findings"][0];
+    assert_eq!(v["command"], "unused");
+    assert_eq!(v["findings"].as_array().unwrap().len(), 2, "{out}");
+    assert_eq!(v["findings"][0]["rule"], "unused-exports");
+    let finding = &v["findings"][1];
+    assert_eq!(finding["rule"], "unused-types");
     assert_eq!(finding["kind"], "unused-export");
     assert_eq!(finding["file"], "packages/ui/src/button.ts");
     assert_eq!(finding["name"], "Size");
     assert_eq!(finding["line"], 3);
     assert_eq!(finding["package"], "@acme/ui");
 
-    let (_, out) = run_stdout(t.path(), &["unused-exports", "--format", "sarif"]);
+    let (_, out) = run_stdout(t.path(), &["unused", "--format", "sarif"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["runs"][0]["automationDetails"]["id"], "oxiclean/unused/");
+    assert_eq!(v["runs"][0]["results"][1]["ruleId"], "unused-types");
     let result = &v["runs"][0]["results"][0];
     assert_eq!(result["ruleId"], "unused-exports");
     assert_eq!(result["message"]["text"], "value 'unusedHelper' is exported but never imported");
@@ -506,24 +586,31 @@ fn unused_members_in_every_format() {
         "export enum Color {\n  Red,\n  Blue,\n}\nexport namespace Api {\n  export const get = 1;\n  export function put() {}\n}",
     );
 
-    let (code, out) = run(t.path(), &["unused-enum-members"]);
+    configure(t.path(), &off_config(&["unused-namespace-members"]));
+    let (code, out) = run(t.path(), &["unused"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("member 'Color.Blue' (never used)"), "{out}");
     assert!(!out.contains("Red") && !out.contains("Api"), "{out}");
 
-    let (_, out) = run_stdout(t.path(), &["unused-namespace-members", "--format", "json"]);
+    configure(t.path(), &off_config(&["unused-enum-members"]));
+    let (_, out) = run_stdout(t.path(), &["unused", "--format", "json"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["findings"].as_array().unwrap().len(), 1, "{out}");
     let finding = &v["findings"][0];
+    assert_eq!(finding["rule"], "unused-namespace-members");
     assert_eq!(finding["kind"], "unused-member");
     assert_eq!(finding["file"], "src/lib.ts");
     assert_eq!(finding["name"], "Api.put");
     assert_eq!(finding["symbol"], "function");
     assert_eq!(finding["line"], 7);
 
-    let (_, out) = run_stdout(t.path(), &["unused-enum-members", "--format", "sarif"]);
+    configure(t.path(), "{}");
+    let (_, out) = run_stdout(t.path(), &["unused", "--format", "sarif"]);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let result = &v["runs"][0]["results"][0];
+    let results = v["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{out}");
+    assert_eq!(results[1]["ruleId"], "unused-namespace-members");
+    let result = &results[0];
     assert_eq!(result["ruleId"], "unused-enum-members");
     assert_eq!(result["message"]["text"], "enum member 'Color.Blue' is never used");
     assert_eq!(result["locations"][0]["physicalLocation"]["region"]["startLine"], 3);
@@ -585,7 +672,8 @@ fn fix_excludes_build_output_and_keeps_comments() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxiclean_typecheck/tests/fixtures/pnpm");
     copy_dir(&fixture, t.path());
-    let (code, out) = run(t.path(), &["program-files", "--fix"]);
+    configure(t.path(), &typecheck_only("program-files"));
+    let (code, out) = run(t.path(), &["typecheck", "--fix"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("Fixed 2 findings"), "{out}");
     assert_eq!(
@@ -596,7 +684,7 @@ fn fix_excludes_build_output_and_keeps_comments() {
         fs::read_to_string(t.path().join("packages/app/tsconfig.build.json")).unwrap(),
         "{\n  \"extends\": \"./tsconfig.json\",\n  \"compilerOptions\": {\n    \"outDir\": \"dist\"\n  },\n  \"exclude\": [\"**/*.test.ts\", \"dist\"]\n}\n"
     );
-    let (code, out) = run(t.path(), &["program-files"]);
+    let (code, out) = run(t.path(), &["typecheck"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("No tsconfig program checks files it doesn't need."), "{out}");
 }
@@ -607,7 +695,8 @@ fn fix_adds_and_removes_references() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../oxiclean_typecheck/tests/fixtures/references-pnpm");
     copy_dir(&fixture, t.path());
-    let (code, out) = run(t.path(), &["references", "--fix"]);
+    configure(t.path(), &typecheck_only("references"));
+    let (code, out) = run(t.path(), &["typecheck", "--fix"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("Fixed 3 findings"), "{out}");
     assert_eq!(
@@ -619,7 +708,7 @@ fn fix_adds_and_removes_references() {
             .unwrap()
             .contains("\"composite\": true")
     );
-    let (_, out) = run(t.path(), &["references"]);
+    let (_, out) = run(t.path(), &["typecheck"]);
     assert!(out.contains("Total violations: 2"), "{out}");
 }
 
@@ -629,7 +718,8 @@ fn fix_sets_tsconfig_options() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../oxiclean_typecheck/tests/fixtures/options-pnpm");
     copy_dir(&fixture, t.path());
-    let (code, out) = run(t.path(), &["tsconfig", "--fix"]);
+    configure(t.path(), &typecheck_only("tsconfig"));
+    let (code, out) = run(t.path(), &["typecheck", "--fix"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("Fixed 3 findings"), "{out}");
     assert_eq!(
@@ -640,7 +730,7 @@ fn fix_sets_tsconfig_options() {
         fs::read_to_string(t.path().join("tsconfig.base.json")).unwrap(),
         "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"skipLibCheck\": true\n  }\n}\n"
     );
-    let (code, out) = run(t.path(), &["tsconfig"]);
+    let (code, out) = run(t.path(), &["typecheck"]);
     assert_eq!(code, 0, "{out}");
 }
 
@@ -650,11 +740,275 @@ fn fix_turns_on_isolated_declarations() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../oxiclean_typecheck/tests/fixtures/isolated-pnpm");
     copy_dir(&fixture, t.path());
-    let (code, out) = run(t.path(), &["isolated-declarations", "--fix"]);
+    configure(t.path(), &typecheck_only("isolated-declarations"));
+    let (code, out) = run(t.path(), &["typecheck", "--fix"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("Fixed 1 findings"), "{out}");
     assert_eq!(
         fs::read_to_string(t.path().join("packages/ready/tsconfig.json")).unwrap(),
         "{\n  \"compilerOptions\": {\n    \"composite\": true,\n    \"outDir\": \"dist\",\n    \"isolatedDeclarations\": true\n  },\n  \"include\": [\"src\"]\n}\n"
     );
+}
+
+/// `--fix` applies the fixes of every rule of the command at once; two
+/// rules' fixes to one file stack.
+#[test]
+fn fix_applies_every_rule_of_the_command() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/isolated-pnpm");
+    copy_dir(&fixture, t.path());
+    let (_, before) = run(t.path(), &["typecheck"]);
+    assert!(before.contains("set \"compilerOptions.skipLibCheck\": true"), "{before}");
+    assert!(before.contains("set \"compilerOptions.isolatedDeclarations\": true"), "{before}");
+    let fixable = before.matches("fixable with --fix").count();
+
+    let (_, out) = run(t.path(), &["typecheck", "--fix"]);
+    assert!(out.contains(&format!("Fixed {fixable} findings")), "{before}\n{out}");
+    assert!(!out.contains("fixable with --fix"), "{out}");
+    let ready = fs::read_to_string(t.path().join("packages/ready/tsconfig.json")).unwrap();
+    assert!(ready.contains("\"isolatedDeclarations\": true"), "{ready}");
+
+    let (_, out) = run(t.path(), &["typecheck", "--fix"]);
+    assert!(out.contains("Fixed 0 findings"), "{out}");
+}
+
+/// One `--fix` reaches the state the fixes of each rule reach run one after
+/// another: once `references` makes a program `composite`, it is a
+/// candidate for `isolatedDeclarations`, which the command's next pass
+/// turns on.
+#[test]
+fn fix_repeats_until_no_new_fix_applies() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_typecheck/tests/fixtures/references-pnpm");
+    let at_once = TempDir::new().unwrap();
+    copy_dir(&fixture, at_once.path());
+    let (_, before) = run(at_once.path(), &["typecheck"]);
+    let (_, out) = run(at_once.path(), &["typecheck", "--fix"]);
+    let fixed: usize = out
+        .lines()
+        .find_map(|l| l.strip_prefix("● Fixed ")?.strip_suffix(" findings.")?.parse().ok())
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(fixed > before.matches("fixable with --fix").count(), "a later pass fixed more: {out}");
+    let legacy = fs::read_to_string(at_once.path().join("packages/legacy/tsconfig.json")).unwrap();
+    assert!(
+        legacy.contains("\"composite\": true") && legacy.contains("\"isolatedDeclarations\": true"),
+        "{legacy}"
+    );
+    let (_, out) = run(at_once.path(), &["typecheck", "--fix"]);
+    assert!(out.contains("Fixed 0 findings"), "{out}");
+
+    let one_by_one = TempDir::new().unwrap();
+    copy_dir(&fixture, one_by_one.path());
+    let configs = TempDir::new().unwrap();
+    for rule in oxiclean_typecheck::rules() {
+        let config = configs.path().join(format!("{rule}.json"));
+        fs::write(&config, typecheck_only(rule)).unwrap();
+        run(one_by_one.path(), &["typecheck", "--fix", "-c", config.to_str().unwrap()]);
+    }
+    for package in ["app", "legacy", "ui", "x", "y"] {
+        let file = format!("packages/{package}/tsconfig.json");
+        assert_eq!(
+            fs::read_to_string(at_once.path().join(&file)).unwrap(),
+            fs::read_to_string(one_by_one.path().join(&file)).unwrap(),
+            "{file}"
+        );
+    }
+}
+
+/// A package whose import pulls in 101 modules, listed with an unused one.
+fn heavy_fixture() -> TempDir {
+    let t = TempDir::new().unwrap();
+    write(
+        t.path(),
+        "package.json",
+        r#"{"name":"app","main":"src/index.ts","dependencies":{"big":"*","lodash":"*"}}"#,
+    );
+    write(t.path(), "src/index.ts", "import 'big';");
+    write(t.path(), "node_modules/big/package.json", r#"{"name":"big","main":"index.js"}"#);
+    let requires: Vec<String> = (0..100).map(|i| format!("require('./m{i}');")).collect();
+    write(t.path(), "node_modules/big/index.js", &requires.join("\n"));
+    for i in 0..100 {
+        write(t.path(), &format!("node_modules/big/m{i}.js"), "");
+    }
+    t
+}
+
+/// The severity of each finding of `rule` in a JSON report.
+fn severities(v: &serde_json::Value, rule: &str) -> Vec<String> {
+    v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["rule"] == rule)
+        .map(|f| f["severity"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn heavy_dependencies_warn_and_unused_dependencies_fail_by_default() {
+    let t = heavy_fixture();
+    let (code, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
+    assert_eq!(code, 1, "the unused dependency fails the run: {out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(severities(&v, "heavy-dependencies"), ["warn"], "{out}");
+    assert_eq!(severities(&v, "dependencies"), ["error"], "{out}");
+    assert_eq!(v["rules"][1]["rule"], "heavy-dependencies");
+    assert_eq!(v["rules"][1]["severity"], "warn");
+    assert_eq!(v["rules"][1]["threshold"], 100);
+    assert_eq!(v["rules"][1]["warnings"], 1);
+
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("package 'big', imported by 1 files (pulls in 101 modules) [warn]"),
+        "{out}"
+    );
+    assert!(out.contains("package 'lodash' (never used)\n"), "{out}");
+    assert!(out.contains("1 error, 1 warning"), "{out}");
+
+    // A heavy dependency alone only warns.
+    write(
+        t.path(),
+        "package.json",
+        r#"{"name":"app","main":"src/index.ts","dependencies":{"big":"*"}}"#,
+    );
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("[warn]") && out.contains("No unused dependencies detected."), "{out}");
+}
+
+#[test]
+fn config_severity_wins_over_the_default() {
+    let t = heavy_fixture();
+    configure(
+        t.path(),
+        r#"{ "rules": { "heavy-dependencies": "error", "dependencies": "warn" } }"#,
+    );
+    let (code, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(severities(&v, "heavy-dependencies"), ["error"], "{out}");
+    assert_eq!(severities(&v, "dependencies"), ["warn"], "{out}");
+    assert_eq!(code, 1, "the heavy dependency fails the run now: {out}");
+
+    let (_, out) = run_stdout(t.path(), &["dependencies", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let levels: Vec<(&str, &str)> = v["runs"][0]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["ruleId"].as_str().unwrap(), r["level"].as_str().unwrap()))
+        .collect();
+    assert_eq!(levels, [("dependencies", "warning"), ("heavy-dependencies", "error")]);
+
+    configure(t.path(), r#"{ "rules": { "heavy-dependencies": "error", "dependencies": "off" } }"#);
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(!out.contains("lodash") && !out.contains("[warn]"), "{out}");
+}
+
+#[test]
+fn commands_run_only_the_rules_config_leaves_on() {
+    let t = heavy_fixture();
+    configure(t.path(), &off_config(&["heavy-dependencies", "catalog"]));
+    let (code, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let rules: Vec<&str> =
+        v["rules"].as_array().unwrap().iter().map(|r| r["rule"].as_str().unwrap()).collect();
+    assert_eq!(rules, ["dependencies", "duplicate-versions"], "{out}");
+    // Without heavy-dependencies, nothing follows imports into node_modules:
+    // the package is one leaf module, not 101.
+    assert_eq!(v["summary"]["files_analyzed"], 2, "{out}");
+
+    let (_, out) = run_stdout(t.path(), &["dependencies", "--format", "sarif"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let ids: Vec<&str> = v["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["dependencies", "duplicate-versions"]);
+
+    let (_, out) = run(t.path(), &["dependencies"]);
+    assert!(!out.contains("Heavy dependencies") && !out.contains("catalog"), "{out}");
+    assert!(out.contains("Ran 2 rules (dependencies, duplicate-versions)"), "{out}");
+
+    // An override can turn a rule back on for some files.
+    configure(
+        t.path(),
+        r#"{ "rules": { "dependencies": "off", "catalog": "off", "duplicate-versions": "off",
+             "heavy-dependencies": "off" },
+             "overrides": [{ "files": ["package.json"], "rules": { "heavy-dependencies": "warn" } }] }"#,
+    );
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("package 'big'") && !out.contains("Ran "), "{out}");
+    // Off outside the override, so the rule's own level is "off", whatever
+    // the override sets.
+    let (_, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["rules"][0]["rule"], "heavy-dependencies", "{out}");
+    assert_eq!(v["rules"][0]["severity"], "off", "{out}");
+    assert_eq!(severities(&v, "heavy-dependencies"), ["warn"], "{out}");
+
+    configure(
+        t.path(),
+        &off_config(&[
+            "unused-exports",
+            "unused-types",
+            "unused-enum-members",
+            "unused-namespace-members",
+        ]),
+    );
+    let (code, out) = run(t.path(), &["unused"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("The config file turns off every rule unused runs."), "{out}");
+}
+
+/// A rule that fails doesn't stop the others: in a pnpm workspace with a
+/// catalog but no source files, the rules that build a module graph find no
+/// entries, and the catalog is still checked.
+#[test]
+fn a_rule_that_fails_does_not_stop_its_command() {
+    let t = TempDir::new().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../oxiclean_dependencies/tests/fixtures/catalog");
+    copy_dir(&fixture, t.path());
+
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("catalog entry 'lodash' (default) (never referenced)"), "{out}");
+    assert!(out.contains("No duplicate package versions detected."), "{out}");
+    assert!(out.contains("✗ dependencies couldn't run: no entry files found"), "{out}");
+    assert!(out.contains("✗ heavy-dependencies couldn't run: no entry files found"), "{out}");
+    assert!(out.contains("2 couldn't run"), "{out}");
+
+    let (code, out) = run_stdout(t.path(), &["dependencies", "--format", "json"]);
+    assert_eq!(code, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let errors: Vec<(&str, bool)> = v["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["rule"].as_str().unwrap(), r["error"].is_string()))
+        .collect();
+    assert_eq!(
+        errors,
+        [
+            ("dependencies", true),
+            ("heavy-dependencies", true),
+            ("catalog", false),
+            ("duplicate-versions", false)
+        ],
+        "{out}"
+    );
+    assert!(v["findings"].as_array().unwrap().iter().all(|f| f["rule"] == "catalog"), "{out}");
+
+    // Turning off the rules that fail, and the one with findings, passes.
+    configure(t.path(), &off_config(&["dependencies", "heavy-dependencies", "catalog"]));
+    let (code, out) = run(t.path(), &["dependencies"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("couldn't run"), "{out}");
 }

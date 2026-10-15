@@ -11,6 +11,7 @@
 
 mod analysis;
 mod collector;
+pub mod command;
 mod config;
 mod constants;
 mod entry_points;
@@ -35,6 +36,7 @@ mod uses;
 // Re-export public API
 pub use analysis::{Analysis, CommonArgs, Workspace};
 pub use collector::{CollectorConfig, collect_entries};
+pub use command::{CommandRule, Rules, rule_names, run_command};
 pub use config::{find_git_root, find_git_root_from};
 pub use constants::{INDEX_FILES, JS_TS_EXTENSIONS, RESOLVE_EXTENSIONS};
 pub use error::{Error, Result};
@@ -48,9 +50,9 @@ pub use parser::{ParsedImports, imports_for, parse_imports};
 pub use plugins::{Plugins, plugin_names};
 pub use project::{Project, TsConfig, split_package_request};
 pub use report::{
-    Barrel, CheckResult, CycleFinding, CycleStep, DuplicateExport, DuplicateVersions, ExportName,
-    Finding, FindingKind, HeavyDependency, Issue, Related, UnusedCatalogEntry, UnusedDependency,
-    UnusedExport,
+    Barrel, CheckResult, CommandResult, CycleFinding, CycleStep, DuplicateExport,
+    DuplicateVersions, ExportName, Finding, FindingKind, HeavyDependency, Issue, Related,
+    RuleResult, UnusedCatalogEntry, UnusedDependency, UnusedExport,
 };
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};

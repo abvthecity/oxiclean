@@ -1,5 +1,5 @@
 use clap::Parser;
-use oxiclean_core::{CommonArgs, report::ReportStyle};
+use oxiclean_core::{CommonArgs, Severity, report::ReportStyle};
 
 /// Options for the unused dependency checks.
 #[derive(Debug, Clone, Parser)]
@@ -49,6 +49,11 @@ pub const HEAVY_RULE: &str = "heavy-dependencies";
 
 /// Heavy dependencies threshold used when the config file sets none.
 pub const HEAVY_DEFAULT_THRESHOLD: usize = 100;
+
+/// Heavy dependencies severity used when the config file sets none: a heavy
+/// package can be worth its weight, so its findings warn rather than fail
+/// the run.
+pub const HEAVY_DEFAULT_SEVERITY: Severity = Severity::Warn;
 
 /// How heavy dependency findings are worded in the terminal report.
 pub const HEAVY_STYLE: ReportStyle = ReportStyle {

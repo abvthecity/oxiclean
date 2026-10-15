@@ -10,6 +10,9 @@
 //! reported, and neither are exports tagged `@public` (or `@beta`, or
 //! `@alias`) in their JSDoc.
 //!
+//! The `unused` command ([`run_unused_command`]) runs each of the four
+//! rules the config file leaves on, from one module graph.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -38,8 +41,9 @@ mod checker;
 mod config;
 
 pub use checker::{
-    ExportUsage, Unused, check, run_unused_enum_members_check, run_unused_exports_check,
-    run_unused_namespace_members_check, run_unused_types_check, unused_exports, unused_members,
+    ExportUsage, Unused, check, check_usage, run_unused_command, run_unused_enum_members_check,
+    run_unused_exports_check, run_unused_namespace_members_check, run_unused_types_check,
+    unused_exports, unused_members,
 };
 pub use config::{
     Config, DEFAULT_THRESHOLD, UNUSED_ENUM_MEMBERS_RULE, UNUSED_ENUM_MEMBERS_STYLE,

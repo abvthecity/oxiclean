@@ -5,7 +5,8 @@
 use std::{collections::HashSet, fs, path::Path};
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Project, Result, UnusedCatalogEntry, parse_jsonc,
+    CheckResult, Finding, FindingKind, Project, Result, Severity, UnusedCatalogEntry, Workspace,
+    parse_jsonc,
 };
 use serde_json::Value;
 use tracing::{debug, info};
@@ -23,9 +24,13 @@ const DEFAULT_CATALOG: &str = "default";
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_catalog_check(cfg: &Config) -> Result<CheckResult> {
+    run_on(&cfg.common.workspace()?)
+}
+
+/// Runs the unused catalog entries check on `workspace`.
+pub(crate) fn run_on(workspace: &Workspace) -> Result<CheckResult> {
     info!("Starting {CATALOG_RULE} check");
-    let workspace = cfg.common.workspace()?;
-    let policy = workspace.policy(CATALOG_RULE, DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(CATALOG_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let file = workspace.root.join("pnpm-workspace.yaml");
     let unused = fs::read_to_string(&file)
         .map(|yaml| unused_catalog_entries(&yaml, &workspace.project))

@@ -35,7 +35,7 @@ use oxc_isolated_declarations::{IsolatedDeclarations, IsolatedDeclarationsOption
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
     fix::Fix,
     jsonc_tree::{JsoncDoc, Segment},
     parse_jsonc, resolve,
@@ -99,14 +99,19 @@ type Reports = HashMap<PathBuf, Option<FileReport>>;
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_isolated_declarations_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {ISOLATED_DECLARATIONS_RULE} check");
     let workspace = cfg.common.workspace()?;
-    let policy = workspace.policy(ISOLATED_DECLARATIONS_RULE, DEFAULT_THRESHOLD)?;
+    run_on(&workspace, &TsConfigs::load(&workspace.project))
+}
+
+/// Runs the check on `workspace`, whose tsconfig files are `configs`.
+pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
+    info!("Starting {ISOLATED_DECLARATIONS_RULE} check");
+    let policy =
+        workspace.policy(ISOLATED_DECLARATIONS_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let project = &workspace.project;
-    let configs = TsConfigs::load(project);
     let cache = DashMap::new();
     let mut reports = Reports::new();
-    let mut findings = programs(project, &configs, &cache, &mut reports);
+    let mut findings = programs(project, configs, &cache, &mut reports);
     findings.extend(jsr_packages(project, &cache, &mut reports));
     info!("{ISOLATED_DECLARATIONS_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, reports.len()))

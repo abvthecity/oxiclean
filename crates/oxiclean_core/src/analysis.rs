@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, collect_entries,
+    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, Severity, collect_entries,
     collector::{collect_files, is_test_file},
     config::find_git_root,
     constants::is_declaration,
@@ -111,60 +111,7 @@ impl CommonArgs {
     }
 
     fn analyze_from(&self, extra: BuildOptions, defaults: DefaultEntries) -> Result<Analysis> {
-        let Workspace { root, project, config, config_path } = self.workspace()?;
-        let plugins = Plugins::detect(&project, &config.plugins);
-        debug!("Plugins: {:?}", plugins);
-
-        let mut entry_paths =
-            if config.entries.is_empty() && defaults == DefaultEntries::PackageEntryPoints {
-                package_default_entries(&project, &plugins, &root)?
-            } else {
-                collect_entries(&CollectorConfig {
-                    root: root.clone(),
-                    entry_globs: config.entries.clone(),
-                })?
-            };
-
-        let ignore = file_globs(&config.ignore_patterns).map_err(|message| Error::Config {
-            path: config_path.clone().unwrap_or_default(),
-            message,
-        })?;
-        entry_paths.retain(|p| !ignore.is_match(p.strip_prefix(&root).unwrap_or(p)));
-
-        if entry_paths.is_empty() {
-            return Err(Error::NoEntries(root));
-        }
-        info!("Found {} entry files", entry_paths.len());
-
-        // The graph parses each file exactly once, so only resolution is cached.
-        let resolve_cache = DashMap::new();
-        let graph = ModuleGraph::build(
-            &entry_paths,
-            |file: &Path| {
-                parse_file(file, &plugins, extra.read_exports, extra.read_members).map(|parsed| {
-                    ParsedFile {
-                        imports: parsed
-                            .specs
-                            .into_iter()
-                            .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
-                            .collect(),
-                        exports: parsed.exports,
-                        uses: parsed.uses,
-                        error: parsed.error,
-                    }
-                })
-            },
-            |from: &Path, request: &str| {
-                resolve(&project, from, request, &resolve_cache).ok().flatten()
-            },
-            extra
-                .follow_dynamic(extra.follow_dynamic || config.include_dynamic)
-                .follow_node_modules(extra.follow_node_modules || config.include_node_modules),
-        );
-
-        let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();
-        let resolution = ResolutionStats::from_cache(&resolve_cache);
-        Ok(Analysis { root, graph, entries, resolution, project, plugins, config, config_path })
+        self.workspace()?.analyze_from(extra, defaults)
     }
 }
 
@@ -229,12 +176,18 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// The config file's settings for `rule`.
+    /// The config file's settings for `rule`, with the rule's defaults
+    /// where the file sets none. See [`ConfigFile::policy`].
     ///
     /// # Errors
     /// Fails if the config file has an invalid glob.
-    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
-        self.config.policy(rule, default_threshold)
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        default_severity: Severity,
+    ) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold, default_severity)
     }
 
     /// Applies `policy` to a checker's candidate findings, dropping those it
@@ -250,13 +203,16 @@ impl Analysis {
             parse_failures: self.graph.failures().to_vec(),
             resolution: self.resolution,
             threshold: policy.base().threshold,
+            severity: policy.base().enabled.then_some(policy.base().severity),
         }
     }
 }
 
-/// The root, config and project of a check that needs no module graph,
-/// from [`CommonArgs::workspace`].
-#[derive(Debug)]
+/// The root, config file and project, read once by
+/// [`CommonArgs::workspace`] for every rule of a command. Rules that check
+/// only manifests and tsconfig files run on it directly; rules that need a
+/// module graph build one from it with [`Self::analyze_with`].
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Workspace {
     /// Canonical project root.
@@ -270,12 +226,99 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// The config file's settings for `rule`.
+    /// As [`CommonArgs::analyze_with`], from this workspace.
+    ///
+    /// # Errors
+    /// Fails if the config file has an invalid glob, or no entry files are
+    /// found.
+    pub fn analyze_with(self, extra: BuildOptions) -> Result<Analysis> {
+        self.analyze_from(extra, DefaultEntries::SourceFiles)
+    }
+
+    /// As [`CommonArgs::analyze_package_entries`], from this workspace.
+    ///
+    /// # Errors
+    /// As for [`Self::analyze_with`].
+    pub fn analyze_package_entries(self, extra: BuildOptions) -> Result<Analysis> {
+        self.analyze_from(extra, DefaultEntries::PackageEntryPoints)
+    }
+
+    fn analyze_from(self, extra: BuildOptions, defaults: DefaultEntries) -> Result<Analysis> {
+        let Self { root, project, config, config_path } = self;
+        let plugins = Plugins::detect(&project, &config.plugins);
+        debug!("Plugins: {:?}", plugins);
+
+        let mut entry_paths =
+            if config.entries.is_empty() && defaults == DefaultEntries::PackageEntryPoints {
+                package_default_entries(&project, &plugins, &root)?
+            } else {
+                collect_entries(&CollectorConfig {
+                    root: root.clone(),
+                    entry_globs: config.entries.clone(),
+                })?
+            };
+
+        let ignore = file_globs(&config.ignore_patterns).map_err(|message| Error::Config {
+            path: config_path.clone().unwrap_or_default(),
+            message,
+        })?;
+        entry_paths.retain(|p| !ignore.is_match(p.strip_prefix(&root).unwrap_or(p)));
+
+        if entry_paths.is_empty() {
+            return Err(Error::NoEntries(root));
+        }
+        info!("Found {} entry files", entry_paths.len());
+
+        // The graph parses each file exactly once, so only resolution is cached.
+        let resolve_cache = DashMap::new();
+        let graph = ModuleGraph::build(
+            &entry_paths,
+            |file: &Path| {
+                parse_file(file, &plugins, extra.read_exports, extra.read_members).map(|parsed| {
+                    ParsedFile {
+                        imports: parsed
+                            .specs
+                            .into_iter()
+                            .map(|s| RawImport { kind: s.kind, request: s.request, line: s.line })
+                            .collect(),
+                        exports: parsed.exports,
+                        uses: parsed.uses,
+                        error: parsed.error,
+                    }
+                })
+            },
+            |from: &Path, request: &str| {
+                resolve(&project, from, request, &resolve_cache).ok().flatten()
+            },
+            extra
+                .follow_dynamic(extra.follow_dynamic || config.include_dynamic)
+                .follow_node_modules(extra.follow_node_modules || config.include_node_modules),
+        );
+
+        let entries = entry_paths.iter().filter_map(|p| graph.id(p)).collect();
+        let resolution = ResolutionStats::from_cache(&resolve_cache);
+        Ok(Analysis { root, graph, entries, resolution, project, plugins, config, config_path })
+    }
+
+    /// Whether the config file turns `rule` on for any file. See
+    /// [`ConfigFile::enabled`].
+    #[must_use]
+    pub fn enabled(&self, rule: &str) -> bool {
+        self.config.enabled(rule)
+    }
+
+    /// The config file's settings for `rule`, with the rule's defaults
+    /// where the file sets none. See [`ConfigFile::policy`].
     ///
     /// # Errors
     /// Fails if the config file has an invalid glob.
-    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
-        self.config.policy(rule, default_threshold)
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        default_severity: Severity,
+    ) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold, default_severity)
     }
 
     /// As [`Analysis::finish`], for a check of `files_analyzed` files.
@@ -293,6 +336,7 @@ impl Workspace {
             parse_failures: Vec::new(),
             resolution: ResolutionStats::default(),
             threshold: policy.base().threshold,
+            severity: policy.base().enabled.then_some(policy.base().severity),
         }
     }
 }

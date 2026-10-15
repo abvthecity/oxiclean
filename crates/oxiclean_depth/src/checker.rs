@@ -1,9 +1,15 @@
 use std::collections::HashSet;
 
-use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, Result, RulePolicy};
+use oxiclean_core::{
+    Analysis, BuildOptions, CheckResult, CommandResult, CommandRule, Finding, FindingKind, Result,
+    RulePolicy, Severity, run_command,
+};
 use tracing::info;
 
-use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
+use crate::config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
+
+/// Runs the rule on the command's module graph.
+type Run = fn(&Analysis) -> Result<CheckResult>;
 
 /// Runs the import depth check described by `cfg`.
 ///
@@ -12,9 +18,27 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// entry files are found.
 pub fn run_depth_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import depth check");
-    let analysis = cfg.common.analyze()?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
-    Ok(check(&analysis, &policy))
+    run_on(&cfg.common.analyze()?)
+}
+
+/// Runs the `depth` command: the import depth check, unless the config file
+/// turns it off everywhere, in which case nothing is analysed and the
+/// result lists no rule.
+///
+/// # Errors
+/// As for [`run_depth_check`].
+pub fn run_depth_command(cfg: &Config) -> Result<CommandResult> {
+    const RULES: [CommandRule<Run>; 1] = [(RULE, REPORT_STYLE, run_on)];
+    run_command(&cfg.common, "depth", &RULES, |workspace, rules| {
+        let analysis = workspace.analyze_with(BuildOptions::default())?;
+        Ok(rules.run(|run| run(&analysis)))
+    })
+}
+
+/// Runs the import depth check on `analysis`.
+fn run_on(analysis: &Analysis) -> Result<CheckResult> {
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, Severity::Error)?;
+    Ok(check(analysis, &policy))
 }
 
 /// Flags each direct import of an entry whose depth reaches its file's

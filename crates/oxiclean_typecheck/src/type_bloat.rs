@@ -44,8 +44,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Result, SpecKind, parse_imports,
-    split_package_request,
+    CheckResult, Finding, FindingKind, Issue, Project, Result, Severity, SpecKind, Workspace,
+    parse_imports, split_package_request,
 };
 use rayon::prelude::*;
 use serde_json::Value;
@@ -99,15 +99,20 @@ struct PackageImport<'a> {
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {TYPE_BLOAT_RULE} check");
     let workspace = cfg.common.workspace()?;
-    let policy = workspace.policy(TYPE_BLOAT_RULE, TYPE_BLOAT_DEFAULT_THRESHOLD)?;
+    run_on(&workspace, &TsConfigs::load(&workspace.project))
+}
+
+/// Runs the check on `workspace`, whose tsconfig files are `configs`.
+pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
+    info!("Starting {TYPE_BLOAT_RULE} check");
+    let policy =
+        workspace.policy(TYPE_BLOAT_RULE, TYPE_BLOAT_DEFAULT_THRESHOLD, Severity::Error)?;
     let Some(threshold) = policy.min_threshold() else {
         info!("{TYPE_BLOAT_RULE} is disabled");
         return Ok(workspace.finish(&policy, Vec::new(), 0));
     };
     let project = &workspace.project;
-    let configs = TsConfigs::load(project);
     let programs: Vec<&TsConfigFile> =
         configs.programs().filter(|p| !p.partial && !p.root_files.is_empty()).collect();
     let graph = DeclGraph::new(project, &programs);

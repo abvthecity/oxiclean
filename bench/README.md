@@ -28,6 +28,10 @@ knip (no knip config and no `knip` in the root `package.json`).
 
 Repos are cached in `target/bench-repos` (override with `OXICLEAN_BENCH_DIR`).
 Each check runs 3 times and the fastest time is kept (`OXICLEAN_BENCH_RUNS`).
+A check is one rule: the scripts run its command (`oxiclean unused` for
+`unused-types`) with a temporary config file that turns the command's other
+rules off, so each rule is timed alone. A run that exits with anything but
+0 or 1, or in which the rule couldn't run, fails the script.
 
 ## Current baseline
 

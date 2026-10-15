@@ -8,7 +8,7 @@ use std::{
 use globset::GlobSet;
 use oxiclean_core::{
     Analysis, BuildOptions, CheckResult, DependencyField, Finding, FindingKind, Project, Result,
-    RulePolicy, UnusedDependency, split_package_request,
+    RulePolicy, Severity, UnusedDependency, Workspace, split_package_request,
 };
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -97,12 +97,17 @@ fn field_key(field: DependencyField) -> &'static str {
 /// Fails if the project root can't be found, the config file is invalid, or
 /// no entry files are found.
 pub fn run_dependencies_check(cfg: &Config) -> Result<CheckResult> {
+    run_on(cfg.common.workspace()?)
+}
+
+/// Runs the unused dependencies check on `workspace`.
+pub(crate) fn run_on(workspace: Workspace) -> Result<CheckResult> {
     info!("Starting {DEPENDENCIES_RULE} check");
     // Type-only imports use packages too, so they are resolved and the
     // files only they reach are read.
     let analysis =
-        cfg.common.analyze_package_entries(BuildOptions::default().resolve_passive(true))?;
-    let policy = analysis.policy(DEPENDENCIES_RULE, DEFAULT_THRESHOLD)?;
+        workspace.analyze_package_entries(BuildOptions::default().resolve_passive(true))?;
+    let policy = analysis.policy(DEPENDENCIES_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let ignored = analysis.config.ignored_dependencies()?;
     Ok(check(&analysis, &policy, &ignored))
 }

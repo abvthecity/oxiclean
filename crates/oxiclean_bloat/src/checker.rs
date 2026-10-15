@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use oxiclean_core::{Analysis, CheckResult, Finding, FindingKind, ModuleId, Result, RulePolicy};
+use oxiclean_core::{
+    Analysis, CheckResult, Finding, FindingKind, ModuleId, Result, RulePolicy, Severity,
+};
 use tracing::info;
 
 use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
@@ -12,9 +14,13 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// entry files are found.
 pub fn run_bloat_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import bloat check");
-    let analysis = cfg.common.analyze()?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
-    Ok(check(&analysis, &policy))
+    run_on(&cfg.common.analyze()?)
+}
+
+/// Runs the import bloat check on `analysis`.
+pub(crate) fn run_on(analysis: &Analysis) -> Result<CheckResult> {
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, Severity::Error)?;
+    Ok(check(analysis, &policy))
 }
 
 /// Flags each entry whose whole graph, and each direct import of an entry whose

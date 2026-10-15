@@ -14,6 +14,10 @@
 //! ([`run_duplicate_versions_check`]) packages the lockfile installs at more
 //! than one version.
 //!
+//! The `dependencies` command ([`run_dependencies_command`]) runs each of
+//! these rules the config file leaves on. Unused dependencies fail the run
+//! by default; heavy dependencies only warn.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -42,6 +46,7 @@
 
 mod catalog;
 mod checker;
+mod command;
 mod config;
 mod heavy;
 mod scripts;
@@ -50,10 +55,11 @@ mod yaml;
 
 pub use catalog::{run_catalog_check, unused_catalog_entries};
 pub use checker::{Unused, check, run_dependencies_check, unused_dependencies};
+pub use command::run_dependencies_command;
 pub use config::{
     CATALOG_RULE, CATALOG_STYLE, Config, DEFAULT_THRESHOLD, DEPENDENCIES_RULE, DEPENDENCIES_STYLE,
-    HEAVY_DEFAULT_THRESHOLD, HEAVY_RULE, HEAVY_STYLE, VERSIONS_DEFAULT_THRESHOLD, VERSIONS_RULE,
-    VERSIONS_STYLE,
+    HEAVY_DEFAULT_SEVERITY, HEAVY_DEFAULT_THRESHOLD, HEAVY_RULE, HEAVY_STYLE,
+    VERSIONS_DEFAULT_THRESHOLD, VERSIONS_RULE, VERSIONS_STYLE,
 };
 pub use heavy::{check_heavy_dependencies, run_heavy_dependencies_check};
 pub use oxiclean_core::{

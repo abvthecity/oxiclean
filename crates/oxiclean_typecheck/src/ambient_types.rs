@@ -19,7 +19,8 @@ use std::{
 };
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, parse_jsonc,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
+    parse_jsonc,
 };
 use serde_json::Value;
 use tracing::info;
@@ -41,11 +42,15 @@ const TYPES_DEFAULT_EMPTY: u64 = 6;
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_ambient_types_check(cfg: &Config) -> Result<CheckResult> {
-    info!("Starting {AMBIENT_TYPES_RULE} check");
     let workspace = cfg.common.workspace()?;
-    let policy = workspace.policy(AMBIENT_TYPES_RULE, DEFAULT_THRESHOLD)?;
-    let configs = TsConfigs::load(&workspace.project);
-    let findings = check(&workspace.project, &configs);
+    run_on(&workspace, &TsConfigs::load(&workspace.project))
+}
+
+/// Runs the check on `workspace`, whose tsconfig files are `configs`.
+pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
+    info!("Starting {AMBIENT_TYPES_RULE} check");
+    let policy = workspace.policy(AMBIENT_TYPES_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
+    let findings = check(&workspace.project, configs);
     info!("{AMBIENT_TYPES_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, configs.programs().count()))
 }
