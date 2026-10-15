@@ -16,7 +16,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use oxiclean_core::{CheckResult, Finding, FindingKind, Issue, Related, Result, Workspace};
+use oxiclean_core::{
+    CheckResult, Finding, FindingKind, Issue, Related, Result, Severity, Workspace,
+};
 use tracing::info;
 
 use crate::{
@@ -39,7 +41,7 @@ pub fn run_overlap_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {OVERLAP_RULE} check");
-    let policy = workspace.policy(OVERLAP_RULE, DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(OVERLAP_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let findings = check(configs);
     info!("{OVERLAP_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, configs.programs().count()))

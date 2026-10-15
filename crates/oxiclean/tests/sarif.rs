@@ -151,6 +151,20 @@ fn check_code_scanning(command: &str, rule: &str, root: &Path, doc: &Value) {
     // Uploads with the same tool and category replace each other's alerts.
     assert_eq!(run["automationDetails"]["id"], format!("oxiclean/{command}/"));
 
+    // A rule that couldn't run is a notification on the one invocation,
+    // pointing at its rule.
+    let invocations = run["invocations"].as_array().unwrap();
+    assert_eq!(invocations.len(), 1, "{rule}: one invocation per run");
+    let notifications =
+        invocations[0]["toolExecutionNotifications"].as_array().cloned().unwrap_or_default();
+    assert_eq!(invocations[0]["executionSuccessful"], notifications.is_empty(), "{rule}");
+    for n in &notifications {
+        assert_eq!(n["level"], "error", "{rule}: {n}");
+        let id = n["associatedRule"]["id"].as_str().unwrap();
+        let index = usize::try_from(n["associatedRule"]["index"].as_u64().unwrap()).unwrap();
+        assert_eq!(ids[index], id, "{rule}: associatedRule.index");
+    }
+
     let results = run["results"].as_array().unwrap();
     let mut fingerprints = HashSet::new();
     for result in results {

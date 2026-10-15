@@ -42,7 +42,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Workspace, resolve,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
+    resolve,
 };
 use rayon::prelude::*;
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -121,7 +122,8 @@ pub fn run_large_literals_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {LARGE_LITERALS_RULE} check");
-    let policy = workspace.policy(LARGE_LITERALS_RULE, LARGE_LITERALS_DEFAULT_THRESHOLD)?;
+    let policy =
+        workspace.policy(LARGE_LITERALS_RULE, LARGE_LITERALS_DEFAULT_THRESHOLD, Severity::Error)?;
     let Some(threshold) = policy.min_threshold() else {
         info!("{LARGE_LITERALS_RULE} is disabled");
         return Ok(workspace.finish(&policy, Vec::new(), 0));

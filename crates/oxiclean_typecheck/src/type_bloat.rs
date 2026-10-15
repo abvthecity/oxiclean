@@ -44,8 +44,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Result, SpecKind, Workspace, parse_imports,
-    split_package_request,
+    CheckResult, Finding, FindingKind, Issue, Project, Result, Severity, SpecKind, Workspace,
+    parse_imports, split_package_request,
 };
 use rayon::prelude::*;
 use serde_json::Value;
@@ -106,7 +106,8 @@ pub fn run_type_bloat_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {TYPE_BLOAT_RULE} check");
-    let policy = workspace.policy(TYPE_BLOAT_RULE, TYPE_BLOAT_DEFAULT_THRESHOLD)?;
+    let policy =
+        workspace.policy(TYPE_BLOAT_RULE, TYPE_BLOAT_DEFAULT_THRESHOLD, Severity::Error)?;
     let Some(threshold) = policy.min_threshold() else {
         info!("{TYPE_BLOAT_RULE} is disabled");
         return Ok(workspace.finish(&policy, Vec::new(), 0));

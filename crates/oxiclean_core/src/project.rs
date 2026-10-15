@@ -82,7 +82,9 @@ pub struct Project {
     tsconfigs: HashMap<PathBuf, Arc<TsConfig>>,
     /// Workspace package name -> package directory
     workspace_packages: HashMap<String, PathBuf>,
-    package_json_cache: DashMap<PathBuf, Option<Arc<serde_json::Value>>>,
+    /// Parsed package.json files by directory, shared by every clone, so
+    /// the rules of one command each read a manifest once between them.
+    package_json_cache: Arc<DashMap<PathBuf, Option<Arc<serde_json::Value>>>>,
 }
 
 impl Project {

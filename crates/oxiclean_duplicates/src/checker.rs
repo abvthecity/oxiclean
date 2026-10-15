@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
 use oxiclean_core::{
-    Analysis, BuildOptions, CheckResult, DuplicateExport, Export, ExportForm, ExportName, Finding,
-    FindingKind, Result, RulePolicy,
+    Analysis, BuildOptions, CheckResult, CommandResult, CommandRule, DuplicateExport, Export,
+    ExportForm, ExportName, Finding, FindingKind, Result, RulePolicy, Severity, run_command,
 };
 use tracing::info;
 
-use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
+use crate::config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
+
+/// Runs the rule on the command's module graph.
+type Run = fn(&Analysis) -> Result<CheckResult>;
 
 /// Runs the duplicate exports check described by `cfg`.
 ///
@@ -15,13 +18,33 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// no entry files are found.
 pub fn run_duplicates_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting duplicate exports check");
-    // Declaration files and the files reached only through type imports
-    // export too.
-    let analysis = cfg
-        .common
-        .analyze_with(BuildOptions::default().resolve_passive(true).read_exports(true))?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
-    Ok(check(&analysis, &policy))
+    run_on(&cfg.common.analyze_with(build_options())?)
+}
+
+/// Runs the `duplicates` command: the duplicate exports check, unless the
+/// config file turns it off everywhere, in which case nothing is analysed
+/// and the result lists no rule.
+///
+/// # Errors
+/// As for [`run_duplicates_check`].
+pub fn run_duplicates_command(cfg: &Config) -> Result<CommandResult> {
+    const RULES: [CommandRule<Run>; 1] = [(RULE, REPORT_STYLE, run_on)];
+    run_command(&cfg.common, "duplicates", &RULES, |workspace, rules| {
+        let analysis = workspace.analyze_with(build_options())?;
+        Ok(rules.run(|run| run(&analysis)))
+    })
+}
+
+/// What the module graph of the check reads: declaration files and the
+/// files reached only through type imports export too.
+fn build_options() -> BuildOptions {
+    BuildOptions::default().resolve_passive(true).read_exports(true)
+}
+
+/// Runs the duplicate exports check on `analysis`.
+fn run_on(analysis: &Analysis) -> Result<CheckResult> {
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, Severity::Error)?;
+    Ok(check(analysis, &policy))
 }
 
 /// Reports each module that exports the same thing under more than one

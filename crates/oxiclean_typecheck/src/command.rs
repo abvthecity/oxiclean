@@ -1,8 +1,7 @@
 //! The `typecheck` command: every rule of this crate the config file
 //! leaves on, from one read of the workspace and its tsconfig files.
 
-use oxiclean_core::{CheckResult, CommandResult, Result, Workspace, report::ReportStyle};
-use tracing::info;
+use oxiclean_core::{CheckResult, CommandResult, CommandRule, Result, Workspace, run_command};
 
 use crate::{
     ambient_types,
@@ -22,7 +21,7 @@ type Run = fn(&Workspace, &TsConfigs) -> Result<CheckResult>;
 
 /// The rules the `typecheck` command runs, in order, with how each is
 /// worded and run.
-const CHECKS: [(&str, ReportStyle, Run); 8] = [
+const RULES: [CommandRule<Run>; 8] = [
     (PROGRAM_FILES_RULE, PROGRAM_FILES_STYLE, program_files::run_on),
     (OVERLAP_RULE, OVERLAP_STYLE, overlap::run_on),
     (REFERENCES_RULE, REFERENCES_STYLE, references::run_on),
@@ -33,46 +32,21 @@ const CHECKS: [(&str, ReportStyle, Run); 8] = [
     (TYPE_BLOAT_RULE, TYPE_BLOAT_STYLE, type_bloat::run_on),
 ];
 
-/// The rules the `typecheck` command runs, in order.
-pub const RULES: [&str; 8] = [
-    PROGRAM_FILES_RULE,
-    OVERLAP_RULE,
-    REFERENCES_RULE,
-    TSCONFIG_RULE,
-    AMBIENT_TYPES_RULE,
-    ISOLATED_DECLARATIONS_RULE,
-    LARGE_LITERALS_RULE,
-    TYPE_BLOAT_RULE,
-];
+/// The names of the rules the `typecheck` command runs, in order.
+#[must_use]
+pub fn rules() -> Vec<&'static str> {
+    oxiclean_core::rule_names(&RULES)
+}
 
-/// Runs each rule in [`RULES`] the config file leaves on, reading the
+/// Runs each rule of [`rules`] the config file leaves on, reading the
 /// project and its tsconfig files once for all of them. Rules that are off
-/// don't run.
+/// don't run; a rule that fails is reported and the others still run.
 ///
 /// # Errors
 /// Fails if the root can't be found or read, or the config file is invalid.
 pub fn run_typecheck_command(cfg: &Config) -> Result<CommandResult> {
-    let workspace = cfg.common.workspace()?;
-    let mut out = CommandResult::new(workspace.root.clone());
-    let on: Vec<&(&'static str, ReportStyle, Run)> =
-        CHECKS.iter().filter(|(rule, ..)| workspace.enabled(rule)).collect();
-    if on.is_empty() {
-        info!("Every typecheck rule is off");
-        return Ok(out);
-    }
-    let configs = TsConfigs::load(&workspace.project);
-    for &(rule, style, run) in on {
-        out.push(rule, style, run(&workspace, &configs)?);
-    }
-    Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rules_match_checks() {
-        assert_eq!(RULES, CHECKS.map(|(rule, ..)| rule));
-    }
+    run_command(&cfg.common, "typecheck", &RULES, |workspace, rules| {
+        let configs = TsConfigs::load(&workspace.project);
+        Ok(rules.run(|run| run(&workspace, &configs)))
+    })
 }

@@ -450,6 +450,12 @@ struct RuleConfig {
 }
 
 impl RuleSetting {
+    /// Whether the setting turns the rule on, read from its level alone.
+    fn on(&self) -> bool {
+        let (Self::Severity(level) | Self::WithOptions(level, _)) = self;
+        !matches!(level, AllowWarnDeny::Off | AllowWarnDeny::Allow)
+    }
+
     fn to_config(&self) -> RuleConfig {
         let (level, options) = match self {
             Self::Severity(level) => (*level, None),
@@ -552,21 +558,28 @@ impl ConfigFile {
     /// turned on by one. A command skips the rules that aren't.
     #[must_use]
     pub fn enabled(&self, rule: &str) -> bool {
-        let setting = |rules: &Rules| rules.get(rule).and_then(|s| s.to_config().enabled);
-        setting(&self.rules) != Some(false)
-            || self.overrides.iter().any(|o| setting(&o.rules) == Some(true))
+        enabled_anywhere(
+            self.rules.get(rule).is_none_or(RuleSetting::on),
+            self.overrides.iter().map(|o| o.rules.get(rule).map(RuleSetting::on)),
+        )
     }
 
-    /// The settings of `rule`, with `default_threshold` and the rule's
-    /// [`default_severity`] where the file sets none.
+    /// The settings of `rule`, with `default_threshold` and
+    /// `default_severity` where the file sets none. Each rule passes its
+    /// own defaults: most are `error`, while `heavy-dependencies` is `warn`.
     ///
     /// # Errors
     /// Fails on an invalid glob; [`ConfigFile::parse`] already rejects those.
-    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        default_severity: Severity,
+    ) -> Result<RulePolicy> {
         let err = |message: String| Error::Config { path: CONFIG_FILE_NAME.into(), message };
         let mut base = ResolvedRule {
             enabled: true,
-            severity: default_severity(rule),
+            severity: default_severity,
             threshold: default_threshold,
             ignored: false,
             fields: DependencyFields::default(),
@@ -597,15 +610,11 @@ impl ConfigFile {
     }
 }
 
-/// The severity of `rule` when the config file sets none: `warn` for
-/// `heavy-dependencies`, whose findings are worth a look but not a failed
-/// run, and `error` for every other rule.
-#[must_use]
-pub fn default_severity(rule: &str) -> Severity {
-    match rule {
-        "heavy-dependencies" => Severity::Warn,
-        _ => Severity::Error,
-    }
+/// Whether a rule is on for any file: on outside the overrides (`base`),
+/// or turned on by one of them. Each override says whether it turns the
+/// rule on or off, or `None` when it doesn't set the rule.
+fn enabled_anywhere(base: bool, mut overrides: impl Iterator<Item = Option<bool>>) -> bool {
+    base || overrides.any(|o| o == Some(true))
 }
 
 /// The effective settings of a rule for one file.
@@ -744,9 +753,7 @@ impl RulePolicy {
     /// `None` when the rule is disabled everywhere.
     #[must_use]
     pub fn min_threshold(&self) -> Option<usize> {
-        let enabled_somewhere =
-            self.base.enabled || self.overrides.iter().any(|o| o.rule.enabled == Some(true));
-        if !enabled_somewhere {
+        if !enabled_anywhere(self.base.enabled, self.overrides.iter().map(|o| o.rule.enabled)) {
             return None;
         }
         // Overrides stack, so the smallest threshold anywhere is a safe bound.
@@ -788,7 +795,7 @@ mod tests {
     #[test]
     fn empty_file_is_the_defaults() {
         assert_eq!(parse("{}").unwrap(), ConfigFile::default());
-        let p = parse("{}").unwrap().policy("bloat", 300).unwrap();
+        let p = parse("{}").unwrap().policy("bloat", 300, Severity::Error).unwrap();
         assert_eq!(p.resolve(Path::new("src/a.ts"), None).threshold, 300);
         assert_eq!(p.min_threshold(), Some(300));
     }
@@ -815,16 +822,19 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert!(!cfg.policy("bloat", 1).unwrap().base().enabled);
-        let depth = cfg.policy("depth", 1).unwrap().base();
+        assert!(!cfg.policy("bloat", 1, Severity::Error).unwrap().base().enabled);
+        let depth = cfg.policy("depth", 1, Severity::Error).unwrap().base();
         assert!(depth.enabled && depth.severity == Severity::Error);
     }
 
     #[test]
     fn default_severities() {
+        // A rule the file doesn't set has the severity the rule passes.
         let none = parse("{}").unwrap();
-        assert_eq!(none.policy("heavy-dependencies", 1).unwrap().base().severity, Severity::Warn);
-        assert_eq!(none.policy("dependencies", 1).unwrap().base().severity, Severity::Error);
+        let heavy = none.policy("heavy-dependencies", 1, Severity::Warn).unwrap();
+        assert_eq!(heavy.base().severity, Severity::Warn);
+        let unused = none.policy("dependencies", 1, Severity::Error).unwrap();
+        assert_eq!(unused.base().severity, Severity::Error);
 
         // The file's severity wins, outside and inside overrides.
         let cfg = parse(
@@ -834,10 +844,13 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let heavy = cfg.policy("heavy-dependencies", 1).unwrap();
+        let heavy = cfg.policy("heavy-dependencies", 1, Severity::Warn).unwrap();
         assert_eq!(heavy.base().severity, Severity::Error);
         assert_eq!(heavy.resolve(Path::new("legacy/package.json"), None).severity, Severity::Warn);
-        assert_eq!(cfg.policy("dependencies", 1).unwrap().base().severity, Severity::Warn);
+        assert_eq!(
+            cfg.policy("dependencies", 1, Severity::Error).unwrap().base().severity,
+            Severity::Warn
+        );
     }
 
     #[test]
@@ -853,6 +866,24 @@ mod tests {
         assert!(cfg.enabled("depth"), "an override turns it on");
         assert!(cfg.enabled("cycles"));
         assert!(cfg.enabled("barrels"), "rules the file doesn't set are on");
+    }
+
+    #[test]
+    fn enabled_rules_with_overrides_that_turn_them_off() {
+        let cfg = parse(
+            r#"{
+                "rules": { "bloat": "off", "depth": "warn" },
+                "overrides": [
+                    { "files": ["a/**"], "rules": { "bloat": "off", "depth": "off" } },
+                    { "files": ["b/**"], "rules": { "depth": ["off", { "threshold": 3 }] } }
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert!(!cfg.enabled("bloat"), "an override that turns it off doesn't turn it on");
+        assert!(cfg.enabled("depth"), "on outside the overrides that turn it off");
+        assert!(cfg.policy("depth", 1, Severity::Error).unwrap().min_threshold().is_some());
+        assert!(cfg.policy("bloat", 1, Severity::Error).unwrap().min_threshold().is_none());
     }
 
     const CFG: &str = r#"{
@@ -875,7 +906,7 @@ mod tests {
 
     #[test]
     fn overrides_apply_in_order() {
-        let p = parse(CFG).unwrap().policy("bloat", 200).unwrap();
+        let p = parse(CFG).unwrap().policy("bloat", 200, Severity::Error).unwrap();
         let r = |path: &str, pkg: Option<&str>| p.resolve(Path::new(path), pkg);
 
         let plain = r("apps/web/src/a.ts", None);
@@ -907,13 +938,13 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let p = cfg.policy("depth", 10).unwrap();
+        let p = cfg.policy("depth", 10, Severity::Error).unwrap();
         assert_eq!(p.min_threshold(), Some(4));
         assert!(!p.resolve(Path::new("a.ts"), None).enabled);
         assert!(p.resolve(Path::new("a.ts"), Some("web")).reports(4));
 
         let off = parse(r#"{ "rules": { "depth": "off" } }"#).unwrap();
-        assert_eq!(off.policy("depth", 10).unwrap().min_threshold(), None);
+        assert_eq!(off.policy("depth", 10, Severity::Error).unwrap().min_threshold(), None);
     }
 
     /// The committed schema must match the config types. Run with

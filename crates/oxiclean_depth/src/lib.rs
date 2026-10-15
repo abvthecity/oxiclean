@@ -31,6 +31,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, run_depth_check};
+pub use checker::{check, run_depth_check, run_depth_command};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, Finding, FindingKind};

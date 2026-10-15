@@ -1,8 +1,9 @@
 //! The `dependencies` command: every rule of this crate the config file
 //! leaves on, from one read of the workspace.
 
-use oxiclean_core::{CommandResult, Result};
-use tracing::info;
+use std::borrow::Cow;
+
+use oxiclean_core::{CheckResult, CommandResult, CommandRule, Result, Workspace, run_command};
 
 use crate::{
     catalog, checker,
@@ -13,32 +14,51 @@ use crate::{
     heavy, versions,
 };
 
-/// The rules the `dependencies` command runs, in order.
-pub const RULES: [&str; 4] = [DEPENDENCIES_RULE, HEAVY_RULE, CATALOG_RULE, VERSIONS_RULE];
+/// Runs one rule on the workspace, borrowed, or owned when no rule after it
+/// needs it.
+type Run = fn(Cow<'_, Workspace>) -> Result<CheckResult>;
 
-/// Runs each rule in [`RULES`] the config file leaves on. They share the
+/// The rules the `dependencies` command runs, in order, with how each is
+/// worded and run. Unused and heavy dependencies each build their own
+/// module graph, which keeps the workspace's project, so they take it.
+const RULES: [CommandRule<Run>; 4] = [
+    (DEPENDENCIES_RULE, DEPENDENCIES_STYLE, |w| checker::run_on(w.into_owned())),
+    (HEAVY_RULE, HEAVY_STYLE, |w| heavy::run_on(w.into_owned())),
+    (CATALOG_RULE, CATALOG_STYLE, |w| catalog::run_on(&w)),
+    (VERSIONS_RULE, VERSIONS_STYLE, |w| versions::run_on(&w)),
+];
+
+/// Whether `rule` builds a module graph, and so takes the workspace.
+fn builds_graph(rule: &str) -> bool {
+    matches!(rule, DEPENDENCIES_RULE | HEAVY_RULE)
+}
+
+/// Runs each of the `dependencies`, `heavy-dependencies`, `catalog` and
+/// `duplicate-versions` rules the config file leaves on. They share the
 /// root, the config file and the project's manifests; unused and heavy
 /// dependencies each build their own module graph, as heavy dependencies
 /// follow imports into `node_modules` and unused ones follow type-only
-/// imports. Rules that are off don't run.
+/// imports. Rules that are off don't run; a rule that fails, as one that
+/// builds a graph and finds no entry files, is reported and the others
+/// still run.
 ///
 /// # Errors
-/// Fails if the project root can't be found, the config file is invalid,
-/// or a rule that builds a module graph finds no entry files.
+/// Fails if the project root can't be found or the config file is invalid.
 pub fn run_dependencies_command(cfg: &Config) -> Result<CommandResult> {
-    let workspace = cfg.common.workspace()?;
-    let mut out = CommandResult::new(workspace.root.clone());
-    for rule in RULES.into_iter().filter(|r| workspace.enabled(r)) {
-        let (style, result) = match rule {
-            DEPENDENCIES_RULE => (DEPENDENCIES_STYLE, checker::run_on(workspace.clone())?),
-            HEAVY_RULE => (HEAVY_STYLE, heavy::run_on(workspace.clone())?),
-            CATALOG_RULE => (CATALOG_STYLE, catalog::run_on(&workspace)?),
-            _ => (VERSIONS_STYLE, versions::run_on(&workspace)?),
-        };
-        out.push(rule, style, result);
-    }
-    if out.rules.is_empty() {
-        info!("Every dependencies rule is off");
-    }
-    Ok(out)
+    run_command(&cfg.common, "dependencies", &RULES, |workspace, mut rules| {
+        // The rules that only read the workspace run first, so the last
+        // rule that builds a graph takes the workspace rather than a clone.
+        rules.run_last(builds_graph);
+        let mut left = rules.len();
+        let mut workspace = Some(workspace);
+        Ok(rules.run(|run| {
+            left -= 1;
+            const TAKEN: &str = "only the last rule takes the workspace";
+            run(if left == 0 {
+                Cow::Owned(workspace.take().expect(TAKEN))
+            } else {
+                Cow::Borrowed(workspace.as_ref().expect(TAKEN))
+            })
+        }))
+    })
 }

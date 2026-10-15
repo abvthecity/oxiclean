@@ -208,14 +208,23 @@ pub fn write_json<W: Write>(
         .iter()
         .map(|r| {
             let errors = r.result.error_count();
+            // The rule's level outside the overrides: "off" when it runs
+            // only for the files an override turns it on for. A rule that
+            // couldn't run has no settings to show.
+            let (severity, threshold) = match (&r.error, r.result.severity) {
+                (Some(_), _) => (Value::Null, Value::Null),
+                (None, Some(severity)) => (json!(severity), json!(r.result.threshold)),
+                (None, None) => (json!("off"), json!(r.result.threshold)),
+            };
             json!({
                 "rule": r.rule,
-                "severity": r.result.severity,
-                "threshold": r.result.threshold,
+                "severity": severity,
+                "threshold": threshold,
                 "files_analyzed": r.result.files_analyzed,
                 "findings": r.result.findings.len(),
                 "errors": errors,
                 "warnings": r.result.findings.len() - errors,
+                "error": r.error,
             })
         })
         .collect();
@@ -339,6 +348,25 @@ pub fn write_sarif<W: Write>(
             })
         })
         .collect();
+    // A rule that couldn't run is a tool execution notification, so code
+    // scanning shows the run as incomplete rather than clean.
+    let notifications: Vec<Value> = result
+        .rules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, r)| {
+            let error = r.error.as_deref()?;
+            Some(json!({
+                "level": "error",
+                "message": { "text": format!("{} couldn't run: {error}", r.rule) },
+                "associatedRule": { "id": r.rule, "index": index },
+            }))
+        })
+        .collect();
+    let mut invocation = json!({ "executionSuccessful": notifications.is_empty() });
+    if !notifications.is_empty() {
+        invocation["toolExecutionNotifications"] = Value::Array(notifications);
+    }
     let mut root_uri = url_path(root);
     if !root_uri.ends_with('/') {
         root_uri.push('/');
@@ -357,6 +385,7 @@ pub fn write_sarif<W: Write>(
             // each command gets its own category or its uploads replace each
             // other's.
             "automationDetails": { "id": format!("oxiclean/{}/", meta.command) },
+            "invocations": [invocation],
             "originalUriBaseIds": { "%SRCROOT%": { "uri": root_uri } },
             "results": results,
         }],
@@ -493,6 +522,7 @@ mod tests {
             root: root.clone(),
             files_analyzed: 14,
             threshold: 10,
+            severity: Some(Severity::Error),
             ..CheckResult::default()
         };
         let mut unused = Finding::new(
@@ -532,6 +562,10 @@ mod tests {
             v["rules"].as_array().unwrap().iter().map(|r| r["rule"].as_str().unwrap()).collect();
         assert_eq!(rules, ["bloat", "unused-exports", "depth"]);
         assert_eq!(v["rules"][0]["threshold"], 10);
+        assert_eq!(v["rules"][0]["severity"], "error");
+        assert_eq!(v["rules"][0]["error"], Value::Null);
+        // Off outside the overrides: it ran only where one turns it on.
+        assert_eq!(v["rules"][1]["severity"], "off");
         assert_eq!(v["rules"][0]["findings"], 2);
         assert_eq!(v["rules"][0]["warnings"], 1);
         assert_eq!(v["rules"][1]["errors"], 1);
@@ -579,6 +613,42 @@ mod tests {
             (&results[2]["ruleId"], &results[2]["ruleIndex"]),
             (&json!("unused-exports"), &json!(1))
         );
+        assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+        assert!(run["invocations"][0].get("toolExecutionNotifications").is_none());
+    }
+
+    #[test]
+    fn failed_rules_are_reported() {
+        let mut result = result();
+        result.rules.insert(
+            1,
+            RuleResult::failed("broken", STYLE, PathBuf::from("/repo"), "no entry files found"),
+        );
+
+        let mut out = Vec::new();
+        write_json(&mut out, meta(), &result).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let broken = &v["rules"][1];
+        assert_eq!(broken["rule"], "broken");
+        assert_eq!(broken["error"], "no entry files found");
+        assert_eq!((&broken["severity"], &broken["threshold"]), (&Value::Null, &Value::Null));
+        assert_eq!(v["rules"][0]["error"], Value::Null);
+
+        let mut out = Vec::new();
+        write_sarif(&mut out, meta(), &result).unwrap();
+        let v: Value = serde_json::from_slice(&out).unwrap();
+        let run = &v["runs"][0];
+        assert_eq!(run["tool"]["driver"]["rules"][1]["id"], "broken");
+        let invocation = &run["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], false);
+        let notification = &invocation["toolExecutionNotifications"][0];
+        assert_eq!(notification["level"], "error");
+        assert_eq!(notification["message"]["text"], "broken couldn't run: no entry files found");
+        assert_eq!(notification["associatedRule"], json!({ "id": "broken", "index": 1 }));
+        // The results of the rules after it keep pointing at their own rule.
+        let unused =
+            run["results"].as_array().unwrap().iter().find(|r| r["ruleId"] == "unused-exports");
+        assert_eq!(unused.unwrap()["ruleIndex"], 2);
     }
 
     #[test]

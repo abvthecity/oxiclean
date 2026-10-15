@@ -44,7 +44,7 @@ mod type_bloat;
 mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
-pub use command::{RULES, run_typecheck_command};
+pub use command::{rules, run_typecheck_command};
 pub use config::{
     AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
     ISOLATED_DECLARATIONS_STYLE, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE,

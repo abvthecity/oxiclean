@@ -87,27 +87,15 @@ impl Commands {
 
     /// Runs each of the command's rules the config file leaves on.
     fn run(&self) -> oxiclean_core::Result<CommandResult> {
-        Ok(match self {
-            Self::Unused(cfg) => oxiclean_unused_exports::run_unused_command(cfg)?,
-            Self::Dependencies(cfg) => oxiclean_dependencies::run_dependencies_command(cfg)?,
-            Self::Typecheck(cfg) => oxiclean_typecheck::run_typecheck_command(cfg)?,
-            Self::Bloat(cfg) => oxiclean_bloat::run_bloat_command(cfg)?,
-            Self::Depth(cfg) => CommandResult::single(
-                oxiclean_depth::RULE,
-                oxiclean_depth::REPORT_STYLE,
-                oxiclean_depth::run_depth_check(cfg)?,
-            ),
-            Self::Cycles(cfg) => CommandResult::single(
-                oxiclean_cycles::RULE,
-                oxiclean_cycles::REPORT_STYLE,
-                oxiclean_cycles::run_cycles_check(cfg)?,
-            ),
-            Self::Duplicates(cfg) => CommandResult::single(
-                oxiclean_duplicates::RULE,
-                oxiclean_duplicates::REPORT_STYLE,
-                oxiclean_duplicates::run_duplicates_check(cfg)?,
-            ),
-        })
+        match self {
+            Self::Unused(cfg) => oxiclean_unused_exports::run_unused_command(cfg),
+            Self::Dependencies(cfg) => oxiclean_dependencies::run_dependencies_command(cfg),
+            Self::Typecheck(cfg) => oxiclean_typecheck::run_typecheck_command(cfg),
+            Self::Bloat(cfg) => oxiclean_bloat::run_bloat_command(cfg),
+            Self::Depth(cfg) => oxiclean_depth::run_depth_command(cfg),
+            Self::Cycles(cfg) => oxiclean_cycles::run_cycles_command(cfg),
+            Self::Duplicates(cfg) => oxiclean_duplicates::run_duplicates_command(cfg),
+        }
     }
 }
 
@@ -119,8 +107,11 @@ fn main() -> Result<ExitCode> {
     let start = Instant::now();
     let command = cli.command.name();
     let mut result = cli.command.run()?;
+    // A fix can make another possible, so the command runs again after
+    // each round of fixes until no new fix applies.
     let fixed = if cli.fix {
-        fix::apply_command_fixes(&mut result).context("could not apply fixes")?
+        fix::apply_command_fixes_until_settled(&mut result, || cli.command.run())
+            .context("could not apply fixes")?
     } else {
         0
     };
@@ -152,8 +143,9 @@ fn main() -> Result<ExitCode> {
     stdout.flush()?;
 
     // A non-zero exit fails CI when a finding with error severity crossed its
-    // threshold, in any of the command's rules; warnings alone don't.
-    Ok(if result.error_count() == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    // threshold, in any of the command's rules, or a rule couldn't run;
+    // warnings alone don't.
+    Ok(if result.fails() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
 /// Sends diagnostics to stderr so stdout carries only the report. `RUST_LOG`

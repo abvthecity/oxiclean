@@ -35,6 +35,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, run_cycles_check};
+pub use checker::{check, run_cycles_check, run_cycles_command};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, CycleFinding, CycleStep, Finding, FindingKind};

@@ -38,7 +38,7 @@ mod config;
 
 pub use barrels::{check_barrels, run_barrels_check};
 pub use checker::{check, run_bloat_check};
-pub use command::{RULES, run_bloat_command};
+pub use command::run_bloat_command;
 pub use config::{
     BARRELS_DEFAULT_THRESHOLD, BARRELS_RULE, BARRELS_STYLE, Config, DEFAULT_THRESHOLD,
     REPORT_STYLE, RULE,

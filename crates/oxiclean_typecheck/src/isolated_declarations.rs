@@ -35,7 +35,7 @@ use oxc_isolated_declarations::{IsolatedDeclarations, IsolatedDeclarationsOption
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Workspace,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
     fix::Fix,
     jsonc_tree::{JsoncDoc, Segment},
     parse_jsonc, resolve,
@@ -106,7 +106,8 @@ pub fn run_isolated_declarations_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {ISOLATED_DECLARATIONS_RULE} check");
-    let policy = workspace.policy(ISOLATED_DECLARATIONS_RULE, DEFAULT_THRESHOLD)?;
+    let policy =
+        workspace.policy(ISOLATED_DECLARATIONS_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let project = &workspace.project;
     let cache = DashMap::new();
     let mut reports = Reports::new();

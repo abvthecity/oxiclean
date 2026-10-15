@@ -107,6 +107,40 @@ pub fn apply_command_fixes(result: &mut CommandResult) -> Result<usize> {
     Ok(fixed.iter().filter(|f| **f).count())
 }
 
+/// The most passes [`apply_command_fixes_until_settled`] makes.
+pub const MAX_FIX_PASSES: usize = 5;
+
+/// Applies the fixes of `result`, then reruns the command with `rerun` and
+/// applies the fixes that appeared, until a pass applies none, for at most
+/// [`MAX_FIX_PASSES`] passes. One fix can make another possible: once
+/// `references` makes a program `composite`, `isolated-declarations` can
+/// turn on `isolatedDeclarations`. `result` is left as what the last run
+/// found less what its fixes resolved. Returns how many findings were fixed
+/// in all.
+///
+/// # Errors
+/// Fails if a file can't be read or written, or `rerun` fails.
+pub fn apply_command_fixes_until_settled(
+    result: &mut CommandResult,
+    mut rerun: impl FnMut() -> Result<CommandResult>,
+) -> Result<usize> {
+    let mut total = 0;
+    for pass in 1..=MAX_FIX_PASSES {
+        let fixed = apply_command_fixes(result)?;
+        debug!("Fix pass {pass} fixed {fixed} findings");
+        total += fixed;
+        if fixed == 0 {
+            break;
+        }
+        if pass == MAX_FIX_PASSES {
+            warn!("Stopped fixing after {MAX_FIX_PASSES} passes; run --fix again for the rest");
+            break;
+        }
+        *result = rerun()?;
+    }
+    Ok(total)
+}
+
 /// Applies the fixes of `findings` to the files on disk, and returns which
 /// findings they resolved.
 fn fix_findings(findings: &[&Finding]) -> Result<Vec<bool>> {
@@ -331,6 +365,81 @@ mod tests {
         assert_eq!(apply_fixes(&mut result).unwrap(), 1);
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(fs::read_to_string(&real).unwrap(), "{\n  \"a\": 1\n}");
+    }
+
+    const STYLE: crate::report::ReportStyle = crate::report::ReportStyle {
+        description: "d",
+        heading: "h",
+        threshold_unit: "",
+        value_label: |n| n.to_string(),
+        max_label: "",
+        max_unit: "",
+        ok_message: "ok",
+    };
+
+    /// A command of the rules `a`, `b` and `c` with these findings.
+    fn command(a: Vec<Finding>, b: Vec<Finding>, c: Vec<Finding>) -> CommandResult {
+        let mut result = CommandResult::new(PathBuf::new());
+        for (rule, findings) in [("a", a), ("b", b), ("c", c)] {
+            result.push(rule, STYLE, CheckResult { findings, ..CheckResult::default() });
+        }
+        result
+    }
+
+    #[test]
+    fn command_fixes_remove_the_findings_of_their_own_rule() {
+        let t = TempDir::new().unwrap();
+        let file = t.path().join("tsconfig.json");
+        fs::write(&file, "{}").unwrap();
+        let set = |key: &str| finding(&file, Fix::json_set(file.clone(), &[key], json!(1)));
+        let unfixable = || Finding::new(file.clone(), FindingKind::WholeGraph, 1);
+        // `b` has no findings, so the fixed flags of `c` follow straight on
+        // from those of `a`.
+        let mut result = command(vec![unfixable(), set("a")], vec![], vec![set("c"), unfixable()]);
+        assert_eq!(apply_command_fixes(&mut result).unwrap(), 2);
+        let left: Vec<(&str, usize)> =
+            result.rules.iter().map(|r| (r.rule, r.result.findings.len())).collect();
+        assert_eq!(left, [("a", 1), ("b", 0), ("c", 1)]);
+        assert!(
+            result.rules.iter().all(|r| r
+                .result
+                .findings
+                .iter()
+                .all(|f| fix_of(&f.kind).is_none()))
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{\n  \"a\": 1,\n  \"c\": 1\n}");
+    }
+
+    #[test]
+    fn command_fixes_repeat_until_none_apply() {
+        let t = TempDir::new().unwrap();
+        let file = t.path().join("tsconfig.json");
+        fs::write(&file, "{}").unwrap();
+        // Each run offers a fix for the next key the file lacks, as a fix
+        // can make another possible.
+        let run = || -> Result<CommandResult> {
+            let text = fs::read_to_string(&file).unwrap();
+            let next = ["a", "b", "c"].into_iter().find(|k| !text.contains(&format!("\"{k}\"")));
+            let findings = next
+                .map(|k| vec![finding(&file, Fix::json_set(file.clone(), &[k], json!(1)))])
+                .unwrap_or_default();
+            Ok(command(findings, vec![], vec![]))
+        };
+        let mut result = run().unwrap();
+        assert_eq!(apply_command_fixes_until_settled(&mut result, run).unwrap(), 3);
+        assert_eq!(result.finding_count(), 0);
+        assert!(fs::read_to_string(&file).unwrap().contains("\"c\": 1"));
+
+        // A fix that keeps coming back stops after the last pass.
+        let again = || {
+            Ok(command(
+                vec![finding(&file, Fix::json_set(file.clone(), &["a"], json!(2)))],
+                vec![],
+                vec![],
+            ))
+        };
+        let mut result = again().unwrap();
+        assert_eq!(apply_command_fixes_until_settled(&mut result, again).unwrap(), MAX_FIX_PASSES);
     }
 
     #[test]

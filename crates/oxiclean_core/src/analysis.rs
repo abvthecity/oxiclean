@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
 use crate::{
-    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, collect_entries,
+    CollectorConfig, ConfigFile, Project, ResolutionStats, RulePolicy, Severity, collect_entries,
     collector::{collect_files, is_test_file},
     config::find_git_root,
     constants::is_declaration,
@@ -176,12 +176,18 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// The config file's settings for `rule`.
+    /// The config file's settings for `rule`, with the rule's defaults
+    /// where the file sets none. See [`ConfigFile::policy`].
     ///
     /// # Errors
     /// Fails if the config file has an invalid glob.
-    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
-        self.config.policy(rule, default_threshold)
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        default_severity: Severity,
+    ) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold, default_severity)
     }
 
     /// Applies `policy` to a checker's candidate findings, dropping those it
@@ -197,15 +203,15 @@ impl Analysis {
             parse_failures: self.graph.failures().to_vec(),
             resolution: self.resolution,
             threshold: policy.base().threshold,
-            severity: policy.base().severity,
+            severity: policy.base().enabled.then_some(policy.base().severity),
         }
     }
 }
 
-/// The root, config and project of a check that needs no module graph,
-/// from [`CommonArgs::workspace`]. Checks that need a graph build it from
-/// here with [`Self::analyze_with`], so the rules of one command read the
-/// config file and the project once.
+/// The root, config file and project, read once by
+/// [`CommonArgs::workspace`] for every rule of a command. Rules that check
+/// only manifests and tsconfig files run on it directly; rules that need a
+/// module graph build one from it with [`Self::analyze_with`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Workspace {
@@ -301,12 +307,18 @@ impl Workspace {
         self.config.enabled(rule)
     }
 
-    /// The config file's settings for `rule`.
+    /// The config file's settings for `rule`, with the rule's defaults
+    /// where the file sets none. See [`ConfigFile::policy`].
     ///
     /// # Errors
     /// Fails if the config file has an invalid glob.
-    pub fn policy(&self, rule: &str, default_threshold: usize) -> Result<RulePolicy> {
-        self.config.policy(rule, default_threshold)
+    pub fn policy(
+        &self,
+        rule: &str,
+        default_threshold: usize,
+        default_severity: Severity,
+    ) -> Result<RulePolicy> {
+        self.config.policy(rule, default_threshold, default_severity)
     }
 
     /// As [`Analysis::finish`], for a check of `files_analyzed` files.
@@ -324,7 +336,7 @@ impl Workspace {
             parse_failures: Vec::new(),
             resolution: ResolutionStats::default(),
             threshold: policy.base().threshold,
-            severity: policy.base().severity,
+            severity: policy.base().enabled.then_some(policy.base().severity),
         }
     }
 }

@@ -8,7 +8,9 @@ use std::{
     fs,
 };
 
-use oxiclean_core::{CheckResult, DuplicateVersions, Finding, FindingKind, Result, Workspace};
+use oxiclean_core::{
+    CheckResult, DuplicateVersions, Finding, FindingKind, Result, Severity, Workspace,
+};
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -28,7 +30,7 @@ pub fn run_duplicate_versions_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the duplicate versions check on `workspace`.
 pub(crate) fn run_on(workspace: &Workspace) -> Result<CheckResult> {
     info!("Starting {VERSIONS_RULE} check");
-    let policy = workspace.policy(VERSIONS_RULE, VERSIONS_DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(VERSIONS_RULE, VERSIONS_DEFAULT_THRESHOLD, Severity::Error)?;
     let readers: [(&str, Reader); 2] =
         [("pnpm-lock.yaml", pnpm_installed), ("package-lock.json", npm_installed)];
     let mut findings = Vec::new();

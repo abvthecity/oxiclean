@@ -19,7 +19,8 @@ use std::{
 };
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Workspace, parse_jsonc,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
+    parse_jsonc,
 };
 use serde_json::Value;
 use tracing::info;
@@ -48,7 +49,7 @@ pub fn run_ambient_types_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {AMBIENT_TYPES_RULE} check");
-    let policy = workspace.policy(AMBIENT_TYPES_RULE, DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(AMBIENT_TYPES_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let findings = check(&workspace.project, configs);
     info!("{AMBIENT_TYPES_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, configs.programs().count()))

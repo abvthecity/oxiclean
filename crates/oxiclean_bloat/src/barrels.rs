@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use oxiclean_core::{
     Analysis, Barrel, BuildOptions, CheckResult, Finding, FindingKind, Module, Result, RulePolicy,
+    Severity,
 };
 use tracing::info;
 
@@ -17,9 +18,14 @@ use crate::config::{BARRELS_DEFAULT_THRESHOLD, BARRELS_RULE, Config};
 /// entry files are found.
 pub fn run_barrels_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting {BARRELS_RULE} check");
-    let analysis = cfg.common.analyze_with(BuildOptions::default().read_exports(true))?;
-    let policy = analysis.policy(BARRELS_RULE, BARRELS_DEFAULT_THRESHOLD)?;
-    Ok(check_barrels(&analysis, &policy))
+    run_on(&cfg.common.analyze_with(BuildOptions::default().read_exports(true))?)
+}
+
+/// Runs the barrel files check on `analysis`, whose graph must have read
+/// exports.
+pub(crate) fn run_on(analysis: &Analysis) -> Result<CheckResult> {
+    let policy = analysis.policy(BARRELS_RULE, BARRELS_DEFAULT_THRESHOLD, Severity::Error)?;
+    Ok(check_barrels(analysis, &policy))
 }
 
 /// Flags each barrel file whose import pulls in at least its file's

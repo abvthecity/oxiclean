@@ -33,6 +33,6 @@
 mod checker;
 mod config;
 
-pub use checker::{check, duplicates, run_duplicates_check};
+pub use checker::{check, duplicates, run_duplicates_check, run_duplicates_command};
 pub use config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
 pub use oxiclean_core::{CheckResult, DuplicateExport, ExportName, Finding, FindingKind};

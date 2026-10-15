@@ -15,7 +15,7 @@ use std::{
 };
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Related, Result, Workspace,
+    CheckResult, Finding, FindingKind, Issue, Related, Result, Severity, Workspace,
     fix::{Fix, FixOp},
     jsonc_tree::Segment,
 };
@@ -46,7 +46,7 @@ pub fn run_program_files_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {PROGRAM_FILES_RULE} check");
-    let policy = workspace.policy(PROGRAM_FILES_RULE, DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(PROGRAM_FILES_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let findings = check(configs);
     let programs = configs.programs().count();
     info!("{PROGRAM_FILES_RULE} check complete. Found {} findings", findings.len());

@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::{
     checker::{FIELDS, Manifests, dependency_line, package_name},
-    config::{Config, HEAVY_DEFAULT_THRESHOLD, HEAVY_RULE},
+    config::{Config, HEAVY_DEFAULT_SEVERITY, HEAVY_DEFAULT_THRESHOLD, HEAVY_RULE},
 };
 
 /// Runs the heavy dependencies check described by `cfg`. Files in
@@ -29,7 +29,7 @@ pub(crate) fn run_on(workspace: Workspace) -> Result<CheckResult> {
     info!("Starting {HEAVY_RULE} check");
     let analysis =
         workspace.analyze_package_entries(BuildOptions::default().follow_node_modules(true))?;
-    let policy = analysis.policy(HEAVY_RULE, HEAVY_DEFAULT_THRESHOLD)?;
+    let policy = analysis.policy(HEAVY_RULE, HEAVY_DEFAULT_THRESHOLD, HEAVY_DEFAULT_SEVERITY)?;
     Ok(check_heavy_dependencies(&analysis, &policy))
 }
 

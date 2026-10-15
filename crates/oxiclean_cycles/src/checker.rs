@@ -1,11 +1,15 @@
 use std::path::Path;
 
 use oxiclean_core::{
-    Analysis, CheckResult, CycleFinding, CycleStep, Finding, FindingKind, Result, RulePolicy,
+    Analysis, BuildOptions, CheckResult, CommandResult, CommandRule, CycleFinding, CycleStep,
+    Finding, FindingKind, Result, RulePolicy, Severity, run_command,
 };
 use tracing::info;
 
-use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
+use crate::config::{Config, DEFAULT_THRESHOLD, REPORT_STYLE, RULE};
+
+/// Runs the rule on the command's module graph.
+type Run = fn(&Analysis) -> Result<CheckResult>;
 
 /// Runs the import cycle check described by `cfg`.
 ///
@@ -14,9 +18,27 @@ use crate::config::{Config, DEFAULT_THRESHOLD, RULE};
 /// no entry files are found.
 pub fn run_cycles_check(cfg: &Config) -> Result<CheckResult> {
     info!("Starting import cycle check");
-    let analysis = cfg.common.analyze()?;
-    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD)?;
-    Ok(check(&analysis, &policy))
+    run_on(&cfg.common.analyze()?)
+}
+
+/// Runs the `cycles` command: the import cycle check, unless the config file
+/// turns it off everywhere, in which case nothing is analysed and the
+/// result lists no rule.
+///
+/// # Errors
+/// As for [`run_cycles_check`].
+pub fn run_cycles_command(cfg: &Config) -> Result<CommandResult> {
+    const RULES: [CommandRule<Run>; 1] = [(RULE, REPORT_STYLE, run_on)];
+    run_command(&cfg.common, "cycles", &RULES, |workspace, rules| {
+        let analysis = workspace.analyze_with(BuildOptions::default())?;
+        Ok(rules.run(|run| run(&analysis)))
+    })
+}
+
+/// Runs the import cycle check on `analysis`.
+fn run_on(analysis: &Analysis) -> Result<CheckResult> {
+    let policy = analysis.policy(RULE, DEFAULT_THRESHOLD, Severity::Error)?;
+    Ok(check(analysis, &policy))
 }
 
 /// Reports the circular imports in the analysed graph, one finding per cycle.

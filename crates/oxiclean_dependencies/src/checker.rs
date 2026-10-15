@@ -8,7 +8,7 @@ use std::{
 use globset::GlobSet;
 use oxiclean_core::{
     Analysis, BuildOptions, CheckResult, DependencyField, Finding, FindingKind, Project, Result,
-    RulePolicy, UnusedDependency, Workspace, split_package_request,
+    RulePolicy, Severity, UnusedDependency, Workspace, split_package_request,
 };
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -107,7 +107,7 @@ pub(crate) fn run_on(workspace: Workspace) -> Result<CheckResult> {
     // files only they reach are read.
     let analysis =
         workspace.analyze_package_entries(BuildOptions::default().resolve_passive(true))?;
-    let policy = analysis.policy(DEPENDENCIES_RULE, DEFAULT_THRESHOLD)?;
+    let policy = analysis.policy(DEPENDENCIES_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let ignored = analysis.config.ignored_dependencies()?;
     Ok(check(&analysis, &policy, &ignored))
 }

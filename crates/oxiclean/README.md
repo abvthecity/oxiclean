@@ -47,14 +47,17 @@ Thresholds, severities, entry files and everything else are set in
 ## Adding New Rules
 
 1. Add the rule to a library crate, with a function that runs it and
-   returns a `CheckResult`
-2. Add its name to `Rules` in `crates/oxiclean_core/src/settings.rs`, and
-   its default severity to `default_severity` if it isn't `error`
-3. Run it from the command function of its crate (such as
-   `run_typecheck_command`), which skips it when the config turns it off
+   returns a `CheckResult`; it passes its default threshold and severity
+   to `policy`
+2. Add its name to `Rules` in `crates/oxiclean_core/src/settings.rs`
+3. Add a `(rule, style, run)` entry to the rule table of its command (such
+   as `RULES` in `crates/oxiclean_typecheck/src/command.rs`);
+   `oxiclean_core::run_command` skips the rule when the config turns it
+   off, and records its error, without stopping the others, when it fails
 
 A new command is a variant of the `Commands` enum in
-`crates/oxiclean/src/main.rs` whose `run` returns a `CommandResult`.
+`crates/oxiclean/src/main.rs` whose `run` returns a `CommandResult`, built
+with `oxiclean_core::run_command` from a table of its rules.
 
 ## License
 

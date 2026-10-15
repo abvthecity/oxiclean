@@ -23,7 +23,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use oxiclean_core::{
-    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Workspace,
+    CheckResult, Finding, FindingKind, Issue, Project, Related, Result, Severity, Workspace,
     fix::{Fix, FixOp},
     jsonc_tree::Segment,
 };
@@ -63,7 +63,7 @@ pub fn run_tsconfig_check(cfg: &Config) -> Result<CheckResult> {
 /// Runs the check on `workspace`, whose tsconfig files are `configs`.
 pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<CheckResult> {
     info!("Starting {TSCONFIG_RULE} check");
-    let policy = workspace.policy(TSCONFIG_RULE, DEFAULT_THRESHOLD)?;
+    let policy = workspace.policy(TSCONFIG_RULE, DEFAULT_THRESHOLD, Severity::Error)?;
     let findings = check(&workspace.project, configs);
     info!("{TSCONFIG_RULE} check complete. Found {} findings", findings.len());
     Ok(workspace.finish(&policy, findings, configs.configs.len()))
