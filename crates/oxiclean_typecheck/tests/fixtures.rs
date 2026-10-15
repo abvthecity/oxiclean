@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use oxiclean_core::CommonArgs;
 use oxiclean_typecheck::{
-    CheckResult, Config, FindingKind, run_ambient_types_check, run_isolated_declarations_check,
-    run_large_literals_check, run_overlap_check, run_program_files_check, run_references_check,
-    run_tsconfig_check, run_type_bloat_check,
+    CheckResult, Config, FindingKind, run_ambient_types_check, run_complex_types_check,
+    run_isolated_declarations_check, run_large_literals_check, run_overlap_check,
+    run_program_files_check, run_references_check, run_tsconfig_check, run_type_bloat_check,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -386,5 +386,58 @@ fn type_bloat_deno() {
     assert_eq!(
         type_bloat("bloat-deno"),
         ["packages/cli/src/main.ts:1 heavy-types cloud-apis (553)"]
+    );
+}
+
+fn complex_types(name: &str) -> Vec<String> {
+    let cfg = Config { common: CommonArgs::with_root(fixture(name)) };
+    summary(&run_complex_types_check(&cfg).expect("fixture analyses"))
+}
+
+/// pnpm: a Tailwind-style template literal over unions imported from
+/// another file (8 × 8 × 12 × 10), and an intersection of three unions
+/// (12 × 10 × 10); not reported: a small template literal and an
+/// intersection of plain objects.
+#[test]
+fn complex_types_pnpm() {
+    assert_eq!(
+        complex_types("complex-pnpm"),
+        [
+            "packages/ui/src/classes.ts:3 template-product Cls (7680)",
+            "packages/ui/src/variants.ts:5 union-intersection Props (1200)",
+        ]
+    );
+}
+
+/// npm: `Paths<T>` over a `.json` import with 1554 key paths; not
+/// reported: the same alias over a small object type.
+#[test]
+fn complex_types_npm() {
+    assert_eq!(
+        complex_types("complex-npm"),
+        ["packages/web/src/i18n.ts:4 recursive-paths Paths (1554)"]
+    );
+}
+
+/// Bun: `Range<200>` in the usual shape, which `--fix` writes out, and a
+/// `Tup<120>` that builds tuples it can't; not reported: `Range<10>`.
+#[test]
+fn complex_types_bun() {
+    assert_eq!(
+        complex_types("complex-bun"),
+        [
+            "packages/server/src/config.ts:3 tuple-arithmetic Range (20100) fix: write Range<200> out as a union",
+            "packages/server/src/config.ts:5 tuple-arithmetic Tup (7260)",
+        ]
+    );
+}
+
+/// Deno: a 45-link zod chain (45 × 46 / 2 rebuilds); not reported: a
+/// two-link chain.
+#[test]
+fn complex_types_deno() {
+    assert_eq!(
+        complex_types("complex-deno"),
+        ["packages/api/src/main.ts:3 builder-chain zod (1035)"]
     );
 }

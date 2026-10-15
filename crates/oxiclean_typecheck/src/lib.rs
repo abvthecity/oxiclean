@@ -30,6 +30,7 @@
 
 mod ambient_types;
 mod command;
+mod complex_types;
 mod config;
 mod declarations;
 mod isolated_declarations;
@@ -45,8 +46,10 @@ mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
 pub use command::{rules, run_typecheck_command};
+pub use complex_types::run_complex_types_check;
 pub use config::{
-    AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
+    AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, COMPLEX_TYPES_DEFAULT_THRESHOLD, COMPLEX_TYPES_RULE,
+    COMPLEX_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,
     ISOLATED_DECLARATIONS_STYLE, LARGE_LITERALS_DEFAULT_THRESHOLD, LARGE_LITERALS_RULE,
     LARGE_LITERALS_STYLE, OVERLAP_RULE, OVERLAP_STYLE, PROGRAM_FILES_RULE, PROGRAM_FILES_STYLE,
     REFERENCES_RULE, REFERENCES_STYLE, TSCONFIG_RULE, TSCONFIG_STYLE, TYPE_BLOAT_DEFAULT_THRESHOLD,

@@ -449,6 +449,17 @@
               "type": "null"
             }
           ]
+        },
+        "complex-types": {
+          "description": "Types that expand into huge numbers of types: template literal and\nunion intersection products, recursive key paths, tuple arithmetic\nand long builder chains. Default threshold: 1000 types.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSetting"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

@@ -141,3 +141,22 @@ pub const TYPE_BLOAT_STYLE: ReportStyle = ReportStyle {
     max_unit: "lines",
     ok_message: "No import loads a huge declaration tree.",
 };
+
+/// Name of the complex types rule in config files.
+pub const COMPLEX_TYPES_RULE: &str = "complex-types";
+
+/// Types that expand to this many members, paths or instantiations are
+/// reported: past about a thousand, `tsc` check time and memory grow
+/// visibly.
+pub const COMPLEX_TYPES_DEFAULT_THRESHOLD: usize = 1000;
+
+/// How complex type findings are worded in the terminal report.
+pub const COMPLEX_TYPES_STYLE: ReportStyle = ReportStyle {
+    description: "Type patterns whose cost in tsc grows as a product or a square: template literal and union intersection products, recursive key paths, tuple arithmetic and long builder chains",
+    heading: "Types that expand to huge numbers of types",
+    threshold_unit: "types",
+    value_label: |n| if n == 1 { "1 type".to_string() } else { format!("{n} types") },
+    max_label: "Largest",
+    max_unit: "types",
+    ok_message: "No type expands to a huge number of types.",
+};
