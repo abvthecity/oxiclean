@@ -448,8 +448,14 @@ workspace packages its files import (type-only imports included):
 | `reference-cycle` | Configs reference each other, which `tsc -b` can't order | |
 | `source-imports` | In a repo without references, two or more packages type-check another package's source, through `paths` or a package.json `types` or `exports` pointing at `.ts` | |
 
-A program builds with references when it has some, something references
-it, or it is `composite`. Missing and stale references are only reported
+Like `tsc`, it follows local imports from each program's root files (so
+`.vue` files and files a `files` list leaves out count), counts the
+packages `compilerOptions.types` loads, and treats a package as reached
+through the configs a reference references in turn. An import reaches a
+package's source when `paths`, or else the package's `exports` (with the
+program's conditions), `types`, `main` or `index`, lead to a `.ts` file;
+`module` is never read. A program builds with references when it has
+some, something references it, or it is `composite`. Missing and stale references are only reported
 in repos that use references; repos that don't get `source-imports`
 instead.
 

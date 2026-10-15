@@ -1026,6 +1026,7 @@ name = "oxiclean_typecheck"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dashmap",
  "globset",
  "ignore",
  "oxiclean_core",

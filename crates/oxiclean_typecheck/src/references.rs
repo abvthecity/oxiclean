@@ -20,15 +20,16 @@
 //!   `types` pointing at `.ts`.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
 };
 
+use dashmap::DashMap;
 use oxiclean_core::{
     CheckResult, Finding, FindingKind, Issue, Project, Related, Result,
     fix::{Fix, FixOp},
     jsonc_tree::Segment,
-    parse_imports, sequence, split_package_request,
+    parse_imports, resolve, sequence, split_package_request,
 };
 use rayon::prelude::*;
 use serde_json::{Value, json};
@@ -66,6 +67,7 @@ struct ImportSite {
 #[must_use]
 pub(crate) fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
     let imports = package_imports(project, configs);
+    let closure = reference_closure(configs);
     let uses_references = configs
         .configs
         .iter()
@@ -73,72 +75,149 @@ pub(crate) fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut missing = BTreeSet::new();
     if uses_references {
-        let (mismatches, reported) = reference_mismatches(project, configs, &imports);
+        let (mismatches, reported) = reference_mismatches(project, configs, &imports, &closure);
         findings.extend(mismatches);
         missing = reported;
         findings.extend(reference_targets(configs));
         findings.extend(reference_cycles(configs));
     }
-    findings.extend(source_imports(project, configs, &imports, &missing));
+    findings.extend(source_imports(project, configs, &imports, &closure, &missing));
     findings
 }
 
-/// Whether `program` type-checks the source of the workspace package
-/// `name` in `dir` when it imports it, rather than built `.d.ts` files.
-fn reaches_source(project: &Project, program: &TsConfigFile, name: &str, dir: &Path) -> bool {
-    exposes_source(project, dir) || paths_into_source(program, name, dir)
+/// What one file imports: workspace packages, with the line of each,
+/// and the local files it reaches.
+#[derive(Debug, Default)]
+struct FileImports {
+    packages: Vec<(String, u32)>,
+    local: Vec<PathBuf>,
 }
 
-/// For each program, the workspace packages its files import, other than
-/// its own, with where each is first imported.
+/// The imports of `file`.
+fn read_imports(
+    project: &Project,
+    cache: &DashMap<(PathBuf, String), Option<PathBuf>>,
+    file: &Path,
+) -> FileImports {
+    let specs = match parse_imports(file) {
+        Ok(parsed) => parsed.specs,
+        Err(e) => {
+            warn!("Skipping {}: {e}", file.display());
+            return FileImports::default();
+        }
+    };
+    let mut out = FileImports::default();
+    for s in specs {
+        if s.request.starts_with('.') || s.request.starts_with('/') {
+            let local = resolve(project, file, &s.request, cache).ok().flatten();
+            out.local
+                .extend(local.filter(|l| !l.components().any(|c| c.as_os_str() == "node_modules")));
+        } else {
+            let (name, _) = split_package_request(&s.request);
+            if project.workspace_package(name).is_some() {
+                out.packages.push((name.to_string(), s.line));
+            }
+        }
+    }
+    out
+}
+
+/// For each program, the workspace packages it imports, other than its
+/// own, with where each is first imported. Like `tsc`, this follows local
+/// imports from the root files, so a program limited by `files` and the
+/// `.vue` or `.svelte` files its code imports count, and so do the
+/// packages `compilerOptions.types` loads.
 fn package_imports(
     project: &Project,
     configs: &TsConfigs,
 ) -> HashMap<PathBuf, BTreeMap<String, ImportSite>> {
-    let files: BTreeSet<&Path> =
-        configs.programs().flat_map(|p| p.root_files.iter().map(PathBuf::as_path)).collect();
-    let by_file: HashMap<&Path, Vec<(String, u32)>> = files
-        .into_par_iter()
-        .map(|f| {
-            let specs = match parse_imports(f) {
-                Ok(parsed) => parsed.specs,
-                Err(e) => {
-                    warn!("Skipping {}: {e}", f.display());
-                    Vec::new()
-                }
-            };
-            let packages = specs
-                .into_iter()
-                .filter(|s| !s.request.starts_with('.') && !s.request.starts_with('/'))
-                .filter_map(|s| {
-                    let (name, _) = split_package_request(&s.request);
-                    project.workspace_package(name).map(|_| (name.to_string(), s.line))
-                })
-                .collect();
-            (f, packages)
-        })
-        .collect();
+    let cache = DashMap::new();
+    let mut parsed: HashMap<PathBuf, FileImports> = HashMap::new();
+    let mut frontier: BTreeSet<PathBuf> =
+        configs.programs().flat_map(|p| p.root_files.iter().cloned()).collect();
+    while !frontier.is_empty() {
+        let read: Vec<(PathBuf, FileImports)> = frontier
+            .into_par_iter()
+            .map(|f| {
+                let imports = read_imports(project, &cache, &f);
+                (f, imports)
+            })
+            .collect();
+        parsed.extend(read);
+        frontier = parsed
+            .values()
+            .flat_map(|i| i.local.iter())
+            .filter(|l| !parsed.contains_key(*l))
+            .cloned()
+            .collect();
+    }
     configs
         .programs()
         .map(|p| {
             let own = project.package_for(&p.path);
             let mut map: BTreeMap<String, ImportSite> = BTreeMap::new();
-            for f in &p.root_files {
-                for (name, line) in by_file.get(f.as_path()).into_iter().flatten() {
-                    if Some(name.as_str()) != own && !map.contains_key(name) {
-                        let source = project
-                            .workspace_package(name)
-                            .is_some_and(|dir| reaches_source(project, p, name, dir));
-                        map.insert(
-                            name.clone(),
-                            ImportSite { file: f.clone(), line: *line, source },
-                        );
+            let mut add = |name: &str, file: &Path, line: u32| {
+                if Some(name) != own && !map.contains_key(name) {
+                    let source = project
+                        .workspace_package(name)
+                        .is_some_and(|dir| reaches_source(project, p, name, dir));
+                    let site = ImportSite { file: file.to_path_buf(), line, source };
+                    map.insert(name.to_string(), site);
+                }
+            };
+            if let Some(Value::Array(types)) = p.options.get("types") {
+                let line = p.line_of(&["compilerOptions", "types"]);
+                for t in types.iter().filter_map(Value::as_str) {
+                    if project.workspace_package(t).is_some() {
+                        add(t, &p.path, line);
+                    }
+                }
+            }
+            let mut seen: HashSet<&Path> = p.root_files.iter().map(PathBuf::as_path).collect();
+            let mut queue: VecDeque<&Path> = p.root_files.iter().map(PathBuf::as_path).collect();
+            while let Some(f) = queue.pop_front() {
+                let Some(imports) = parsed.get(f) else { continue };
+                for (name, line) in &imports.packages {
+                    add(name, f, *line);
+                }
+                for l in &imports.local {
+                    if seen.insert(l) {
+                        queue.push_back(l);
                     }
                 }
             }
             (p.path.clone(), map)
         })
         .collect()
+}
+
+/// The configs each config references, directly or through the configs
+/// it references: `tsc -b` builds them all first, and imports of any of
+/// them read its `.d.ts`.
+fn reference_closure(configs: &TsConfigs) -> HashMap<&Path, BTreeSet<&Path>> {
+    let direct: HashMap<&Path, Vec<&Path>> = configs
+        .configs
+        .iter()
+        .map(|c| (c.path.as_path(), c.references.iter().map(|r| r.target.as_path()).collect()))
+        .collect();
+    direct
+        .keys()
+        .map(|&start| {
+            let mut seen: BTreeSet<&Path> = BTreeSet::new();
+            let mut stack: Vec<&Path> = direct.get(start).cloned().unwrap_or_default();
+            while let Some(t) = stack.pop() {
+                if seen.insert(t) {
+                    stack.extend(direct.get(t).into_iter().flatten().copied());
+                }
+            }
+            (start, seen)
+        })
+        .collect()
+}
+
+/// Whether one of `targets` is a config of the workspace package `name`.
+fn covers(project: &Project, targets: &BTreeSet<&Path>, name: &str) -> bool {
+    targets.iter().any(|t| project.package_for(t) == Some(name))
 }
 
 /// Whether `program` takes part in a build with references: it has some,
@@ -155,6 +234,7 @@ fn reference_mismatches<'a>(
     project: &Project,
     configs: &'a TsConfigs,
     imports: &'a HashMap<PathBuf, BTreeMap<String, ImportSite>>,
+    closure: &HashMap<&Path, BTreeSet<&Path>>,
 ) -> (Vec<Finding>, BTreeSet<(&'a Path, &'a str)>) {
     let mut missing = BTreeSet::new();
     let referenced: BTreeSet<&Path> = configs
@@ -168,14 +248,16 @@ fn reference_mismatches<'a>(
             continue;
         }
         let Some(imported) = imports.get(&program.path) else { continue };
-        let own_dir = project.package_for(&program.path).and_then(|n| project.workspace_package(n));
+        let own = project.package_for(&program.path);
+        let empty = BTreeSet::new();
+        let reached = closure.get(program.path.as_path()).unwrap_or(&empty);
         for (name, site) in imported {
             let Some(dir) = project.workspace_package(name) else { continue };
             // An import that resolves to built `.d.ts` files costs nothing
             // to check, whatever builds them; one that reaches source needs
             // a reference to read the `.d.ts` instead.
             let Some(target) = reference_target(configs, dir) else { continue };
-            if program.references.iter().any(|r| r.target.starts_with(dir)) || !site.source {
+            if !site.source || covers(project, reached, name) {
                 continue;
             }
             missing.insert((program.path.as_path(), name.as_str()));
@@ -210,12 +292,23 @@ fn reference_mismatches<'a>(
             .with_fix(fix);
             findings.push(Finding::new(program.path.clone(), FindingKind::Issue(issue), 1));
         }
-        for r in &program.references {
-            let Some(target_dir) = r.target.parent() else { continue };
+        // Files of formats `tsc` doesn't list, such as `.vue`, may import
+        // what the root files don't.
+        let other_formats = program
+            .include
+            .iter()
+            .flatten()
+            .any(|i| [".vue", ".svelte", ".astro", ".mdx"].iter().any(|e| i.contains(e)));
+        for r in program.references.iter().filter(|_| !other_formats) {
             // Only references to other workspace packages: a solution
             // config's references to its own variants are structure.
             let Some(name) = project.package_for(&r.target) else { continue };
-            if own_dir.is_some_and(|d| target_dir.starts_with(d)) || imported.contains_key(name) {
+            // A reference is needed when the program imports the package
+            // or one the referenced config references in turn.
+            let mut through: BTreeSet<&Path> =
+                closure.get(r.target.as_path()).cloned().unwrap_or_default();
+            through.insert(&r.target);
+            if Some(name) == own || imported.keys().any(|i| covers(project, &through, i)) {
                 continue;
             }
             let message = format!(
@@ -256,6 +349,8 @@ fn reference_targets(configs: &TsConfigs) -> Vec<Finding> {
     for c in &configs.configs {
         for r in &c.references {
             match configs.get(&r.target) {
+                // Only configs named `tsconfig*` or `jsconfig*` are loaded.
+                None if r.target.is_file() => {}
                 None => {
                     let message = format!("references {}, which doesn't exist", r.raw);
                     let issue = Issue::new("missing-target", r.raw.clone(), message, r.line);
@@ -263,10 +358,10 @@ fn reference_targets(configs: &TsConfigs) -> Vec<Finding> {
                 }
                 // A solution config with no files of its own, such as Vite's
                 // `tsconfig.json`, may reference configs that aren't
-                // composite.
+                // composite; any other config may not, even one with no
+                // files.
                 Some(t)
                     if t.flag("composite") != Some(true)
-                        && !t.root_files.is_empty()
                         && !c.root_files.is_empty()
                         && not_composite.insert(&t.path) =>
                 {
@@ -337,6 +432,7 @@ fn source_imports(
     project: &Project,
     configs: &TsConfigs,
     imports: &HashMap<PathBuf, BTreeMap<String, ImportSite>>,
+    closure: &HashMap<&Path, BTreeSet<&Path>>,
     missing: &BTreeSet<(&Path, &str)>,
 ) -> Vec<Finding> {
     // Package name -> its directory and the consumer programs that reach
@@ -346,9 +442,10 @@ fn source_imports(
     for program in configs.programs() {
         let Some(imported) = imports.get(&program.path) else { continue };
         let consumer = project.package_for(&program.path).unwrap_or(".");
+        let reached = closure.get(program.path.as_path());
         for (name, site) in imported {
             let Some(dir) = project.workspace_package(name) else { continue };
-            let referenced = program.references.iter().any(|r| r.target.starts_with(dir));
+            let referenced = reached.is_some_and(|r| covers(project, r, name));
             if site.source
                 && !referenced
                 && !missing.contains(&(program.path.as_path(), name.as_str()))
@@ -387,69 +484,162 @@ fn source_imports(
         .collect()
 }
 
-/// Whether the package in `dir` points its types at TypeScript source:
-/// `types`, `typings`, `main`, `module` or an `exports` target ending in
-/// `.ts` but not `.d.ts`.
-fn exposes_source(project: &Project, dir: &Path) -> bool {
-    let Some(pkg) = project.package_json(dir) else { return false };
-    let mut targets: Vec<&str> = ["types", "typings", "main", "module"]
+/// Whether `program` type-checks the source of the workspace package
+/// `name` in `dir` when it imports it, rather than built `.d.ts` files.
+/// As in `tsc`, `paths` come first, then the package's own entry points.
+fn reaches_source(project: &Project, program: &TsConfigFile, name: &str, dir: &Path) -> bool {
+    let found =
+        paths_target(project, program, name).or_else(|| package_entry(project, program, dir));
+    found.is_some_and(|f| f.starts_with(dir) && is_source(&f))
+}
+
+/// The file `program`'s `paths` map `name` to: the targets of the exact
+/// key, else of the wildcard key with the longest prefix, in order. None
+/// when no key matches or no target exists, and `tsc` looks the package up
+/// as usual.
+fn paths_target(project: &Project, program: &TsConfigFile, name: &str) -> Option<PathBuf> {
+    let Some(Value::Object(paths)) = program.options.get("paths") else { return None };
+    let (star, targets) = paths
         .iter()
-        .filter_map(|k| pkg.get(k)?.as_str())
-        .collect();
-    if let Some(exports) = pkg.get("exports") {
-        strings(exports, &mut targets);
-    }
-    targets.iter().any(|t| is_source(t))
-}
-
-/// Every string in `v`.
-fn strings<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
-    match v {
-        Value::String(s) => out.push(s),
-        Value::Array(items) => items.iter().for_each(|i| strings(i, out)),
-        Value::Object(map) => map.values().for_each(|i| strings(i, out)),
-        _ => {}
-    }
-}
-
-/// Whether `program`'s `paths` map `name` into TypeScript source in `dir`:
-/// an alias for the package, its subpaths, or a wildcard matching it.
-fn paths_into_source(program: &TsConfigFile, name: &str, dir: &Path) -> bool {
-    let Some(Value::Object(paths)) = program.options.get("paths") else { return false };
-    let dir = slashes(dir);
-    paths.iter().any(|(key, targets)| {
-        let star = match key.split_once('*') {
-            None => (key == name).then_some(""),
+        .filter_map(|(key, targets)| match key.split_once('*') {
+            None => (key == name).then_some((usize::MAX, "", targets)),
             Some((prefix, suffix)) => name
                 .strip_prefix(prefix)
                 .and_then(|rest| rest.strip_suffix(suffix))
-                .or_else(|| key.strip_prefix(name).filter(|r| r.starts_with('/')).map(|_| "")),
-        };
-        let Some(star) = star else { return false };
-        targets.as_array().into_iter().flatten().filter_map(Value::as_str).any(|t| {
-            let t = t.replacen('*', star, 1);
-            // A file in `dir`: TypeScript source, or a path with no
-            // extension that resolves to one.
-            Path::new(&t).strip_prefix(&dir).is_ok_and(|rest| {
-                let name = rest.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-                !is_declaration(&name) && (is_source(&name) || !name.contains('.'))
-            })
+                .map(|star| (prefix.len(), star, targets)),
         })
-    })
+        .max_by_key(|(rank, _, _)| *rank)
+        .map(|(_, star, targets)| (star, targets))?;
+    targets
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find_map(|t| resolve_typed(project, Path::new(&t.replacen('*', star, 1))))
 }
 
-/// Whether `target` names a TypeScript source file rather than a
-/// declaration file.
-fn is_source(target: &str) -> bool {
-    let t = target.trim_end_matches('*');
-    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| t.ends_with(e)) && !is_declaration(t)
+/// The file `tsc` reads for the package in `dir`: its `exports` `.`
+/// entry when the program's module resolution reads `exports`, else
+/// `types` or `typings`, else `main`, else `index`. `module` is never read.
+fn package_entry(project: &Project, program: &TsConfigFile, dir: &Path) -> Option<PathBuf> {
+    let Some(pkg) = project.package_json(dir) else {
+        return resolve_typed(project, &dir.join("index"));
+    };
+    if let Some(exports) = pkg.get("exports").filter(|_| reads_exports(program)) {
+        let root = match exports {
+            Value::Object(map) if map.keys().any(|k| k.starts_with('.')) => map.get(".")?,
+            other => other,
+        };
+        let target = condition_target(root, &conditions(program))?;
+        return resolve_typed(project, &dir.join(target));
+    }
+    ["types", "typings", "main"]
+        .iter()
+        .find_map(|k| pkg.get(k)?.as_str())
+        .and_then(|t| resolve_typed(project, &dir.join(t)))
+        .or_else(|| resolve_typed(project, &dir.join("index")))
 }
 
-/// Whether `target` names a declaration file: `.d.ts`, `.d.mts`,
-/// `.d.cts`, or an arbitrary-extension `.d.<ext>.ts`.
-fn is_declaration(target: &str) -> bool {
-    let name = target.rsplit('/').next().unwrap_or(target);
-    name.contains(".d.")
+/// Whether `program`'s module resolution reads package.json `exports`:
+/// `node16`, `nodenext` and `bundler` do, `node10` and `classic` don't.
+fn reads_exports(program: &TsConfigFile) -> bool {
+    let option = |k: &str| program.options.get(k).and_then(Value::as_str).map(str::to_lowercase);
+    match option("moduleResolution").as_deref() {
+        Some("node16" | "nodenext" | "bundler") => true,
+        Some(_) => false,
+        None => matches!(
+            option("module").as_deref(),
+            Some("node16" | "node18" | "node20" | "nodenext" | "preserve")
+        ),
+    }
+}
+
+/// The `exports` conditions `tsc` matches for `program`.
+fn conditions(program: &TsConfigFile) -> Vec<String> {
+    let mut out: Vec<String> =
+        ["types", "import", "require", "node", "default"].iter().map(ToString::to_string).collect();
+    if let Some(Value::Array(custom)) = program.options.get("customConditions") {
+        out.extend(custom.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    out
+}
+
+/// The target of an `exports` entry: the first condition in key order
+/// that `conditions` has (`types@<version>` counting as `types`).
+fn condition_target<'a>(entry: &'a Value, conditions: &[String]) -> Option<&'a str> {
+    match entry {
+        Value::String(s) => Some(s),
+        Value::Array(items) => items.iter().find_map(|i| condition_target(i, conditions)),
+        Value::Object(map) => map
+            .iter()
+            .filter(|(k, _)| {
+                let k = k.split('@').next().unwrap_or(k);
+                conditions.iter().any(|c| c == k)
+            })
+            .find_map(|(_, v)| condition_target(v, conditions)),
+        _ => None,
+    }
+}
+
+/// The file `tsc` loads for `path`: `.js` swapped for `.ts`, `.tsx` or
+/// `.d.ts`; the file itself; `path` plus one of those extensions; or, for a
+/// directory, its package.json entry or `index`.
+fn resolve_typed(project: &Project, path: &Path) -> Option<PathBuf> {
+    let text = path.to_string_lossy();
+    let swapped = [(".mjs", [".mts", ".d.mts"]), (".cjs", [".cts", ".d.cts"])]
+        .into_iter()
+        .chain([".js", ".jsx"].map(|e| (e, [".ts", ".d.ts"])))
+        .find_map(|(js, ts)| {
+            let stem = text.strip_suffix(js)?;
+            let tsx = (js == ".jsx" || js == ".js").then(|| format!("{stem}.tsx"));
+            ts.iter()
+                .map(|e| format!("{stem}{e}"))
+                .chain(tsx)
+                .map(PathBuf::from)
+                .find(|c| c.is_file())
+        });
+    if swapped.is_some() {
+        return swapped;
+    }
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    if let Some(found) = [".ts", ".tsx", ".d.ts"]
+        .iter()
+        .map(|e| PathBuf::from(format!("{text}{e}")))
+        .find(|c| c.is_file())
+    {
+        return Some(found);
+    }
+    if !path.is_dir() {
+        return None;
+    }
+    let pkg = project.package_json(path);
+    pkg.as_ref()
+        .and_then(|p| ["types", "typings", "main"].iter().find_map(|k| p.get(k)?.as_str()))
+        .map(|t| path.join(t))
+        .filter(|t| t.as_path() != path)
+        .and_then(|t| resolve_file_only(&t))
+        .or_else(|| resolve_file_only(&path.join("index")))
+}
+
+/// [`resolve_typed`] for a file only, so directories don't recurse.
+fn resolve_file_only(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    let text = path.to_string_lossy();
+    let stem =
+        [".js", ".mjs", ".cjs", ".jsx"].iter().find_map(|e| text.strip_suffix(e)).unwrap_or(&text);
+    [".ts", ".tsx", ".d.ts"]
+        .iter()
+        .map(|e| PathBuf::from(format!("{stem}{e}")))
+        .find(|c| c.is_file())
+}
+
+/// Whether `file` is TypeScript source rather than a declaration file.
+fn is_source(file: &Path) -> bool {
+    let name = file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| name.ends_with(e)) && !name.contains(".d.")
 }
 
 #[cfg(test)]
@@ -458,22 +648,138 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    #[test]
-    fn paths_match_whole_directories() {
+    fn write(root: &Path, path: &str, text: &str) {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    }
+
+    fn codes(root: &Path) -> Vec<String> {
+        let project = Project::load(root);
+        let configs = TsConfigs::load(&project);
+        let mut out: Vec<String> = check(&project, &configs)
+            .iter()
+            .map(|f| match &f.kind {
+                FindingKind::Issue(i) => {
+                    format!("{} {} {}", relative(root, &f.file), i.code, i.key)
+                }
+                _ => unreachable!(),
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// A workspace with packages `@x/<name>` in `packages/<name>`, each
+    /// with `src/index.ts`.
+    fn workspace(packages: &[(&str, &str, &str)]) -> (TempDir, PathBuf) {
         let t = TempDir::new().unwrap();
         let root = t.path().canonicalize().unwrap();
+        write(&root, "package.json", r#"{ "workspaces": ["packages/*"] }"#);
+        for (name, pkg, tsconfig) in packages {
+            let dir = format!("packages/{name}");
+            let pkg = if pkg.is_empty() {
+                format!(r#"{{ "name": "@x/{name}", "types": "./src/index.ts" }}"#)
+            } else {
+                pkg.to_string()
+            };
+            write(&root, &format!("{dir}/package.json"), &pkg);
+            write(&root, &format!("{dir}/tsconfig.json"), tsconfig);
+            write(&root, &format!("{dir}/src/index.ts"), "export {};");
+        }
+        (t, root)
+    }
+
+    const COMPOSITE: &str = r#"{ "compilerOptions": { "composite": true } }"#;
+
+    #[test]
+    fn paths_match_whole_directories() {
+        let (_t, root) = workspace(&[("ui", "", COMPOSITE), ("ui-kit", "", COMPOSITE)]);
+        write(&root, "packages/ui-kit/dist/index.d.ts", "");
         let paths = r#"{ "compilerOptions": { "paths": {
             "ui": ["./packages/ui-kit/src/index.ts"],
             "kit": ["./packages/ui-kit/src"],
-            "types": ["./packages/ui-kit/dist/index.d.ts"]
+            "types": ["./packages/ui-kit/dist"]
         } } }"#;
-        fs::write(root.join("tsconfig.json"), paths).unwrap();
-        let configs = TsConfigs::load(&Project::load(&root));
-        let program = configs.programs().next().unwrap();
+        write(&root, "tsconfig.json", paths);
+        let project = Project::load(&root);
+        let configs = TsConfigs::load(&project);
+        let program = configs.get(&root.join("tsconfig.json")).unwrap();
         let (ui, kit) = (root.join("packages/ui"), root.join("packages/ui-kit"));
-        assert!(!paths_into_source(program, "ui", &ui));
-        assert!(paths_into_source(program, "ui", &kit));
-        assert!(paths_into_source(program, "kit", &kit));
-        assert!(!paths_into_source(program, "types", &kit));
+        assert!(!reaches_source(&project, program, "ui", &ui));
+        assert!(reaches_source(&project, program, "ui", &kit));
+        assert!(reaches_source(&project, program, "kit", &kit));
+        assert!(!reaches_source(&project, program, "types", &kit));
+    }
+
+    #[test]
+    fn reads_types_like_tsc() {
+        let bun = r#"{ "name": "@x/core", "exports": { ".": {
+            "types": "./dist/index.d.ts", "bun": "./src/index.ts", "default": "./dist/index.js"
+        } } }"#;
+        let module =
+            r#"{ "name": "@x/util", "types": "./dist/index.d.ts", "module": "./src/index.ts" }"#;
+        let (_t, root) = workspace(&[
+            ("core", bun, COMPOSITE),
+            ("util", module, COMPOSITE),
+            ("bare", r#"{ "name": "@x/bare" }"#, COMPOSITE),
+        ]);
+        write(&root, "packages/core/dist/index.d.ts", "");
+        write(&root, "packages/util/dist/index.d.ts", "");
+        write(&root, "packages/bare/index.ts", "");
+        let app = r#"{ "compilerOptions": { "moduleResolution": "bundler" }, "references": [] }"#;
+        write(&root, "tsconfig.json", app);
+        let project = Project::load(&root);
+        let configs = TsConfigs::load(&project);
+        let program = configs.get(&root.join("tsconfig.json")).unwrap();
+        let reaches =
+            |n: &str| reaches_source(&project, program, n, &root.join("packages").join(n));
+        assert!(!reaches("core"));
+        assert!(!reaches("util"));
+        assert!(reaches("bare"));
+    }
+
+    #[test]
+    fn follows_references_and_local_imports() {
+        let (_t, root) = workspace(&[
+            ("core", "", COMPOSITE),
+            (
+                "ui",
+                "",
+                r#"{ "compilerOptions": { "composite": true }, "references": [{ "path": "../core" }] }"#,
+            ),
+            (
+                "app",
+                "",
+                r#"{ "files": ["src/index.ts"], "references": [{ "path": "../ui" }, { "path": "../lib" }] }"#,
+            ),
+            ("lib", "", COMPOSITE),
+        ]);
+        write(&root, "packages/ui/src/index.ts", "import '@x/core';");
+        // app reaches core through ui's reference, and lib only through a
+        // file `files` doesn't list.
+        write(
+            &root,
+            "packages/app/src/index.ts",
+            "import '@x/ui'; import '@x/core'; export * from './util.js';",
+        );
+        write(&root, "packages/app/src/util.ts", "import '@x/lib';");
+        assert_eq!(codes(&root), Vec::<String>::new());
+    }
+
+    #[test]
+    fn reports_files_less_targets_and_unloaded_configs() {
+        let (_t, root) = workspace(&[
+            ("core", "", r#"{ "files": [], "references": [{ "path": "./tsconfig.lib.json" }] }"#),
+            (
+                "app",
+                "",
+                r#"{ "references": [{ "path": "../core" }, { "path": "../core/build.json" }] }"#,
+            ),
+        ]);
+        write(&root, "packages/core/tsconfig.lib.json", COMPOSITE);
+        write(&root, "packages/core/build.json", COMPOSITE);
+        write(&root, "packages/app/src/index.ts", "import '@x/core';");
+        assert_eq!(codes(&root), ["packages/core/tsconfig.json not-composite composite"]);
     }
 }
