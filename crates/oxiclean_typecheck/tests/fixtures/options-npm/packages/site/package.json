@@ -1,0 +1,1 @@
+{ "name": "site", "scripts": { "check": "tsc --noEmit" } }

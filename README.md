@@ -480,34 +480,39 @@ packages/app/tsconfig.json
 
 | Code | Meaning | `--fix` |
 |---|---|---|
-| `skip-lib-check` | Programs leave `skipLibCheck` unset, so `tsc` checks every `.d.ts` in `node_modules` each run. Reported once on the config they extend | Sets it on that config |
-| `incremental` | A package.json script runs plain `tsc` (not `tsc -b`) on a config that isn't `incremental` or `composite`, so each run starts over | Sets `incremental` |
+| `skip-lib-check` | Programs leave `skipLibCheck` unset, so `tsc` checks every `.d.ts` in `node_modules` each run. Reported once on the config they extend; programs made mostly of `.d.ts` files are there to check them and aren't reported | Sets it on that config |
+| `incremental` | A package.json script only checks a config with `tsc` (`--noEmit` or `noEmit`, not `-b` or `--incremental`) and the config doesn't set `incremental` or `composite`, so each run starts over. Configs that emit aren't reported, as a `.tsbuildinfo` outside `outDir` makes `rm -rf dist && tsc` emit nothing | Sets `incremental`, with `tsBuildInfoFile` in `node_modules/.tmp` |
 | `debug-option` | A config turns on `diagnostics`, `extendedDiagnostics`, `generateTrace`, `listFiles`, `listEmittedFiles`, `explainFiles` or `traceResolution` | Turns it off (not `generateTrace`) |
 
-Programs whose `extends` chain names a config that isn't installed are
-skipped, since it may set these options.
+Configs named for debugging (`tsconfig.explain.json`, say) keep their
+debug options. Programs whose `extends` chain names a config that isn't
+installed or can't be read are skipped, since it may set these options.
 
 ### Ambient Types Checker
 
-Without `compilerOptions.types`, `tsc` loads every package in each
-`node_modules/@types` from the program's directory up, used or not. In a
-monorepo that includes whatever other packages install and the package
-manager hoists. `ambient-types` reports programs that load `@types`
-packages neither their package.json nor the root one declares, and
-`--fix` sets `types` to the ones they do. Imports of a package still find
-its types without it being listed.
+Before TypeScript 6, a program without `compilerOptions.types` loads
+every package in each `node_modules/@types` from its directory up, used or
+not; from 6 on, only with `"types": ["*"]`. In a monorepo that includes
+whatever other packages install and the package manager hoists.
+`ambient-types` reports programs that load `@types` packages that no
+package.json from their directory up declares (nor a deno.json `npm:`
+import, nor a declared `@types` package's dependencies), and suggests a
+`types` list. It offers no fix: a program may rely on globals only a
+sibling package declares. Imports of a package still find its types
+without it being listed.
 
 ```
 ⚠ Programs load @types packages they don't declare
 
 packages/app/tsconfig.json
-└──  line 3: sets no compilerOptions.types, so tsc loads every @types package it can see, including @types/jest that no package.json here declares (1 package)
+└──  line 3: loads every @types package it can see, including @types/jest that no package.json here declares; list the ones it uses in compilerOptions.types, such as ["node", "react"] (1 package)
         node_modules/@types/jest/index.d.ts: not declared
-        fixable with --fix: set "compilerOptions.types": ["node","react"]
 ```
 
-Deno doesn't read tsconfig files, so these checks find nothing in a Deno
-workspace.
+These checks skip tsconfigs in test input directories (`fixtures`,
+`__fixtures__`, `testdata`, `goldens`, `test-output`, `__snapshots__`): they are data
+for tests, not programs anyone runs. Deno doesn't read tsconfig files, so
+these checks find nothing in a Deno workspace.
 
 ### Difference Between Tools
 

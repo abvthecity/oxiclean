@@ -156,28 +156,28 @@ fn ambient(name: &str) -> Vec<String> {
 }
 
 /// pnpm: a shared base without `skipLibCheck` two packages extend, a
-/// script running plain `tsc`, a debug option, and a hoisted `@types/jest`
-/// nothing declares.
+/// script running `tsc --noEmit`, a debug option, and a hoisted
+/// `@types/jest` nothing declares (`@types/react` in the package's own
+/// `node_modules` counts as declared).
 #[test]
 fn options_pnpm() {
     assert_eq!(
         options("options-pnpm"),
         [
             "packages/app/tsconfig.json:4 debug-option extendedDiagnostics (1) fix: set \"compilerOptions.extendedDiagnostics\": false",
-            "packages/app/tsconfig.json:3 incremental incremental (1) fix: set \"compilerOptions.incremental\": true",
+            "packages/app/tsconfig.json:3 incremental incremental (1) fix: set \"compilerOptions.incremental\": true and \"tsBuildInfoFile\": \"./node_modules/.tmp/tsconfig.tsbuildinfo\"",
             "tsconfig.base.json:2 skip-lib-check skipLibCheck (2) fix: set \"compilerOptions.skipLibCheck\": true",
         ]
     );
     assert_eq!(
         ambient("options-pnpm"),
-        [
-            "packages/app/tsconfig.json:3 undeclared-types types (1) fix: set \"compilerOptions.types\": [\"node\",\"react\"]"
-        ]
+        ["packages/app/tsconfig.json:3 undeclared-types types (1)"]
     );
 }
 
 /// npm: `skipLibCheck` set, a script running `tsc` on an incremental
-/// config, every `@types` package declared, and `traceResolution` on.
+/// config, `traceResolution` on, TypeScript 6 (which loads no `@types`
+/// without `types`), and a package extending a base that isn't installed.
 #[test]
 fn options_npm() {
     assert_eq!(
@@ -190,24 +190,24 @@ fn options_npm() {
 }
 
 /// Bun: a composite package `tsc -b` builds, so it isn't reported for
-/// `incremental`, without `skipLibCheck`, and a hoisted `@types/express`.
+/// `incremental`, extending a shared base package without
+/// `skipLibCheck`, and a hoisted `@types/express`.
 #[test]
 fn options_bun() {
     assert_eq!(
         options("options-bun"),
         [
-            "packages/server/tsconfig.json:2 skip-lib-check skipLibCheck (1) fix: set \"compilerOptions.skipLibCheck\": true"
+            "packages/tsconfig/base.json:2 skip-lib-check skipLibCheck (1) fix: set \"compilerOptions.skipLibCheck\": true"
         ]
     );
     assert_eq!(
         ambient("options-bun"),
-        [
-            "packages/server/tsconfig.json:2 undeclared-types types (1) fix: set \"compilerOptions.types\": [\"bun\"]"
-        ]
+        ["packages/server/tsconfig.json:3 undeclared-types types (1)"]
     );
 }
 
-/// Deno: no `node_modules`, and a member tsconfig with `skipLibCheck`.
+/// Deno: a member tsconfig with `skipLibCheck`, and `@types/node` from an
+/// `npm:` import.
 #[test]
 fn options_deno() {
     assert!(options("options-deno").is_empty());
