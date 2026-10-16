@@ -1192,3 +1192,27 @@ fn savings_settings_scale_the_hours() {
     assert!(out.contains("Health: "), "{out}");
     assert!(out.contains("for 20 developers and 30 CI runs a day"), "{out}");
 }
+
+/// `health` only reports: `--fix` belongs to the command whose findings
+/// it fixes. A team setting of zero developers is a config error, and a
+/// configured trace that isn't recorded yet fails only the trace rules.
+#[test]
+fn health_reports_without_fixing_and_survives_a_missing_trace() {
+    let t = monorepo("npm");
+    let before = fs::read_to_string(t.path().join("tsconfig.json")).unwrap();
+    let (code, out) = run(t.path(), &["health", "--fix"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("`health` only reports"), "{out}");
+    assert_eq!(fs::read_to_string(t.path().join("tsconfig.json")).unwrap(), before);
+
+    configure(t.path(), r#"{ "savings": { "developers": 0 } }"#);
+    let (code, out) = run(t.path(), &["health"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("invalid config file"), "{out}");
+
+    configure(t.path(), r#"{ "trace": { "dir": "trace" } }"#);
+    let (code, out) = run(t.path(), &["health"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("Biggest wins:"), "{out}");
+    assert!(out.contains("✗ trace couldn't run"), "{out}");
+}

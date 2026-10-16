@@ -131,31 +131,25 @@ pub struct Related {
     pub line: u32,
     /// What is there, e.g. `also includes it`.
     pub message: String,
+    /// Whether this is the finding the issue is part of, whose time
+    /// includes the issue's, such as the span of a trace a span is in.
+    pub inside: bool,
 }
 
 impl Related {
     /// `message` about `line` of `file`.
     #[must_use]
     pub fn new(file: PathBuf, line: u32, message: impl Into<String>) -> Self {
-        Self { file, line, message: message.into() }
+        Self { file, line, message: message.into(), inside: false }
     }
 
-    /// The finding this one is part of, at `line` of `file`, such as a span
-    /// of a trace inside a longer one, whose time includes it.
+    /// The finding this one is part of, at `line` of `file`, described as
+    /// `description`.
     #[must_use]
     pub fn inside(file: PathBuf, line: u32, description: &str) -> Self {
-        Self::new(file, line, format!("{INSIDE}{description}"))
-    }
-
-    /// Whether this names the finding the issue is part of.
-    #[must_use]
-    pub fn is_inside(&self) -> bool {
-        self.message.starts_with(INSIDE)
+        Self { inside: true, ..Self::new(file, line, format!("inside {description}")) }
     }
 }
-
-/// How [`Related::inside`] starts its message.
-const INSIDE: &str = "inside ";
 
 /// The versions of a package a lockfile installs, for
 /// [`FindingKind::DuplicateVersions`].
@@ -495,6 +489,7 @@ impl CommandResult {
     /// Adds the rules `other` ran, after this one's. Both must have run on
     /// the same root.
     pub fn extend(&mut self, other: CommandResult) {
+        debug_assert_eq!(self.root, other.root, "results of different roots");
         self.rules.extend(other.rules);
     }
 

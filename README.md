@@ -917,7 +917,9 @@ Health: 72/100 (C)
 Every command ends its text report with the score and its five biggest
 wins. `oxiclean health` runs every command, and prints the score, the 15
 biggest wins and what each rule's findings cost, without listing every
-finding; run a rule's command for those.
+finding; run a rule's command for those. It exits with status 1 like the
+commands it runs, and doesn't take `--fix`: run that with the command whose
+findings to fix.
 
 ### How the time is estimated
 
@@ -946,10 +948,17 @@ The per-run costs are typical numbers, not measurements of your project,
 so treat the hours as a way to compare findings, not a forecast. Where a
 fix's effect is uncertain the estimate is conservative: a finding about how
 many modules an import reaches saves only what brings it back to its
-threshold. Several findings about the same thing count once: an entry's
-imports are part of its whole graph (`bloat`), an entry's deep imports
-share one chain (`depth`), a span of a trace is part of the span it's in
-(`hot-spots`). No finding costs one tool more than 120 seconds a run.
+threshold. Several findings about the same thing count once, with the
+largest standing for the rest: an entry's imports are part of its whole
+graph, and a bundler transforms a module once however many entries reach
+it, so `bloat` and `depth` count one entry per workspace package; tsc reads
+a package's declarations once a program (`type-bloat`); a package is
+installed once however many manifests list it (`heavy-dependencies`); and
+`lint-config` prices each kind of issue on the whole project's lint time
+once, however many configs have it. A span of a trace is part of the span
+it's in (`hot-spots`). No finding costs one tool more than 120 seconds a
+run. Findings are listed as long as they cost time on some run, even when a
+team setting makes their hours zero.
 
 The unit costs, for one CI runner core, cold:
 
@@ -973,9 +982,9 @@ How each rule's findings use them:
 
 | Rule | Saves each run |
 |---|---|
-| `bloat` | modules over the threshold × (test + build cost per module), once per entry |
+| `bloat` | modules over the threshold × (test + build cost per module), for the largest entry of each package |
 | `barrels`, `heavy-dependencies` | modules over the threshold × test cost × a quarter of the importing files (test runners load a module again for each test file), plus the build cost once |
-| `depth` | levels over the threshold × a dev server round trip, deepest import per file, locally only |
+| `depth` | levels over the threshold × a dev server round trip, for the deepest import of each package, locally only |
 | `cycles` | files in the cycle × (test + build cost per module), locally only: editing any of them re-runs all |
 | `unused-*`, `duplicates` | a twentieth of an average file's `tsc` and lint time per unused item or extra name |
 | `dependencies`, `duplicate-versions` | one package install per unused package or extra version |
@@ -995,7 +1004,8 @@ How each rule's findings use them:
 ### Describing your team
 
 The defaults describe a team of 10 developers. Set `savings` in
-`.oxicleanrc.json` to match yours:
+`.oxicleanrc.json` to match yours; `developers`, `workDaysPerWeek` (1 to 7)
+and `ciHoursPerDeveloperHour` are at least 1:
 
 ```jsonc
 {

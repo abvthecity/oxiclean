@@ -112,7 +112,8 @@ impl<F> Rules<'_, F> {
 }
 
 /// `e` and its causes, joined, for one line of the report.
-fn describe(e: &Error) -> String {
+#[must_use]
+pub fn describe(e: &Error) -> String {
     let mut message = e.to_string();
     let mut source = e.source();
     while let Some(cause) = source {

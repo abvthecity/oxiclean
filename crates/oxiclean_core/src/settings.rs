@@ -28,6 +28,7 @@
 
 use std::{
     fmt, fs,
+    num::NonZeroU32,
     path::{Path, PathBuf},
 };
 
@@ -118,16 +119,17 @@ pub struct ConfigFile {
 #[non_exhaustive]
 pub struct SavingsSettings {
     /// Developers working in the repository.
-    pub developers: u32,
+    pub developers: NonZeroU32,
     /// Working days a week.
-    pub work_days_per_week: u32,
+    #[schemars(range(min = 1, max = 7))]
+    pub work_days_per_week: NonZeroU32,
     /// CI pipeline runs a working day, across the team. Each run type-checks,
     /// lints, tests, builds and installs once.
     pub ci_runs_per_day: u32,
     /// How many hours of CI time weigh as much as one hour a developer
     /// spends waiting, when findings are ranked and the health score is
     /// computed.
-    pub ci_hours_per_developer_hour: u32,
+    pub ci_hours_per_developer_hour: NonZeroU32,
     /// Full runs of each tool one developer starts a working day.
     pub local_runs_per_day: LocalRuns,
 }
@@ -135,10 +137,10 @@ pub struct SavingsSettings {
 impl Default for SavingsSettings {
     fn default() -> Self {
         Self {
-            developers: 10,
-            work_days_per_week: 5,
+            developers: NonZeroU32::new(10).unwrap_or(NonZeroU32::MIN),
+            work_days_per_week: NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
             ci_runs_per_day: 30,
-            ci_hours_per_developer_hour: 4,
+            ci_hours_per_developer_hour: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
             local_runs_per_day: LocalRuns::default(),
         }
     }
@@ -161,6 +163,15 @@ pub struct LocalRuns {
     pub build: u32,
     /// Package installs.
     pub install: u32,
+}
+
+impl LocalRuns {
+    /// The runs of each tool, in the order of
+    /// [`crate::savings::ToolSeconds::TOOLS`].
+    #[must_use]
+    pub fn by_tool(&self) -> [u32; 5] {
+        [self.typecheck, self.lint, self.test, self.build, self.install]
+    }
 }
 
 impl Default for LocalRuns {

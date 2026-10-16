@@ -115,6 +115,7 @@ impl ToolSeconds {
 
 /// Where a finding costs time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Scope {
     /// On developers' machines and in CI.
     Everywhere,
@@ -153,12 +154,11 @@ impl Estimate {
     /// `per_run` seconds, `scope`, over a week of `team`.
     #[must_use]
     pub fn new(per_run: ToolSeconds, scope: Scope, team: &SavingsSettings) -> Self {
-        let local = &team.local_runs_per_day;
-        let runs = [local.typecheck, local.lint, local.test, local.build, local.install];
-        let days = f64::from(team.work_days_per_week);
+        let runs = team.local_runs_per_day.by_tool();
+        let days = f64::from(team.work_days_per_week.get());
         let developer_seconds: f64 =
             per_run.by_tool().iter().zip(runs).map(|(s, n)| s * f64::from(n)).sum::<f64>()
-                * f64::from(team.developers)
+                * f64::from(team.developers.get())
                 * days;
         let ci_seconds = match scope {
             Scope::Everywhere => per_run.total() * f64::from(team.ci_runs_per_day) * days,
@@ -167,7 +167,7 @@ impl Estimate {
         let developer_hours = developer_seconds / 3600.0;
         let ci_hours = ci_seconds / 3600.0;
         let weighted_hours =
-            developer_hours + ci_hours / f64::from(team.ci_hours_per_developer_hour.max(1));
+            developer_hours + ci_hours / f64::from(team.ci_hours_per_developer_hour.get());
         Self { per_run, scope, developer_hours, ci_hours, weighted_hours }
     }
 }
@@ -208,7 +208,7 @@ impl Health {
 #[non_exhaustive]
 pub struct RuleSavings {
     pub rule: &'static str,
-    /// Findings with an estimate above zero.
+    /// Findings that cost some time each run.
     pub findings: usize,
     pub developer_hours: f64,
     pub ci_hours: f64,
@@ -261,8 +261,26 @@ impl Savings {
             })
             .collect();
         for (r, rule_estimates) in result.rules.iter().zip(&mut estimates) {
-            if r.rule == "depth" {
-                keep_deepest_per_file(&r.result.findings, rule_estimates);
+            let findings = &r.result.findings;
+            match r.rule {
+                // A bundler transforms a module once however many entries
+                // reach it, and an entry's deep imports share one chain:
+                // the largest of each package stands for the rest.
+                "bloat" | "depth" => keep_largest_per(findings, rule_estimates, |f| {
+                    f.package.clone().unwrap_or_default()
+                }),
+                // tsc reads a package's declarations once a program, and
+                // installs a package once, however many import or list it.
+                "type-bloat" | "heavy-dependencies" => {
+                    keep_largest_per(findings, rule_estimates, |f| key_of(f).to_string());
+                }
+                // Each kind is priced on the whole project's lint time, so
+                // several configs with it share one estimate.
+                "lint-config" => keep_largest_per(findings, rule_estimates, |f| match &f.kind {
+                    FindingKind::Issue(issue) => issue.code.clone(),
+                    _ => String::new(),
+                }),
+                _ => {}
             }
         }
 
@@ -272,13 +290,20 @@ impl Savings {
             .flat_map(|(r, es)| {
                 es.iter()
                     .enumerate()
-                    .filter(|(_, e)| e.is_some_and(|e| e.weighted_hours > 0.0))
+                    .filter(|(_, e)| e.is_some_and(|e| e.per_run.total() > 0.0))
                     .map(move |(f, _)| (r, f))
             })
             .collect();
-        let weight = |&(r, f): &(usize, usize)| estimates[r][f].map_or(0.0, |e| e.weighted_hours);
-        // Ties keep the result's order, which is already deterministic.
-        ranked.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+        let weight = |&(r, f): &(usize, usize)| {
+            estimates[r][f].map_or((0.0, 0.0), |e| (e.weighted_hours, e.per_run.total()))
+        };
+        // Seconds a run break ties, such as when the team settings make
+        // every week's hours zero. Other ties keep the result's order,
+        // which is already deterministic.
+        ranked.sort_by(|a, b| {
+            let (a, b) = (weight(a), weight(b));
+            b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1))
+        });
 
         let mut total_seconds = ToolSeconds::default();
         let mut by_rule: Vec<RuleSavings> = Vec::new();
@@ -291,7 +316,7 @@ impl Savings {
                 ci_hours: 0.0,
                 weighted_hours: 0.0,
             };
-            for e in es.iter().flatten().filter(|e| e.weighted_hours > 0.0) {
+            for e in es.iter().flatten().filter(|e| e.per_run.total() > 0.0) {
                 rule.findings += 1;
                 rule.developer_hours += e.developer_hours;
                 rule.ci_hours += e.ci_hours;
@@ -311,7 +336,7 @@ impl Savings {
         }
         by_rule.sort_by(|a, b| b.weighted_hours.total_cmp(&a.weighted_hours));
         let weighted_hours =
-            developer_hours + ci_hours / f64::from(team.ci_hours_per_developer_hour.max(1));
+            developer_hours + ci_hours / f64::from(team.ci_hours_per_developer_hour.get());
         let total = Estimate {
             per_run: total_seconds,
             scope: Scope::Everywhere,
@@ -337,20 +362,36 @@ impl Savings {
     }
 }
 
-/// Imports of one file that are too deep share most of their chain, so
-/// only the deepest counts.
-fn keep_deepest_per_file(findings: &[Finding], estimates: &mut [Option<Estimate>]) {
-    let mut deepest: HashMap<&std::path::Path, usize> = HashMap::new();
+/// Keeps the estimate of the finding with the largest value among those
+/// with the same `key`, and counts the others with it.
+fn keep_largest_per(
+    findings: &[Finding],
+    estimates: &mut [Option<Estimate>],
+    key: impl Fn(&Finding) -> String,
+) {
+    let mut largest: HashMap<String, usize> = HashMap::new();
     for (i, f) in findings.iter().enumerate() {
-        let best = deepest.entry(&f.file).or_insert(i);
+        if estimates[i].is_none() {
+            continue;
+        }
+        let best = largest.entry(key(f)).or_insert(i);
         if f.value > findings[*best].value {
             *best = i;
         }
     }
     for (i, f) in findings.iter().enumerate() {
-        if deepest.get(f.file.as_path()) != Some(&i) {
+        if estimates[i].is_some() && largest.get(&key(f)) != Some(&i) {
             estimates[i] = None;
         }
+    }
+}
+
+/// What `f` is about: the package, the import or the issue's key.
+fn key_of(f: &Finding) -> &str {
+    match &f.kind {
+        FindingKind::HeavyDependency(d) => &d.name,
+        FindingKind::Issue(issue) => &issue.key,
+        _ => "",
     }
 }
 
@@ -555,9 +596,7 @@ fn model(rule: &str, f: &Finding, scale: ProjectScale) -> Option<(ToolSeconds, S
         "complex-types" => everywhere(ToolSeconds::typecheck(value * TSC_PER_TYPE)),
         // A span inside another is part of its time.
         "hot-spots" => {
-            if issue
-                .is_some_and(|i| i.related.first().is_some_and(crate::report::Related::is_inside))
-            {
+            if issue.is_some_and(|i| i.related.iter().any(|r| r.inside)) {
                 return None;
             }
             everywhere(ToolSeconds::typecheck(value / 1000.0 * HOT_SPOT_RECOVERED))
@@ -707,6 +746,24 @@ mod tests {
         assert!(savings.estimate(2, 0).is_none());
         let span = savings.estimate(2, 1).unwrap();
         assert!((span.per_run.typecheck - 0.8).abs() < 1e-9, "{span:?}");
+    }
+
+    #[test]
+    fn findings_about_one_thing_share_an_estimate() {
+        // Five files importing one declaration tree, and three lint configs
+        // with the same kind of issue, each priced on the whole project.
+        let mut bloat = Vec::new();
+        for file in ["/p/a.ts", "/p/b.ts", "/p/c.ts", "/p/d.ts", "/p/e.ts"] {
+            bloat.push(issue(file, "heavy-types", "big", 300_000));
+        }
+        let lint = vec![
+            issue("/p/.oxlintrc.json", "type-aware-unused", "typeAware", 1),
+            issue("/p/a/.oxlintrc.json", "type-aware-unused", "typeAware", 1),
+            issue("/p/b/.oxlintrc.json", "slow-rule", "import/no-cycle", 1),
+        ];
+        let savings = Savings::of(&result(vec![("type-bloat", bloat), ("lint-config", lint)]));
+        let priced = |r: usize| savings.estimates[r].iter().filter(|e| e.is_some()).count();
+        assert_eq!((priced(0), priced(1)), (1, 2));
     }
 
     #[test]

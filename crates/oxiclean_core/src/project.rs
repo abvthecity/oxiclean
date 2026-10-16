@@ -107,6 +107,8 @@ impl Project {
         let walker = WalkBuilder::new(&root)
             .hidden(false)
             .git_ignore(true)
+            // As the collector: .gitignore holds outside a git repository too.
+            .require_git(false)
             .filter_entry(|e| e.file_name() != "node_modules" && e.file_name() != ".git")
             .build();
         for entry in walker.filter_map(|e| e.ok()) {

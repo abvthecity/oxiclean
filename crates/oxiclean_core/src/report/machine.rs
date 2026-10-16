@@ -412,9 +412,10 @@ pub fn write_sarif<W: Write>(
     writeln!(writer)
 }
 
-/// Rounds `hours` to a hundredth, so reports don't print float noise.
+/// Rounds `hours` to a ten-thousandth (a third of a second), so reports
+/// don't print float noise but small estimates still rank.
 fn hours(hours: f64) -> f64 {
-    (hours * 100.0).round() / 100.0
+    (hours * 10_000.0).round() / 10_000.0
 }
 
 /// Rounds `seconds` to a millisecond.

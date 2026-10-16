@@ -101,6 +101,16 @@ struct HealthConfig {
     common: oxiclean_core::CommonArgs,
 }
 
+/// A rule named `rule` that couldn't run because of `e`.
+fn failed(
+    result: &CommandResult,
+    rule: &'static str,
+    style: oxiclean_core::report::ReportStyle,
+    e: &oxiclean_core::Error,
+) -> RuleResult {
+    RuleResult::failed(rule, style, result.root.clone(), oxiclean_core::command::describe(e))
+}
+
 impl HealthConfig {
     /// Runs every command, each on the same root and config file, and joins
     /// what their rules found.
@@ -164,18 +174,25 @@ impl HealthConfig {
                 // A command whose rules all need a module graph can't run
                 // without entry files; the other commands still can.
                 Err(e @ oxiclean_core::Error::NoEntries(_)) => {
-                    let failed =
-                        RuleResult::failed(command, style, result.root.clone(), e.to_string());
-                    result.rules.push(failed);
+                    result.rules.push(failed(&result, command, style, &e));
                 }
                 Err(e) => return Err(e),
             }
         }
-        // A trace is something a person records; without one there is
-        // nothing to read, rather than a rule that failed.
+        // A trace is something a person records, so only a configured one
+        // is read, and one that isn't there yet fails only its rules.
         if workspace.config.trace.dir.is_some() {
             let trace = oxiclean_trace::Config { dir: None, common: common() };
-            result.extend(oxiclean_trace::run_trace_command(&trace)?);
+            match oxiclean_trace::run_trace_command(&trace) {
+                Ok(found) => result.extend(found),
+                Err(
+                    e @ (oxiclean_core::Error::Trace { .. } | oxiclean_core::Error::NoTraceDir),
+                ) => {
+                    let style = oxiclean_trace::HOT_SPOTS_STYLE;
+                    result.rules.push(failed(&result, "trace", style, &e));
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(result)
     }
@@ -240,6 +257,10 @@ fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
+    // A score shouldn't rewrite the project; each command fixes its own.
+    if cli.fix && matches!(cli.command, Commands::Health(_)) {
+        anyhow::bail!("`health` only reports; run --fix with the command whose findings to fix");
+    }
     let start = Instant::now();
     let command = cli.command.name();
     let mut result = cli.command.run()?;
