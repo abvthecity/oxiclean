@@ -954,7 +954,9 @@ mod tests {
     #[test]
     fn passive_imports_and_declaration_files() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        // Declarations are found by their real path, and macOS's temporary
+        // directory is behind a symlink (/var -> /private/var).
+        let root = &dir.path().canonicalize().unwrap();
         for f in ["main.ts", "lib.js", "lib.d.ts", "types.ts", "decl.d.ts", "lazy.ts"] {
             std::fs::write(root.join(f), "").unwrap();
         }
