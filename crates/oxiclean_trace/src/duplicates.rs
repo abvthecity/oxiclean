@@ -25,7 +25,7 @@ use serde_json::Value;
 use tracing::{debug, info};
 
 use crate::{
-    config::{DUPLICATE_PACKAGES_DEFAULT_THRESHOLD, DUPLICATE_PACKAGES_RULE, HOT_SPOTS_RULE},
+    config::{DUPLICATE_PACKAGES_DEFAULT_THRESHOLD, DUPLICATE_PACKAGES_RULE},
     trace::Trace,
 };
 
@@ -74,12 +74,7 @@ pub(crate) fn run_on(workspace: &Workspace, trace: &Trace) -> Result<CheckResult
         })
         .collect();
     info!(findings = findings.len(), "{DUPLICATE_PACKAGES_RULE} check complete");
-    let mut result = workspace.finish(&policy, findings, trace.checked_files());
-    // `hot-spots` says which traces were skipped, when it runs.
-    if !workspace.enabled(HOT_SPOTS_RULE) {
-        result.notes.extend(trace.notes.iter().cloned());
-    }
-    Ok(result)
+    Ok(workspace.finish(&policy, findings, trace.checked_files()))
 }
 
 /// One directory a package was loaded from.

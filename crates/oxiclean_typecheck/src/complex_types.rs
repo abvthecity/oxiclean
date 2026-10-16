@@ -387,7 +387,9 @@ pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<Check
 /// Every candidate finding of the programs of `configs` at `threshold`,
 /// each with the 1-based line where what it is about ends, and how many
 /// files were read. With `only`, just the findings in those files, read
-/// with the files they lead to rather than every program's.
+/// with the files they lead to rather than every program's. Those files
+/// are checked even when no program the root's tsconfigs name has them:
+/// they come from a trace, so `tsc` compiled them.
 fn check_all(
     workspace: &Workspace,
     configs: &TsConfigs,
@@ -403,10 +405,10 @@ fn check_all(
         .collect();
     let cache = ResolveCache::new();
     let files = match only {
-        None => read_files(project, &cache, roots, None),
+        None => read_files(project, &cache, roots, false),
         Some(only) => {
             let seeds = only.iter().filter(|f| is_typed(f) && !in_node_modules(f)).cloned();
-            read_files(project, &cache, seeds.collect(), Some(&roots))
+            read_files(project, &cache, seeds.collect(), true)
         }
     };
     let types = Types::new(project, &cache, &files, threshold as u64);
@@ -472,6 +474,7 @@ pub fn flagged_types_in(
     workspace: &Workspace,
     files: &BTreeSet<PathBuf>,
 ) -> Result<Option<Vec<FlaggedType>>> {
+    debug_assert!(files.iter().all(|f| f.is_absolute()), "{files:?}");
     flagged(workspace, Some(files))
 }
 
@@ -515,14 +518,14 @@ fn flagged(
 }
 
 /// Reads `roots` and the local files they import, in parallel. With
-/// `programs`, the root files of every program, imports by package name
-/// are followed too when they lead to one of those: reading every program
-/// reads them anyway, so a few files see what the whole project does.
+/// `packages`, imports by package name are followed too when they lead
+/// to a file outside `node_modules`, such as a workspace package: reading
+/// every program can reach them, so a few files see what it would.
 fn read_files(
     project: &Project,
     cache: &ResolveCache,
     roots: BTreeSet<PathBuf>,
-    programs: Option<&BTreeSet<PathBuf>>,
+    packages: bool,
 ) -> HashMap<PathBuf, FileTypes> {
     crawl(roots, |f| {
         let types = read_types(f)?;
@@ -533,12 +536,10 @@ fn read_files(
             .map(|(m, _)| m)
             .chain(&types.star_reexports)
             .filter_map(|m| {
-                let relative = is_relative(m);
-                if !relative && programs.is_none() {
+                if !packages && !is_relative(m) {
                     return None;
                 }
-                let target = resolve(project, f, m, cache).ok().flatten()?;
-                (relative || programs.is_some_and(|p| p.contains(&target))).then_some(target)
+                resolve(project, f, m, cache).ok().flatten()
             })
             .filter(|l| is_typed(l) && !in_node_modules(l))
             .collect();
@@ -2264,7 +2265,7 @@ mod tests {
         }
         let project = Project::new(&root);
         let cache = ResolveCache::new();
-        let read = read_files(&project, &cache, roots, None);
+        let read = read_files(&project, &cache, roots, false);
         let types = Types::new(&project, &cache, &read, COMPLEX_TYPES_DEFAULT_THRESHOLD as u64);
         f(&types, &root.join(files[0].0))
     }
@@ -2333,6 +2334,29 @@ mod tests {
                 op => panic!("{op:?}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_few_files_see_workspace_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for (name, src) in [
+            ("package.json", r#"{"workspaces":["shared"]}"#),
+            ("shared/package.json", r#"{"name":"shared","exports":{"./range":"./range.ts"}}"#),
+            ("shared/range.ts", RANGE),
+            ("src/a.ts", "import type {Range} from 'shared/range';\nexport type P = Range<200>;\n"),
+        ] {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, src).unwrap();
+        }
+        let project = Project::load(&root);
+        let cache = ResolveCache::new();
+        let a = root.join("src/a.ts");
+        let read = read_files(&project, &cache, [a.clone()].into(), true);
+        assert!(read.contains_key(&root.join("shared/range.ts")), "{:?}", read.keys());
+        let types = Types::new(&project, &cache, &read, COMPLEX_TYPES_DEFAULT_THRESHOLD as u64);
+        assert_eq!(types.check_file(&a, &read[&a]).len(), 1);
     }
 
     #[test]

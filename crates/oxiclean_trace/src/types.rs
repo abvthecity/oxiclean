@@ -27,13 +27,13 @@ pub(crate) struct TypesFile {
 }
 
 impl TypesFile {
-    /// Reads the records of `ids` from `path`; an unreadable or malformed file keeps what was read before
-    /// the problem, with a warning.
+    /// Reads the records of `ids` from `path`; an unreadable or malformed
+    /// file keeps what was read before the problem, with a warning.
     ///
-    /// `tsc` writes one record per line, so lines are counted and only
-    /// the ones asked for are parsed, up to the last of them. A file laid
-    /// out otherwise, or whose
-    /// records don't carry the ids of their lines, is read again as JSON.
+    /// `tsc` writes one record per line, so lines are counted and only the
+    /// ones asked for are parsed, up to the last of them. A file laid out
+    /// otherwise, or whose records don't carry the ids of their lines, is
+    /// read again as JSON.
     pub(crate) fn read(path: &Path, ids: &HashSet<u64>) -> Self {
         let Some(last) = ids.iter().copied().max() else { return Self::default() };
         let file = match File::open(path) {
@@ -43,12 +43,12 @@ impl TypesFile {
                 return Self::default();
             }
         };
-        match read_lines(BufReader::with_capacity(1 << 20, file), ids, last) {
+        match read_lines(BufReader::with_capacity(1 << 20, file), ids, last, path) {
             Ok(Some(out)) => return out,
             Ok(None) => debug!("{} isn't one type per line; reading it as JSON", path.display()),
+            // The JSON reader keeps what comes before the error, and warns.
             Err(e) => {
-                warn!("Can't read {}: {e}", path.display());
-                return Self::default();
+                debug!("Reading {} line by line failed: {e}; reading it as JSON", path.display())
             }
         }
         let file = match File::open(path) {
@@ -91,6 +91,7 @@ fn read_lines(
     mut reader: impl BufRead,
     ids: &HashSet<u64>,
     last: u64,
+    path: &Path,
 ) -> std::io::Result<Option<TypesFile>> {
     let mut out = TypesFile::default();
     let mut lines = Lines { started: false, done: false };
@@ -131,7 +132,7 @@ fn read_lines(
         return Ok(None);
     }
     if !lines.done {
-        warn!("A types file is cut short; using its first {} types", out.count);
+        warn!("{} is cut short; using its first {} types", path.display(), out.count);
     }
     Ok(Some(out))
 }

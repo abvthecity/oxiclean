@@ -33,10 +33,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use oxiclean_core::CommonArgs;
+use oxiclean_core::{CommonArgs, FindingKind, Workspace};
 use serde_json::Value;
-
-use oxiclean_core::{FindingKind, Workspace};
 
 use super::{js, unmangle};
 use crate::{
@@ -276,10 +274,11 @@ fn hot_spots_match_analyze_trace() {
     let mut compared_types = 0;
     for name in FIXTURES {
         let (_, trace, golden) = load(name);
-        crate::analyze::visit(
-            &trace.projects.iter().flat_map(|p| p.frames.clone()).collect::<Vec<_>>(),
-            &mut |f| compared_types += f.types.iter().flatten().count(),
-        );
+        for p in &trace.projects {
+            crate::analyze::visit(&p.frames, &mut |f| {
+                compared_types += f.types.iter().flatten().count();
+            });
+        }
         let results = golden["results"].as_array().unwrap();
         assert_eq!(results.len(), trace.projects.len(), "{name}");
         let (mut problems, mut allowed) = (Vec::new(), Vec::new());
@@ -340,16 +339,18 @@ fn reported_findings_match_analyze_trace() {
                 result["highlights"]["duplicatePackages"].as_array().into_iter().flatten()
             {
                 let package_name = package["name"].as_str().unwrap();
-                let finding = dups
+                let issue = dups
                     .findings
                     .iter()
-                    .find(|f| matches!(&f.kind, FindingKind::Issue(i) if i.key == package_name));
-                let Some(finding) = finding else {
-                    panic!(
-                        "{name}: analyze-trace finds {package_name} loaded twice, oxiclean doesn't"
-                    )
-                };
-                let FindingKind::Issue(issue) = &finding.kind else { unreachable!() };
+                    .find_map(|f| match &f.kind {
+                        FindingKind::Issue(i) if i.key == package_name => Some(i),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{name}: analyze-trace finds {package_name} loaded twice, oxiclean doesn't"
+                        )
+                    });
                 for instance in package["instances"].as_array().into_iter().flatten() {
                     if let Some(version) = instance["version"].as_str() {
                         assert!(

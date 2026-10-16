@@ -55,7 +55,7 @@ pub(crate) fn run_on(workspace: &Workspace, trace: &Trace) -> Result<CheckResult
     // come parents first.
     let mut kept: Vec<bool> = Vec::with_capacity(findings.len());
     let mut dropped = Dropped::default();
-    let result = workspace.finish_with(&policy, findings, trace.checked_files(), |f, rule| {
+    let mut result = workspace.finish_with(&policy, findings, trace.checked_files(), |f, rule| {
         let m = meta.next().unwrap_or_default();
         let parent_kept = m.parent.is_none_or(|p| kept.get(p).copied().unwrap_or(false));
         let long_enough = f.value >= rule.threshold || (m.by_share && parent_kept);
@@ -70,8 +70,6 @@ pub(crate) fn run_on(workspace: &Workspace, trace: &Trace) -> Result<CheckResult
         kept.push(keep);
         keep.then(|| m.confirmed.map_or(rule.severity, |s| s.max(rule.severity)))
     });
-    let mut result = result;
-    result.notes.extend(trace.notes.iter().cloned());
     if result.findings.is_empty()
         && let Some(note) = dropped.explain(trace, left_out)
     {
@@ -87,7 +85,7 @@ pub(crate) fn run_on(workspace: &Workspace, trace: &Trace) -> Result<CheckResult
 struct Dropped {
     /// In files the rule is off for.
     off: usize,
-    /// In files the config file's `ignore` matches.
+    /// In files the config file's `ignorePatterns` match.
     ignored: usize,
     /// Below their file's threshold.
     short: usize,
@@ -123,6 +121,9 @@ impl Dropped {
         }
         if self.short > 0 {
             why.push(format!("{} are below their files' threshold", self.short));
+        }
+        if why.is_empty() {
+            return None;
         }
         Some(format!("The trace has {frames} hot spots, but none is reported: {}.", why.join("; ")))
     }

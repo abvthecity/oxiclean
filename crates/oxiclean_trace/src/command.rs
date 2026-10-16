@@ -42,7 +42,12 @@ pub fn run_trace_command(cfg: &Config) -> Result<CommandResult> {
     run_command(&cfg.common, "trace", &RULES, |workspace, rules| {
         let dir = trace_dir(cfg, &workspace)?;
         let trace = Trace::load(&workspace, &dir, rules.contains(HOT_SPOTS_RULE))?;
-        Ok(rules.run(|run| run(&workspace, &trace)))
+        let mut result = rules.run(|run| run(&workspace, &trace));
+        // Once, on the first rule that ran.
+        if let Some(first) = result.rules.iter_mut().find(|r| r.error.is_none()) {
+            first.result.notes.extend(trace.notes.iter().cloned());
+        }
+        Ok(result)
     })
 }
 
@@ -55,7 +60,7 @@ pub fn run_trace_command(cfg: &Config) -> Result<CommandResult> {
 pub fn run_hot_spots_check(cfg: &Config) -> Result<CheckResult> {
     let workspace = cfg.common.workspace()?;
     let trace = Trace::load(&workspace, &trace_dir(cfg, &workspace)?, true)?;
-    hot_spots::run_on(&workspace, &trace)
+    with_notes(hot_spots::run_on(&workspace, &trace), &trace)
 }
 
 /// Runs `duplicate-packages` alone, on the trace in `cfg.dir` or in
@@ -66,7 +71,15 @@ pub fn run_hot_spots_check(cfg: &Config) -> Result<CheckResult> {
 pub fn run_duplicate_packages_check(cfg: &Config) -> Result<CheckResult> {
     let workspace = cfg.common.workspace()?;
     let trace = Trace::load(&workspace, &trace_dir(cfg, &workspace)?, false)?;
-    duplicates::run_on(&workspace, &trace)
+    with_notes(duplicates::run_on(&workspace, &trace), &trace)
+}
+
+/// `result` with what loading `trace` skipped.
+fn with_notes(result: Result<CheckResult>, trace: &Trace) -> Result<CheckResult> {
+    result.map(|mut r| {
+        r.notes.extend(trace.notes.iter().cloned());
+        r
+    })
 }
 
 /// The trace directory: the one given, else `trace.dir` under the root.
