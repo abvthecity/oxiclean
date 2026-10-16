@@ -214,7 +214,7 @@ mod tests {
     fn runs(script: &str) -> Vec<(String, TscRun)> {
         runs_in(script, Path::new("/p"))
             .into_iter()
-            .map(|(p, r)| (p.to_string_lossy().into_owned(), r))
+            .map(|(p, r)| (p.to_string_lossy().replace('\\', "/"), r))
             .collect()
     }
 
