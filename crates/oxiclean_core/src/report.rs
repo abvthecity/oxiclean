@@ -13,8 +13,12 @@ mod machine;
 pub use machine::{OutputFormat, ReportMeta, message, write_json, write_sarif};
 
 use crate::{
-    exports::ExportKind, fix::Fix, graph::ParseFailure, resolver::ResolutionStats,
-    settings::Severity,
+    exports::ExportKind,
+    fix::Fix,
+    graph::ParseFailure,
+    resolver::ResolutionStats,
+    savings::{ProjectScale, Savings, format_hours},
+    settings::{SavingsSettings, Severity},
 };
 
 /// What a finding points at.
@@ -135,7 +139,23 @@ impl Related {
     pub fn new(file: PathBuf, line: u32, message: impl Into<String>) -> Self {
         Self { file, line, message: message.into() }
     }
+
+    /// The finding this one is part of, at `line` of `file`, such as a span
+    /// of a trace inside a longer one, whose time includes it.
+    #[must_use]
+    pub fn inside(file: PathBuf, line: u32, description: &str) -> Self {
+        Self::new(file, line, format!("{INSIDE}{description}"))
+    }
+
+    /// Whether this names the finding the issue is part of.
+    #[must_use]
+    pub fn is_inside(&self) -> bool {
+        self.message.starts_with(INSIDE)
+    }
 }
+
+/// How [`Related::inside`] starts its message.
+const INSIDE: &str = "inside ";
 
 /// The versions of a package a lockfile installs, for
 /// [`FindingKind::DuplicateVersions`].
@@ -442,13 +462,40 @@ pub struct CommandResult {
     pub root: PathBuf,
     /// One entry per rule that is on, in the command's order.
     pub rules: Vec<RuleResult>,
+    /// How the team works, from the config file, for estimating the time
+    /// findings cost.
+    pub team: SavingsSettings,
+    /// The project's size, for the same.
+    pub scale: ProjectScale,
 }
 
 impl CommandResult {
     /// A command on `root` that has run no rule yet.
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
-        Self { root, rules: Vec::new() }
+        Self { root, ..Self::default() }
+    }
+
+    /// A command on `workspace` that has run no rule yet, with the team
+    /// settings and project size the time estimates need.
+    #[must_use]
+    pub fn of_workspace(workspace: &crate::Workspace) -> Self {
+        let project = &workspace.project;
+        Self {
+            root: workspace.root.clone(),
+            rules: Vec::new(),
+            team: workspace.config.savings.clone(),
+            scale: ProjectScale::new(
+                project.source_file_count(),
+                project.workspace_package_count(),
+            ),
+        }
+    }
+
+    /// Adds the rules `other` ran, after this one's. Both must have run on
+    /// the same root.
+    pub fn extend(&mut self, other: CommandResult) {
+        self.rules.extend(other.rules);
     }
 
     /// Adds what `rule` found.
@@ -837,8 +884,142 @@ pub fn print_command<W: Write>(
             "{} The config file turns off every rule {command} runs.",
             "⚠".yellow().bold()
         )?;
+    } else {
+        writeln!(writer)?;
+        print_savings(writer, result, &Savings::of(result), COMMAND_TOP, ctx)?;
     }
     print_finished(writer, result, elapsed_ms, threads, ctx)
+}
+
+/// How many findings a command's report ranks by the time they cost.
+const COMMAND_TOP: usize = 5;
+/// How many the `health` report ranks.
+const HEALTH_TOP: usize = 15;
+
+/// Prints the health score, what the findings cost a week, and the `top`
+/// findings that cost the most.
+///
+/// # Errors
+/// Returns any error from writing to `writer`.
+pub fn print_savings<W: Write>(
+    writer: &mut W,
+    result: &CommandResult,
+    savings: &Savings,
+    top: usize,
+    ctx: ReportContext<'_>,
+) -> io::Result<()> {
+    let team = &savings.team;
+    let health = savings.health;
+    let score = format!("{}/100 ({})", health.score, health.grade);
+    let score = match health.grade {
+        'A' | 'B' => score.green().bold(),
+        'C' | 'D' => score.yellow().bold(),
+        _ => score.red().bold(),
+    };
+    writeln!(writer, "{} {score}", "Health:".bold())?;
+    if savings.is_empty() {
+        return writeln!(writer, "  Nothing found costs build, test or editor time.");
+    }
+    writeln!(
+        writer,
+        "  Fixing these findings saves about {} of developer time and {} of CI time a week, \
+         for {} developers and {} CI runs a day (`savings` in .oxicleanrc.json).",
+        format_hours(savings.total.developer_hours).cyan(),
+        format_hours(savings.total.ci_hours).cyan(),
+        team.developers,
+        team.ci_runs_per_day,
+    )?;
+    let shown = savings.ranked.len().min(top);
+    writeln!(writer, "  Biggest wins:")?;
+    for (rank, &(r, i)) in savings.ranked.iter().take(top).enumerate() {
+        let (rule, f) = (&result.rules[r], &result.rules[r].result.findings[i]);
+        let Some(e) = savings.estimate(r, i) else { continue };
+        let at = match f.line() {
+            0 => ctx.display(&f.file),
+            line => format!("{}:{line}", ctx.display(&f.file)),
+        };
+        writeln!(
+            writer,
+            "    {}. {} dev, {} CI a week  {}  {}",
+            rank + 1,
+            format_hours(e.developer_hours).cyan(),
+            format_hours(e.ci_hours).cyan(),
+            rule.rule.bold(),
+            at.blue(),
+        )?;
+        writeln!(writer, "       {}", shorten(&short_label(f, &rule.style), 100).dimmed())?;
+    }
+    if savings.ranked.len() > shown {
+        writeln!(
+            writer,
+            "    ... and {} more (--format json lists every estimate)",
+            savings.ranked.len() - shown
+        )?;
+    }
+    Ok(())
+}
+
+/// Prints the report of `oxiclean health`: the score, what each rule's
+/// findings cost, the findings that cost the most, and the rules that
+/// couldn't run.
+///
+/// # Errors
+/// Returns any error from writing to `writer`.
+pub fn print_health<W: Write>(
+    writer: &mut W,
+    result: &CommandResult,
+    elapsed_ms: u128,
+    threads: usize,
+    ctx: ReportContext<'_>,
+) -> io::Result<()> {
+    let savings = Savings::of(result);
+    print_savings(writer, result, &savings, HEALTH_TOP, ctx)?;
+    if !savings.by_rule.is_empty() {
+        writeln!(writer, "  By rule (a week):")?;
+        let width = savings.by_rule.iter().map(|r| r.rule.len()).max().unwrap_or(0);
+        for r in &savings.by_rule {
+            writeln!(
+                writer,
+                "    {:width$}  {:>4} dev  {:>4} CI  {}",
+                r.rule,
+                format_hours(r.developer_hours),
+                format_hours(r.ci_hours),
+                count(r.findings, "finding").dimmed(),
+            )?;
+        }
+        writeln!(
+            writer,
+            "  Run the command of a rule to see every finding, e.g. `oxiclean typecheck`."
+        )?;
+    }
+    let failed: Vec<&RuleResult> = result.failed().collect();
+    if !failed.is_empty() {
+        writeln!(writer)?;
+    }
+    for r in failed {
+        let error = r.error.as_deref().unwrap_or_default();
+        writeln!(writer, "{} {} couldn't run: {error}", "✗".red().bold(), r.rule)?;
+    }
+    print_finished(writer, result, elapsed_ms, threads, ctx)
+}
+
+/// One line saying what `f` is, for the ranking.
+fn short_label(f: &Finding, style: &ReportStyle) -> String {
+    match &f.kind {
+        FindingKind::Issue(issue) => issue.message.clone(),
+        FindingKind::WholeGraph => format!("entry pulls in {} modules", f.value),
+        // Only depth ranks imports: bloat counts an entry's whole graph.
+        FindingKind::Import { .. } => format!("{} ({})", label(f), (style.value_label)(f.value)),
+        _ => label(f),
+    }
+}
+
+/// `text` cut to `max` characters, with an ellipsis when cut.
+fn shorten(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
+    }
 }
 
 /// `n` and `noun`, plural unless `n` is 1.

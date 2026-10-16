@@ -85,6 +85,9 @@ pub struct Project {
     /// Parsed package.json files by directory, shared by every clone, so
     /// the rules of one command each read a manifest once between them.
     package_json_cache: Arc<DashMap<PathBuf, Option<Arc<serde_json::Value>>>>,
+    /// JS and TS source files under the root, declarations and ignored
+    /// files left out: the project's size, for estimating time saved.
+    source_files: usize,
 }
 
 impl Project {
@@ -113,6 +116,11 @@ impl Project {
                     if let Some(dir) = entry.path().parent() {
                         package_dirs.push(dir.to_path_buf());
                     }
+                }
+                Some(name)
+                    if is_source_file(name) && entry.file_type().is_some_and(|t| t.is_file()) =>
+                {
+                    project.source_files += 1;
                 }
                 _ => {}
             }
@@ -182,6 +190,13 @@ impl Project {
 
     pub fn workspace_package_count(&self) -> usize {
         self.workspace_packages.len()
+    }
+
+    /// Number of JS and TS source files under the root, `.d.ts`
+    /// declarations, `node_modules` and git-ignored files left out.
+    #[must_use]
+    pub fn source_file_count(&self) -> usize {
+        self.source_files
     }
 
     /// Workspace packages as (name, directory) pairs, sorted by name.
@@ -359,6 +374,12 @@ pub(crate) fn normalize(p: &Path) -> PathBuf {
     #[cfg(windows)]
     let s = s.replace('/', "\\");
     path_clean::clean(&*s)
+}
+
+/// Whether a file called `name` is JS or TS source: not a declaration.
+fn is_source_file(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false };
+    crate::constants::JS_TS_EXTENSIONS.contains(&ext) && !stem.ends_with(".d")
 }
 
 fn discover_workspace_packages(root: &Path, package_dirs: &[PathBuf]) -> HashMap<String, PathBuf> {

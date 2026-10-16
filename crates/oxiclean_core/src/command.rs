@@ -2,7 +2,7 @@
 //! file turns it off, with a rule that fails recorded on its result rather
 //! than ending the command.
 
-use std::{error::Error as _, path::PathBuf};
+use std::error::Error as _;
 
 use tracing::{info, warn};
 
@@ -42,18 +42,19 @@ pub fn run_command<'t, F>(
     let workspace = common.workspace()?;
     let rules: Vec<(usize, &CommandRule<F>)> =
         table.iter().enumerate().filter(|(_, (rule, ..))| workspace.enabled(rule)).collect();
+    let empty = CommandResult::of_workspace(&workspace);
     if rules.is_empty() {
         info!("Every {command} rule is off");
-        return Ok(CommandResult::new(workspace.root));
+        return Ok(empty);
     }
-    let root = workspace.root.clone();
-    run(workspace, Rules { root, rules })
+    run(workspace, Rules { empty, rules })
 }
 
 /// The rules of a command the config file turns on, ready to run.
 #[derive(Debug)]
 pub struct Rules<'t, F> {
-    root: PathBuf,
+    /// The result before any rule runs: the root, team and scale.
+    empty: CommandResult,
     /// Each rule with its place in the command's table.
     rules: Vec<(usize, &'t CommandRule<F>)>,
 }
@@ -97,14 +98,14 @@ impl<F> Rules<'_, F> {
                     Err(e) => {
                         let message = describe(&e);
                         warn!("{rule} couldn't run: {message}");
-                        RuleResult::failed(rule, *style, self.root.clone(), message)
+                        RuleResult::failed(rule, *style, self.empty.root.clone(), message)
                     }
                 };
                 (index, result)
             })
             .collect();
         ran.sort_by_key(|(index, _)| *index);
-        let mut out = CommandResult::new(self.root);
+        let mut out = self.empty;
         out.rules = ran.into_iter().map(|(_, r)| r).collect();
         out
     }
@@ -125,7 +126,7 @@ fn describe(e: &Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::PathBuf};
     use tempfile::TempDir;
 
     const STYLE: ReportStyle = ReportStyle {

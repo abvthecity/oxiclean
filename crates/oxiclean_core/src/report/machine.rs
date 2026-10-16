@@ -9,7 +9,10 @@ use std::{
 use serde_json::{Value, json};
 
 use super::{CommandResult, Finding, FindingKind, ReportStyle, RuleResult};
-use crate::settings::Severity;
+use crate::{
+    savings::{Estimate, Savings},
+    settings::Severity,
+};
 
 /// Output format of a report.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -109,11 +112,13 @@ pub fn write_json<W: Write>(
     result: &CommandResult,
 ) -> io::Result<()> {
     let root = &result.root;
+    let savings = Savings::of(result);
     let findings: Vec<Value> = result
         .rules
         .iter()
-        .flat_map(|r| r.result.findings.iter().map(move |f| (r, f)))
-        .map(|(RuleResult { rule, style, .. }, f)| {
+        .enumerate()
+        .flat_map(|(r, rule)| rule.result.findings.iter().enumerate().map(move |(i, f)| (r, i, rule, f)))
+        .map(|(r, i, RuleResult { rule, style, .. }, f)| {
             let mut v = json!({
                 "rule": rule,
                 "severity": f.severity,
@@ -122,6 +127,7 @@ pub fn write_json<W: Write>(
                 "value": f.value,
                 "threshold": f.threshold,
                 "message": message(style, f, root),
+                "savings": savings.estimate(r, i).map(estimate_json),
             });
             match &f.kind {
                 FindingKind::Import { request, resolved, line } => {
@@ -253,6 +259,7 @@ pub fn write_json<W: Write>(
                 "builtin": res.builtin,
             },
         },
+        "savings": savings_json(result, &savings),
         "findings": findings,
         "parse_failures": result.parse_failures().iter().map(|p| json!({
             "file": rel(&p.path, root),
@@ -275,12 +282,13 @@ pub fn write_sarif<W: Write>(
     result: &CommandResult,
 ) -> io::Result<()> {
     let root = &result.root;
+    let savings = Savings::of(result);
     let results: Vec<Value> = result
         .rules
         .iter()
         .enumerate()
-        .flat_map(|(i, r)| r.result.findings.iter().map(move |f| (i, r, f)))
-        .map(|(index, RuleResult { rule, style, .. }, f)| {
+        .flat_map(|(i, r)| r.result.findings.iter().enumerate().map(move |(n, f)| (i, n, r, f)))
+        .map(|(index, n, RuleResult { rule, style, .. }, f)| {
             let mut result = json!({
                 "ruleId": rule,
                 "ruleIndex": index,
@@ -295,6 +303,9 @@ pub fn write_sarif<W: Write>(
                 "partialFingerprints": { FINGERPRINT_KEY: fingerprint(rule, f, root) },
                 "properties": { "value": f.value, "threshold": f.threshold },
             });
+            if let Some(e) = savings.estimate(index, n) {
+                result["properties"]["savings"] = estimate_json(e);
+            }
             // The other places the finding involves, so code-scanning UIs
             // can link to each of them: the rest of a cycle's imports, or
             // the names that repeat an export.
@@ -392,12 +403,97 @@ pub fn write_sarif<W: Write>(
             // other's.
             "automationDetails": { "id": format!("oxiclean/{}/", meta.command) },
             "invocations": [invocation],
+            "properties": { "savings": savings_json(result, &savings) },
             "originalUriBaseIds": { "%SRCROOT%": { "uri": root_uri } },
             "results": results,
         }],
     });
     serde_json::to_writer_pretty(&mut *writer, &doc)?;
     writeln!(writer)
+}
+
+/// Rounds `hours` to a hundredth, so reports don't print float noise.
+fn hours(hours: f64) -> f64 {
+    (hours * 100.0).round() / 100.0
+}
+
+/// Rounds `seconds` to a millisecond.
+fn seconds(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
+}
+
+/// What fixing a finding saves, as JSON.
+fn estimate_json(e: &Estimate) -> Value {
+    let per_run: serde_json::Map<String, Value> = crate::savings::ToolSeconds::TOOLS
+        .iter()
+        .zip(e.per_run.by_tool())
+        .filter(|(_, s)| *s > 0.0)
+        .map(|(tool, s)| ((*tool).to_string(), json!(seconds(s))))
+        .collect();
+    json!({
+        "seconds_per_run": per_run,
+        "scope": e.scope.as_str(),
+        "developer_hours_per_week": hours(e.developer_hours),
+        "ci_hours_per_week": hours(e.ci_hours),
+        "weighted_hours_per_week": hours(e.weighted_hours),
+    })
+}
+
+/// The health score, the totals, each rule's share and the team settings
+/// they were computed with, as JSON.
+fn savings_json(result: &CommandResult, savings: &Savings) -> Value {
+    let root = &result.root;
+    let team = &savings.team;
+    let local = &team.local_runs_per_day;
+    let top: Vec<Value> = savings
+        .ranked
+        .iter()
+        .take(10)
+        .map(|&(r, i)| {
+            let (rule, f) = (&result.rules[r], &result.rules[r].result.findings[i]);
+            json!({
+                "rule": rule.rule,
+                "file": rel(&f.file, root),
+                "line": f.line(),
+                "message": message(&rule.style, f, root),
+                "savings": savings.estimate(r, i).map(estimate_json),
+            })
+        })
+        .collect();
+    json!({
+        "health": { "score": savings.health.score, "grade": savings.health.grade.to_string() },
+        "developer_hours_per_week": hours(savings.total.developer_hours),
+        "ci_hours_per_week": hours(savings.total.ci_hours),
+        "weighted_hours_per_week": hours(savings.total.weighted_hours),
+        "baseline": {
+            "developer_hours_per_week": hours(savings.baseline.developer_hours),
+            "ci_hours_per_week": hours(savings.baseline.ci_hours),
+            "weighted_hours_per_week": hours(savings.baseline.weighted_hours),
+        },
+        "by_rule": savings.by_rule.iter().map(|r| json!({
+            "rule": r.rule,
+            "findings": r.findings,
+            "developer_hours_per_week": hours(r.developer_hours),
+            "ci_hours_per_week": hours(r.ci_hours),
+            "weighted_hours_per_week": hours(r.weighted_hours),
+        })).collect::<Vec<_>>(),
+        "top": top,
+        "assumptions": {
+            "source_files": savings.scale.source_files,
+            "packages": savings.scale.packages,
+            "developers": team.developers,
+            "work_days_per_week": team.work_days_per_week,
+            "ci_runs_per_day": team.ci_runs_per_day,
+            "ci_hours_per_developer_hour": team.ci_hours_per_developer_hour,
+            "local_runs_per_day": {
+                "typecheck": local.typecheck,
+                "lint": local.lint,
+                "test": local.test,
+                "build": local.build,
+                "install": local.install,
+            },
+        },
+    })
 }
 
 /// Key of the fingerprint in `partialFingerprints`. Bump the version when

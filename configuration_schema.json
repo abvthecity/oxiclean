@@ -64,6 +64,10 @@
     "trace": {
       "description": "Settings for the `trace` command, which reads the output of\n`tsc --generateTrace`.",
       "$ref": "#/$defs/TraceSettings"
+    },
+    "savings": {
+      "description": "How the team works, for estimating the time each finding costs a\nweek. See \"Time saved and health score\" in the README.",
+      "$ref": "#/$defs/SavingsSettings"
     }
   },
   "additionalProperties": false,
@@ -623,6 +627,87 @@
             "null"
           ],
           "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "SavingsSettings": {
+      "description": "How often the team runs its tools, which turns the seconds a finding\ncosts each run into hours a week. The defaults describe a team of 10.",
+      "type": "object",
+      "properties": {
+        "developers": {
+          "description": "Developers working in the repository.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        },
+        "workDaysPerWeek": {
+          "description": "Working days a week.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 5
+        },
+        "ciRunsPerDay": {
+          "description": "CI pipeline runs a working day, across the team. Each run type-checks,\nlints, tests, builds and installs once.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 30
+        },
+        "ciHoursPerDeveloperHour": {
+          "description": "How many hours of CI time weigh as much as one hour a developer\nspends waiting, when findings are ranked and the health score is\ncomputed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 4
+        },
+        "localRunsPerDay": {
+          "description": "Full runs of each tool one developer starts a working day.",
+          "$ref": "#/$defs/LocalRuns"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LocalRuns": {
+      "description": "Full runs of each tool one developer starts a working day. A run of the\nwhole tool: `tsc` or the editor reloading its project, a lint of the\npackage, a test run, a dev server start or build, an install.",
+      "type": "object",
+      "properties": {
+        "typecheck": {
+          "description": "`tsc` runs and editor project loads.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        },
+        "lint": {
+          "description": "ESLint or oxlint runs.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 5
+        },
+        "test": {
+          "description": "Test runs.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 10
+        },
+        "build": {
+          "description": "Dev server starts and builds.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 5
+        },
+        "install": {
+          "description": "Package installs.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
         }
       },
       "additionalProperties": false

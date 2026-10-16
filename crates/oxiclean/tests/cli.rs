@@ -1058,3 +1058,137 @@ fn a_rule_that_fails_does_not_stop_its_command() {
     assert_eq!(code, 0, "{out}");
     assert!(!out.contains("couldn't run"), "{out}");
 }
+
+/// A small monorepo of `manager` (pnpm, npm, Bun or Deno): a root tsconfig
+/// that also checks both packages' files, an app that imports the ui
+/// package's source without a project reference, and an unused package.
+fn monorepo(manager: &str) -> TempDir {
+    let t = TempDir::new().unwrap();
+    let root = t.path();
+    let ui_manifest = r#"{ "name": "@acme/ui", "version": "1.0.0", "exports": "./src/index.ts" }"#;
+    let app_manifest = r#"{ "name": "@acme/app", "version": "1.0.0", "dependencies": { "@acme/ui": "workspace:*", "left-pad": "1.3.0" } }"#;
+    match manager {
+        "pnpm" => {
+            write(root, "package.json", r#"{ "name": "root", "private": true }"#);
+            write(root, "pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+            write(root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        }
+        "npm" | "bun" => {
+            let lockfile = if manager == "npm" { "package-lock.json" } else { "bun.lock" };
+            write(
+                root,
+                "package.json",
+                r#"{ "name": "root", "private": true, "workspaces": ["packages/*"] }"#,
+            );
+            write(root, lockfile, "{}");
+        }
+        "deno" => {
+            write(root, "deno.json", r#"{ "workspace": ["./packages/ui", "./packages/app"] }"#);
+        }
+        _ => unreachable!("{manager}"),
+    }
+    let (ui, app) = if manager == "deno" {
+        ("packages/ui/deno.json", "packages/app/deno.json")
+    } else {
+        ("packages/ui/package.json", "packages/app/package.json")
+    };
+    write(root, ui, ui_manifest);
+    write(root, app, app_manifest);
+    let tsconfig = r#"{ "compilerOptions": { "skipLibCheck": true, "noEmit": true, "strict": true }, "include": ["src"] }"#;
+    write(root, "packages/ui/tsconfig.json", tsconfig);
+    write(root, "packages/app/tsconfig.json", tsconfig);
+    write(root, "tsconfig.json", &tsconfig.replace(r#"["src"]"#, r#"["packages"]"#));
+    let mut index = String::new();
+    for i in 1..=8 {
+        write(
+            root,
+            &format!("packages/ui/src/part{i}.ts"),
+            &format!("export const part{i} = {i};"),
+        );
+        index.push_str(&format!("export {{ part{i} }} from './part{i}';\n"));
+    }
+    write(root, "packages/ui/src/index.ts", &index);
+    write(
+        root,
+        "packages/app/src/index.ts",
+        "import { part1 } from '@acme/ui';\nconsole.log(part1);\n",
+    );
+    t
+}
+
+/// `oxiclean health` runs every command and ranks what they found by the
+/// time fixing it saves, in monorepos of each package manager.
+#[test]
+fn health_ranks_findings_by_time_saved() {
+    for manager in ["pnpm", "npm", "bun", "deno"] {
+        let t = monorepo(manager);
+        let (code, out) = run(t.path(), &["health"]);
+        assert_eq!(code, 1, "{manager}: {out}");
+        assert!(out.contains("Health: "), "{manager}: {out}");
+        assert!(out.contains("Biggest wins:\n    1. "), "{manager}: {out}");
+        assert!(out.contains("By rule (a week):"), "{manager}: {out}");
+        // The graph commands ran too.
+        assert!(!out.contains("couldn't run"), "{manager}: {out}");
+        assert!(out.contains("bloat, barrels, depth, cycles, duplicates"), "{manager}: {out}");
+
+        let (_, json) = run_stdout(t.path(), &["health", "--format", "json"]);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let savings = &v["savings"];
+        let score = savings["health"]["score"].as_u64().unwrap();
+        assert!((1..100).contains(&score), "{manager}: {savings}");
+        // Checking eight files a second time costs more than an unused
+        // package costs to install.
+        let top: Vec<&str> = savings["top"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["rule"].as_str().unwrap())
+            .collect();
+        assert_eq!(top.first(), Some(&"overlap"), "{manager}: {savings}");
+        let by_rule: Vec<f64> = savings["by_rule"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["weighted_hours_per_week"].as_f64().unwrap())
+            .collect();
+        assert!(by_rule.windows(2).all(|w| w[0] >= w[1]), "{manager}: {savings}");
+        assert!(savings["assumptions"]["source_files"].as_u64().unwrap() >= 10, "{savings}");
+
+        // The dependencies rule reads package.json files, which this Deno
+        // workspace doesn't have.
+        if manager == "deno" {
+            continue;
+        }
+        let unused = v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["rule"] == "dependencies")
+            .unwrap_or_else(|| panic!("{manager}: {json}"));
+        assert_eq!(unused["savings"]["seconds_per_run"]["install"], 0.25, "{manager}: {unused}");
+    }
+}
+
+/// `savings` in the config file describes the team; twice the developers
+/// wait twice as long, and CI is unchanged.
+#[test]
+fn savings_settings_scale_the_hours() {
+    let t = monorepo("pnpm");
+    let hours = |root: &Path| {
+        let (_, json) = run_stdout(root, &["typecheck", "--format", "json"]);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let s = &v["savings"];
+        (s["developer_hours_per_week"].as_f64().unwrap(), s["ci_hours_per_week"].as_f64().unwrap())
+    };
+    let (dev, ci) = hours(t.path());
+    assert!(dev > 0.0 && ci > 0.0, "{dev} {ci}");
+    configure(t.path(), r#"{ "savings": { "developers": 20 } }"#);
+    let (dev2, ci2) = hours(t.path());
+    assert!((dev2 - 2.0 * dev).abs() <= 0.011, "{dev} {dev2}");
+    assert!((ci2 - ci).abs() <= 0.001, "{ci} {ci2}");
+
+    // Every command's text report ends with the score and its biggest wins.
+    let (_, out) = run(t.path(), &["typecheck"]);
+    assert!(out.contains("Health: "), "{out}");
+    assert!(out.contains("for 20 developers and 30 CI runs a day"), "{out}");
+}

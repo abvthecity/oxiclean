@@ -39,6 +39,10 @@ oxiclean lint --root ./my-project
 # Apply the fixes the findings offer
 oxiclean typecheck --fix --root ./my-project
 
+# Run every command, score the project's health and rank what they found by
+# the time fixing it saves developers and CI each week
+oxiclean health --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean unused --help
@@ -90,6 +94,7 @@ on or off. A rule that is `"off"` doesn't run at all, so turning off
 | `duplicates` | `duplicates` |
 | `trace [DIR]` | `hot-spots`, `duplicate-packages` |
 | `lint` | `lint-config` |
+| `health` | every rule above (the `trace` rules only when `trace.dir` is set) |
 
 Every rule is on by default with `error` severity, except
 `heavy-dependencies`, `hot-spots`, `duplicate-packages` and `lint-config`,
@@ -890,11 +895,139 @@ say `fixable with --fix` in the text report and carry a `fix` in JSON.
 Fixes to JSON files keep their comments and formatting, and fixes to
 JavaScript and TypeScript configs only insert text.
 
+## Time saved and health score
+
+Not every finding costs the same. A tsconfig that type-checks 2,000 files
+twice slows every `tsc` run, every editor reload and every CI pipeline; an
+unused export costs a fraction of a millisecond. So every finding comes with
+an estimate of the time fixing it saves, and every report ranks findings by
+it and turns the total into a health score:
+
+```
+Health: 72/100 (C)
+  Fixing these findings saves about 6.1h of developer time and 2.4h of CI time a week, for 10 developers and 30 CI runs a day (`savings` in .oxicleanrc.json).
+  Biggest wins:
+    1. 2.8h dev, 51m CI a week  overlap  tsconfig.eslint.json:3
+       type-checks files that packages/web/tsconfig.json also type-checks, so they are checked more than once
+    2. 1.4h dev, 25m CI a week  references  packages/ui/tsconfig.json
+       @acme/ui's source is type-checked again by each of 3 packages that import it
+    ...
+```
+
+Every command ends its text report with the score and its five biggest
+wins. `oxiclean health` runs every command, and prints the score, the 15
+biggest wins and what each rule's findings cost, without listing every
+finding; run a rule's command for those.
+
+### How the time is estimated
+
+Each finding is turned into the seconds it adds to one full run of each tool
+it slows: `tsc` (and the editor loading the project), the linter, the test
+runner, the dev server or bundler, and the package manager. Those seconds
+become hours a week from how often the team runs each tool:
+
+- **Developer time**: seconds per run × runs a developer starts each day ×
+  developers × working days. Developer time is waiting time.
+- **CI time**: seconds per run (all tools added up) × CI runs a day ×
+  working days. Findings that only cost time locally, such as a missing
+  `incremental`, cost no CI time.
+
+Findings are ranked by developer hours plus CI hours divided by
+`ciHoursPerDeveloperHour` (4 by default: CI compute is cheap, but people
+wait on part of it). The health score compares what the findings cost
+with what the same project's tools would take without them, estimated
+from its number of source files: `100 × baseline / (baseline + findings)`.
+A project whose findings cost as much time again as the project itself
+scores 50. Grades are A from 90, B from 80, C from 70, D from 60, F below.
+A command's score only counts the rules it ran; `oxiclean health` counts
+them all.
+
+The per-run costs are typical numbers, not measurements of your project,
+so treat the hours as a way to compare findings, not a forecast. Where a
+fix's effect is uncertain the estimate is conservative: a finding about how
+many modules an import reaches saves only what brings it back to its
+threshold. Several findings about the same thing count once: an entry's
+imports are part of its whole graph (`bloat`), an entry's deep imports
+share one chain (`depth`), a span of a trace is part of the span it's in
+(`hot-spots`). No finding costs one tool more than 120 seconds a run.
+
+The unit costs, for one CI runner core, cold:
+
+| Cost | Seconds | Basis |
+|---|---|---|
+| `tsc` checking an average source file | 0.010 | tsc 5.9 checks 1,000 average files in about 10 s |
+| Linting a file without type information | 0.006 | about 60% of `tsc`'s time per file |
+| A test runner loading a module | 0.002 | transform and evaluate |
+| A bundler or dev server transforming a module | 0.001 | |
+| A dev server waiting for one more level of unbundled imports | 0.005 | one round trip |
+| Installing a package, warm cache | 0.25 | |
+| Installing a healthy project's dependencies | 15 | baseline only |
+| `tsc` parsing and binding a line of declarations | 0.0000025 | 100,000 lines take about 0.25 s |
+| `tsc` inferring one value of a literal | 0.00002 | 10,000 values take 0.06 to 0.4 s |
+| `tsc` creating one type a complex type expands to | 0.00005 | |
+| `tsc` checking `node_modules` declarations for one program | 1.0 | `skipLibCheck` off |
+| `tsc` loading an `@types` package | 0.05 | |
+| `tsc` loading a package's declarations a second time | 0.2 | |
+
+How each rule's findings use them:
+
+| Rule | Saves each run |
+|---|---|
+| `bloat` | modules over the threshold × (test + build cost per module), once per entry |
+| `barrels`, `heavy-dependencies` | modules over the threshold × test cost × a quarter of the importing files (test runners load a module again for each test file), plus the build cost once |
+| `depth` | levels over the threshold × a dev server round trip, deepest import per file, locally only |
+| `cycles` | files in the cycle × (test + build cost per module), locally only: editing any of them re-runs all |
+| `unused-*`, `duplicates` | a twentieth of an average file's `tsc` and lint time per unused item or extra name |
+| `dependencies`, `duplicate-versions` | one package install per unused package or extra version |
+| `catalog`, and `references` findings that stop `tsc -b` | nothing: tidier, or broken rather than slow |
+| `program-files`, `overlap` | `tsc` time of each file it shouldn't check (minified or very large JavaScript counts as ten files) |
+| `references` | half the `tsc` time of an average package for each package that checks another's source; a tenth for a stale reference |
+| `tsconfig` | `skipLibCheck`: 1 s per program; `incremental`: half a package's `tsc` time, locally only; debug options: 5% to 30% of a package's `tsc` time |
+| `ambient-types` | 0.05 s per `@types` package a program loads without declaring it |
+| `isolated-declarations` | a fifth of a package's `tsc` time: declarations emitted without type-checking, packages built in parallel |
+| `large-literals` | `tsc` time per value |
+| `type-bloat` | `tsc` time per declaration line over the threshold |
+| `complex-types` | `tsc` time per type |
+| `hot-spots` | 80% of the measured time of each outermost span |
+| `duplicate-packages` | 0.2 s per extra copy |
+| `lint-config` | a share of the project's lint time: typed linting through `project` globs 30% of a `tsc` run, an unused type-aware setup 50%, type-aware parsing of JavaScript 10%; `import/no-cycle` and `import/no-unused-modules` 50% of untyped lint time, other slow rules 15%, a missing `eslint-plugin-oxlint` 20%, each unignored build output directory 10% |
+
+### Describing your team
+
+The defaults describe a team of 10 developers. Set `savings` in
+`.oxicleanrc.json` to match yours:
+
+```jsonc
+{
+  "savings": {
+    "developers": 10,
+    "workDaysPerWeek": 5,
+    // CI pipeline runs a working day, across the team
+    "ciRunsPerDay": 30,
+    // CI hours that weigh as much as one hour of a developer waiting
+    "ciHoursPerDeveloperHour": 4,
+    // Full runs of each tool one developer starts a working day
+    "localRunsPerDay": { "typecheck": 10, "lint": 5, "test": 10, "build": 5, "install": 1 }
+  }
+}
+```
+
+In `--format json`, each finding carries a `savings` object
+(`seconds_per_run` for each tool it slows, `scope`, and
+`developer_hours_per_week`, `ci_hours_per_week` and
+`weighted_hours_per_week`), or `null` when its time is counted with another
+finding. The document's `savings` holds the `health` score and grade, the
+totals, the `baseline`, each rule's share in `by_rule`, the ten biggest wins
+in `top`, and the `assumptions` they were computed with. SARIF results carry
+the same estimate in `properties.savings`, and the run carries the summary
+in `properties.savings`.
+
 ## Output formats
 
 `--format text` (the default) prints a section for each rule with
-findings, as shown above, then a line for each rule without, then one
-summary for the command:
+findings, as shown above, then a line for each rule without, then the
+health score and biggest wins (see [Time saved and health
+score](#time-saved-and-health-score)), then one summary for the command:
 
 ```
 ⚠ Unused exports detected
@@ -911,6 +1044,12 @@ Summary
 ✓ No unused exported types detected.
 ✓ No unused enum members detected.
 ✓ No unused namespace members detected.
+
+Health: 100/100 (A)
+  Fixing these findings saves about <1s of developer time and <1s of CI time a week, for 10 developers and 30 CI runs a day (`savings` in .oxicleanrc.json).
+  Biggest wins:
+    1. <1s dev, <1s CI a week  unused-exports  src/button.ts:2
+       export 'unusedHelper'
 
 ● Finished in 19ms on 2 files (using 8 threads).
 ● Ran 4 rules (unused-exports, unused-types, unused-enum-members, unused-namespace-members): 1 error, 0 warnings.
