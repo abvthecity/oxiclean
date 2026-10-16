@@ -26,11 +26,10 @@ jobs:
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: 0
     strategy:
-      fail-fast: false # TEMPORARY: surface every macOS/Windows failure
       # Pull requests test only Ubuntu + stable to save runner minutes;
       # pushes to main run the full OS and toolchain matrix.
       matrix:
-        os: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
         rust: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["stable", "beta"]' || '["stable"]') }}
     steps:
       - name: Checkout code
@@ -57,7 +56,7 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Run tests
-        run: cargo test --workspace --no-fail-fast --verbose
+        run: cargo test --workspace --verbose
 
       - name: Run doc tests
         run: cargo test --workspace --doc --verbose
