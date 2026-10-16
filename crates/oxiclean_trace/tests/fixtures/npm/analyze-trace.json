@@ -54,14 +54,106 @@
                     "timeMs": 17,
                     "children": [],
                     "types": [
-                      null,
-                      null
+                      {
+                        "type": {
+                          "id": 90,
+                          "kind": "TypeParameter",
+                          "name": "K",
+                          "location": {
+                            "path": "<root>/packages/web/src/paths.ts",
+                            "line": 2,
+                            "char": 8
+                          }
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "id": 10,
+                          "kind": "Intrinsic",
+                          "name": "undefined"
+                        },
+                        "children": []
+                      }
                     ]
                   }
                 ],
                 "types": [
-                  null,
-                  null
+                  {
+                    "type": {
+                      "id": 90,
+                      "kind": "TypeParameter",
+                      "name": "K",
+                      "location": {
+                        "path": "<root>/packages/web/src/paths.ts",
+                        "line": 2,
+                        "char": 8
+                      }
+                    },
+                    "children": []
+                  },
+                  {
+                    "type": {
+                      "id": 32,
+                      "kind": "Union",
+                      "count": 7,
+                      "types": [
+                        10,
+                        13,
+                        14,
+                        15,
+                        16,
+                        18,
+                        20
+                      ]
+                    },
+                    "children": [
+                      {
+                        "type": {
+                          "id": 10,
+                          "kind": "Intrinsic",
+                          "name": "undefined"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      },
+                      {
+                        "type": {
+                          "kind": "Other"
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
                 ]
               }
             ]

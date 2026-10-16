@@ -10,13 +10,13 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     fs::File,
-    io::BufReader,
+    io::{BufRead, BufReader},
     path::Path,
 };
 
 use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, SeqAccess, Visitor};
 use serde_json::{Map, Value};
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// The records of a `types.json` that were asked for, by id.
 #[derive(Debug, Default)]
@@ -29,15 +29,36 @@ pub(crate) struct TypesFile {
 impl TypesFile {
     /// Reads the records of `ids` from `path`; an unreadable or malformed
     /// file keeps what was read before the problem, with a warning.
+    ///
+    /// `tsc` writes one record per line, so lines are counted and only the
+    /// ones asked for are parsed, up to the last of them. A file laid out
+    /// otherwise, or whose records don't carry the ids of their lines, is
+    /// read again as JSON.
     pub(crate) fn read(path: &Path, ids: &HashSet<u64>) -> Self {
-        let mut out = Self::default();
+        let Some(last) = ids.iter().copied().max() else { return Self::default() };
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) => {
                 warn!("Can't read {}: {e}", path.display());
-                return out;
+                return Self::default();
             }
         };
+        match read_lines(BufReader::with_capacity(1 << 20, file), ids, last, path) {
+            Ok(Some(out)) => return out,
+            Ok(None) => debug!("{} isn't one type per line; reading it as JSON", path.display()),
+            // The JSON reader keeps what comes before the error, and warns.
+            Err(e) => {
+                debug!("Reading {} line by line failed: {e}; reading it as JSON", path.display())
+            }
+        }
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("Can't read {}: {e}", path.display());
+                return Self::default();
+            }
+        };
+        let mut out = Self::default();
         let mut de = serde_json::Deserializer::from_reader(BufReader::with_capacity(1 << 16, file));
         if let Err(e) = (&mut de).deserialize_seq(Records { ids, out: &mut out }) {
             warn!(
@@ -57,6 +78,130 @@ impl TypesFile {
     /// The type with `id`, when it was asked for and the file has it.
     pub(crate) fn get(&self, id: u64) -> Option<&Map<String, Value>> {
         self.records.get(&id)
+    }
+}
+
+/// Reads a types file written one record per line, as `tsc` writes it:
+/// `[{"id":1,…},` then `{"id":2,…},` … `{"id":n,…}]`, with `null` for a
+/// record left out. Only the lines of `ids` are parsed; the others are
+/// found with `memchr` and checked by their shape and their `"id"`
+/// prefix. `Ok(None)` when the file isn't laid out so, or a record's id
+/// isn't its line's, so it's read as JSON instead.
+fn read_lines(
+    mut reader: impl BufRead,
+    ids: &HashSet<u64>,
+    last: u64,
+    path: &Path,
+) -> std::io::Result<Option<TypesFile>> {
+    let mut out = TypesFile::default();
+    let mut lines = Lines { started: false, done: false };
+    // A line split across reads.
+    let mut carry: Vec<u8> = Vec::new();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            break;
+        }
+        let len = chunk.len();
+        let mut from = 0;
+        for nl in memchr::memchr_iter(b'\n', chunk) {
+            let line = if carry.is_empty() {
+                &chunk[from..nl]
+            } else {
+                carry.extend_from_slice(&chunk[from..nl]);
+                &carry[..]
+            };
+            let ok = lines.add(line, ids, &mut out);
+            carry.clear();
+            from = nl + 1;
+            if !ok {
+                return Ok(None);
+            }
+            if lines.done || out.count >= last {
+                return Ok(Some(out));
+            }
+        }
+        carry.extend_from_slice(&chunk[from..]);
+        reader.consume(len);
+    }
+    if !carry.is_empty() && !lines.add(&carry, ids, &mut out) {
+        return Ok(None);
+    }
+    // No closing `]`: cut short, or not a list of types at all.
+    if !lines.done && out.count == 0 {
+        return Ok(None);
+    }
+    if !lines.done {
+        warn!("{} is cut short; using its first {} types", path.display(), out.count);
+    }
+    Ok(Some(out))
+}
+
+/// Where [`read_lines`] is in the array.
+struct Lines {
+    /// Whether the `[` was read.
+    started: bool,
+    /// Whether the `]` was read.
+    done: bool,
+}
+
+impl Lines {
+    /// Reads one line into `out`; `false` when it isn't one record.
+    fn add(&mut self, line: &[u8], ids: &HashSet<u64>, out: &mut TypesFile) -> bool {
+        let mut line = line.trim_ascii();
+        if !self.started {
+            if line.is_empty() {
+                return true;
+            }
+            // A byte order mark.
+            line = line.strip_prefix(b"\xef\xbb\xbf").unwrap_or(line).trim_ascii_start();
+            let Some(rest) = line.strip_prefix(b"[") else { return false };
+            self.started = true;
+            line = rest.trim_ascii_start();
+        }
+        if self.done {
+            return line.is_empty();
+        }
+        // Records end in `}` or `l`, so a `]` at the end closes the array.
+        if let Some(rest) = line.strip_suffix(b"]") {
+            self.done = true;
+            line = rest.trim_ascii_end();
+        }
+        let record = line.strip_suffix(b",").unwrap_or(line).trim_ascii_end();
+        if record.is_empty() {
+            return true;
+        }
+        let id = out.count + 1;
+        if record == b"null" {
+            out.count = id;
+            return true;
+        }
+        if !(record.starts_with(b"{") && record.ends_with(b"}")) {
+            return false;
+        }
+        // A second `{"id":` means more than one record on the line (a string
+        // can't hold the unescaped quote), which only a full parse can read.
+        if memchr::memmem::find(&record[1..], br#"{"id":"#).is_some() {
+            return false;
+        }
+        // tsc writes the id first; when it's there it must be this line's.
+        if let Some(rest) = record.strip_prefix(br#"{"id":"#) {
+            let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+            let written = std::str::from_utf8(&rest[..digits]).ok().and_then(|d| d.parse().ok());
+            if written != Some(id) {
+                return false;
+            }
+        }
+        if ids.contains(&id) {
+            match serde_json::from_slice::<Map<String, Value>>(record) {
+                Ok(map) if map.get("id").is_none_or(|v| v.as_u64() == Some(id)) => {
+                    out.records.insert(id, map);
+                }
+                _ => return false,
+            }
+        }
+        out.count = id;
+        true
     }
 }
 
@@ -367,5 +512,26 @@ mod tests {
         fs::write(&path, "[1, {\"id\":2}]").unwrap();
         let types = TypesFile::read(&path, &[1, 2].into());
         assert!(types.get(1).is_none() && types.get(2).is_some());
+    }
+    #[test]
+    fn reads_records_however_they_are_laid_out() {
+        let t = TempDir::new().unwrap();
+        let path = t.path().join("types.json");
+        let ids: HashSet<u64> = [2, 3, 9].into();
+        for json in [
+            // tsc, one record a line.
+            "[{\"id\":1,\"flags\":[]},\n{\"id\":2,\"symbolName\":\"B\"},\n{\"id\":3,\"symbolName\":\"C\"}]\n",
+            // Several records a line.
+            "[{\"id\":1,\"flags\":[]},{\"id\":2,\"symbolName\":\"B\"},\n{\"id\":3,\"symbolName\":\"C\"}]",
+            // All on one line, and pretty-printed.
+            "[{\"id\":1},{\"id\":2,\"symbolName\":\"B\"},{\"id\":3,\"symbolName\":\"C\"}]",
+            "[\n  {\n    \"id\": 1\n  },\n  {\"id\": 2, \"symbolName\": \"B\"},\n  {\"id\":3,\"symbolName\":\"C\"}\n]",
+        ] {
+            fs::write(&path, json).unwrap();
+            let types = TypesFile::read(&path, &ids);
+            let name = |id| types.get(id).and_then(|t| t.get("symbolName").cloned());
+            assert_eq!((name(2), name(3)), (Some("B".into()), Some("C".into())), "{json}");
+            assert!(types.get(1).is_none() && types.get(9).is_none(), "{json}");
+        }
     }
 }

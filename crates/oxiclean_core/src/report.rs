@@ -402,6 +402,9 @@ pub struct CheckResult {
     /// is off there and runs only for the files an override turns it on
     /// for.
     pub severity: Option<Severity>,
+    /// What the reader should know about the result that the findings
+    /// don't say, such as why a rule that found something reports none.
+    pub notes: Vec<String>,
 }
 
 impl CheckResult {
@@ -836,6 +839,14 @@ fn print_summary<W: Write>(
     Ok(())
 }
 
+/// A rule's notes, under its findings or its all-clear line.
+fn print_notes(writer: &mut impl Write, notes: &[String]) -> io::Result<()> {
+    for note in notes {
+        writeln!(writer, "  {} {note}", "⚠".yellow())?;
+    }
+    Ok(())
+}
+
 /// Prints what every rule of `command` found: a section for each rule with
 /// findings, then the success line of each rule without, then a line for
 /// each rule that couldn't run, then the closing lines.
@@ -859,12 +870,14 @@ pub fn print_command<W: Write>(
             writeln!(writer)?;
         }
         print_findings(writer, &r.result.findings, &r.style, r.result.threshold, ctx)?;
+        print_notes(writer, &r.result.notes)?;
     }
     if !found.is_empty() && !clean.is_empty() {
         writeln!(writer)?;
     }
     for r in &clean {
         print_ok(writer, &r.style, r.result.threshold)?;
+        print_notes(writer, &r.result.notes)?;
     }
     if !failed.is_empty() && !(found.is_empty() && clean.is_empty()) {
         writeln!(writer)?;

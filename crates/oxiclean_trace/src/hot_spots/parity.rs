@@ -1,9 +1,18 @@
-//! Parity with analyze-trace, checked on every test run: each trace
-//! fixture's hot-spot tree, frame by frame (what it is, its file, its
-//! position and its time), against `analyze-trace.json`, what the real
-//! `@typescript/analyze-trace` 0.11.1 reports on the same committed trace
-//! at the fixture's settings (`tests/fixtures/regenerate.mjs --golden`
-//! writes it).
+//! Parity with analyze-trace, checked on every test run, against
+//! `analyze-trace.json`, what the real `@typescript/analyze-trace` 0.11.1
+//! reports on each trace fixture's committed trace at the fixture's
+//! settings (`tests/fixtures/regenerate.mjs --golden` writes it):
+//!
+//! - the hot-spot tree, frame by frame: what it is, its file, its
+//!   position, its time, and the types a comparison or variance names
+//!   (their ids, kinds, names, sizes and where they're declared);
+//! - what the rules report: a `hot-spots` finding for every frame, with
+//!   its time, and a `duplicate-packages` finding for every duplicate
+//!   package, with each copy's version.
+//!
+//! The fixtures are traced by TypeScript 5 (pnpm, npm, Bun and Deno
+//! layouts) and by TypeScript 7 (`tsgo`: one trace for every checker, a
+//! types file per checker, and lowercased paths, as on macOS).
 //!
 //! Two known divergences, both analyze-trace's, are allowed where a
 //! position differs and nothing else does:
@@ -24,14 +33,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use oxiclean_core::CommonArgs;
+use oxiclean_core::{CommonArgs, FindingKind, Workspace};
 use serde_json::Value;
 
 use super::{js, unmangle};
 use crate::{
-    analyze::{Frame, FrameKind, ProjectTrace, Range},
+    analyze::{Frame, FrameKind, HotType, ProjectTrace, Range},
+    duplicates,
     trace::Trace,
 };
+
+/// Every trace fixture.
+const FIXTURES: [&str; 5] = ["pnpm", "npm", "bun", "deno", "tsgo"];
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
@@ -172,9 +185,78 @@ fn compare(
                 frame.time_ms, node["timeMs"]
             ));
         }
+        if let Some(theirs) = node["types"].as_array() {
+            let ours: Vec<Option<String>> =
+                frame.types.iter().map(|t| t.as_ref().map(|t| type_label(trace, t))).collect();
+            let theirs: Vec<Option<String>> = theirs.iter().map(golden_type_label).collect();
+            if ours != theirs {
+                problems.push(format!("{here}: oxiclean types {ours:?}, analyze-trace {theirs:?}"));
+            }
+        }
         let children = node["children"].as_array().map_or(&[][..], Vec::as_slice);
         compare(trace, known, &frame.children, children, &here, problems, allowed);
     }
+}
+
+/// A type of a comparison or variance as analyze-trace's JSON gives it:
+/// `90 TypeParameter K packages/web/src/paths.ts:2:8`.
+fn golden_type_label(node: &Value) -> Option<String> {
+    let t = node.get("type").filter(|t| !t.is_null())?;
+    let mut out = format!("{} {}", t["id"], t["kind"].as_str().unwrap_or_default());
+    if let Some(name) = t["name"].as_str() {
+        let _ = write!(out, " {name}");
+    }
+    if let Some(n) = t["count"].as_u64() {
+        let _ = write!(out, " of {n}");
+    }
+    if let Some(path) = t["location"]["path"].as_str() {
+        let path = path.replace("<root>/", "");
+        let _ = write!(out, " {path}:{}:{}", t["location"]["line"], t["location"]["char"]);
+    }
+    Some(out)
+}
+
+/// One of oxiclean's types, labelled as [`golden_type_label`] does.
+fn type_label(trace: &Trace, t: &HotType) -> String {
+    let ty = &t.ty;
+    let mut out = format!("{} {}", ty.id, ty.kind);
+    if let Some(name) = &ty.name {
+        let _ = write!(out, " {name}");
+    }
+    if let Some(n) = ty.count {
+        let _ = write!(out, " of {n}");
+    }
+    if let Some(loc) = &ty.location {
+        let (line, char) = t.line_char.unwrap_or((loc.line, loc.char));
+        let _ = write!(out, " {}:{line}:{char}", trace.show_raw(&loc.path));
+    }
+    out
+}
+
+/// What a frame is, as the first two words of how both tools describe
+/// it, and its time: `Check expression 71ms`.
+fn kind_and_time(description: &str, ms: u64) -> String {
+    let words: Vec<&str> = description.split_whitespace().take(2).collect();
+    format!("{} {ms}ms", words.join(" "))
+}
+
+/// Each frame of analyze-trace's `nodes` and below, as [`kind_and_time`].
+fn golden_frames(nodes: &[Value], out: &mut Vec<String>) {
+    for node in nodes {
+        let description = node["description"].as_str().unwrap_or_default();
+        out.push(kind_and_time(description, node["timeMs"].as_u64().unwrap_or_default()));
+        golden_frames(node["children"].as_array().map_or(&[][..], Vec::as_slice), out);
+    }
+}
+
+fn load(name: &str) -> (Workspace, Trace, Value) {
+    let root = fixture(name);
+    let workspace = CommonArgs::with_root(&root).workspace().unwrap();
+    let trace = Trace::load(&workspace, &root.join("trace"), true).unwrap();
+    let golden: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("analyze-trace.json")).unwrap())
+            .unwrap();
+    (workspace, trace, golden)
 }
 
 /// The project of `trace` analyze-trace's `result` is about.
@@ -189,13 +271,14 @@ fn project_of<'t>(trace: &'t Trace, result: &Value) -> &'t ProjectTrace {
 
 #[test]
 fn hot_spots_match_analyze_trace() {
-    for name in ["pnpm", "npm", "bun", "deno"] {
-        let root = fixture(name);
-        let workspace = CommonArgs::with_root(&root).workspace().unwrap();
-        let trace = Trace::load(&workspace, &root.join("trace"), true).unwrap();
-        let golden: Value =
-            serde_json::from_str(&fs::read_to_string(root.join("analyze-trace.json")).unwrap())
-                .unwrap();
+    let mut compared_types = 0;
+    for name in FIXTURES {
+        let (_, trace, golden) = load(name);
+        for p in &trace.projects {
+            crate::analyze::visit(&p.frames, &mut |f| {
+                compared_types += f.types.iter().flatten().count();
+            });
+        }
         let results = golden["results"].as_array().unwrap();
         assert_eq!(results.len(), trace.projects.len(), "{name}");
         let (mut problems, mut allowed) = (Vec::new(), Vec::new());
@@ -211,6 +294,74 @@ fn hot_spots_match_analyze_trace() {
         assert!(problems.is_empty(), "{name} differs from analyze-trace:\n{}", problems.join("\n"));
         // None of the fixtures has a known divergence today.
         assert!(allowed.is_empty(), "{name}: {allowed:?}");
+    }
+    assert!(compared_types > 0, "no fixture compares types");
+}
+
+/// What the rules report matches what analyze-trace finds: a `hot-spots`
+/// finding for each of its frames, and a `duplicate-packages` finding for
+/// each of its duplicate packages, so no frame of the tree is lost on the
+/// way to the report.
+#[test]
+fn reported_findings_match_analyze_trace() {
+    for name in FIXTURES {
+        let (workspace, trace, golden) = load(name);
+        let results = golden["results"].as_array().unwrap();
+
+        let mut theirs = Vec::new();
+        for result in results {
+            let nodes = result["highlights"]["hotSpots"].as_array().map_or(&[][..], Vec::as_slice);
+            golden_frames(nodes, &mut theirs);
+        }
+        let hot = super::run_on(&workspace, &trace).unwrap();
+        let mut ours: Vec<String> = hot
+            .findings
+            .iter()
+            .map(|f| {
+                let FindingKind::Issue(issue) = &f.kind else { panic!("{f:?}") };
+                // `line 4: Check expression …` names the line first.
+                let message =
+                    issue.message.split_once(": ").map_or(&*issue.message, |(lead, rest)| {
+                        if lead.starts_with("line ") { rest } else { &issue.message }
+                    });
+                kind_and_time(message, f.value as u64)
+            })
+            .collect();
+        theirs.sort();
+        ours.sort();
+        assert!(!theirs.is_empty(), "{name}: analyze-trace finds no hot spots");
+        assert_eq!(ours, theirs, "{name}: the hot spots reported differ from analyze-trace's");
+        assert!(hot.notes.is_empty(), "{name}: {:?}", hot.notes);
+
+        let dups = duplicates::run_on(&workspace, &trace).unwrap();
+        for result in results {
+            for package in
+                result["highlights"]["duplicatePackages"].as_array().into_iter().flatten()
+            {
+                let package_name = package["name"].as_str().unwrap();
+                let issue = dups
+                    .findings
+                    .iter()
+                    .find_map(|f| match &f.kind {
+                        FindingKind::Issue(i) if i.key == package_name => Some(i),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{name}: analyze-trace finds {package_name} loaded twice, oxiclean doesn't"
+                        )
+                    });
+                for instance in package["instances"].as_array().into_iter().flatten() {
+                    if let Some(version) = instance["version"].as_str() {
+                        assert!(
+                            issue.message.contains(&format!("{version} at ")),
+                            "{name}: {package_name} {version} isn't in {:?}",
+                            issue.message
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 

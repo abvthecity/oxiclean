@@ -237,6 +237,7 @@ pub fn write_json<W: Write>(
                 "errors": errors,
                 "warnings": r.result.findings.len() - errors,
                 "error": r.error,
+                "notes": r.result.notes,
             })
         })
         .collect();

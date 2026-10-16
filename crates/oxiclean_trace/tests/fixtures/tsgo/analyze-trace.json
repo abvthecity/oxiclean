@@ -1,0 +1,243 @@
+{
+  "results": [
+    {
+      "project": {
+        "configFilePath": "<root>/packages/web/tsconfig.json",
+        "tracePath": "<trace>/trace.json",
+        "typesPaths": [
+          "<trace>/types_0.json",
+          "<trace>/types_1.json",
+          "<trace>/types_2.json",
+          "<trace>/types_3.json"
+        ],
+        "typeSources": [
+          {
+            "typesPath": "<trace>/types_0.json",
+            "checkerId": 0
+          },
+          {
+            "typesPath": "<trace>/types_1.json",
+            "checkerId": 1
+          },
+          {
+            "typesPath": "<trace>/types_2.json",
+            "checkerId": 2
+          },
+          {
+            "typesPath": "<trace>/types_3.json",
+            "checkerId": 3
+          }
+        ]
+      },
+      "highlights": {
+        "hotSpots": [
+          {
+            "description": "Check file <root>/packages/web/src/variants.ts",
+            "timeMs": 367,
+            "path": "<root>/packages/web/src/variants.ts",
+            "children": [
+              {
+                "description": "Check expression",
+                "timeMs": 326,
+                "path": "<root>/packages/web/src/variants.ts",
+                "startLine": 68,
+                "startChar": 10,
+                "endLine": 68,
+                "endChar": 11,
+                "children": [
+                  {
+                    "description": "Compare types 2273 and 104",
+                    "timeMs": 1,
+                    "children": [],
+                    "types": [
+                      {
+                        "type": {
+                          "id": 2273,
+                          "kind": "Intersection",
+                          "count": 3,
+                          "types": [
+                            90,
+                            113,
+                            130
+                          ]
+                        },
+                        "children": [
+                          {
+                            "type": {
+                              "kind": "Other"
+                            },
+                            "children": []
+                          },
+                          {
+                            "type": {
+                              "kind": "Other"
+                            },
+                            "children": []
+                          },
+                          {
+                            "type": {
+                              "kind": "Other"
+                            },
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "type": {
+                          "id": 104,
+                          "kind": "AnonymousType",
+                          "location": {
+                            "path": "<root>/packages/web/src/variants.ts",
+                            "line": 21,
+                            "char": 5
+                          }
+                        },
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "description": "Check variable declaration",
+                "timeMs": 15,
+                "path": "<root>/packages/web/src/variants.ts",
+                "startLine": 67,
+                "startChar": 9,
+                "endLine": 67,
+                "endChar": 17,
+                "children": []
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/web/src/app.ts",
+            "timeMs": 40,
+            "path": "<root>/packages/web/src/app.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 40,
+                "path": "<root>/packages/web/src/app.ts",
+                "startLine": 5,
+                "startChar": 14,
+                "endLine": 5,
+                "endChar": 47,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 40,
+                    "path": "<root>/packages/web/src/app.ts",
+                    "startLine": 5,
+                    "startChar": 19,
+                    "endLine": 5,
+                    "endChar": 20,
+                    "children": [
+                      {
+                        "description": "Check expression",
+                        "timeMs": 40,
+                        "path": "<root>/packages/web/src/i18n.ts",
+                        "startLine": 4,
+                        "startChar": 18,
+                        "endLine": 4,
+                        "endChar": 56,
+                        "children": [
+                          {
+                            "description": "Check expression",
+                            "timeMs": 20,
+                            "path": "<root>/packages/web/src/i18n.ts",
+                            "startLine": 4,
+                            "startChar": 37,
+                            "endLine": 4,
+                            "endChar": 39,
+                            "children": [
+                              {
+                                "description": "Check expression",
+                                "timeMs": 6,
+                                "path": "<root>/packages/web/src/locales/en.json",
+                                "startLine": 606,
+                                "startChar": 9,
+                                "endLine": 907,
+                                "endChar": 4,
+                                "children": [
+                                  {
+                                    "description": "Check expression",
+                                    "timeMs": 5,
+                                    "path": "<root>/packages/web/src/locales/en.json",
+                                    "startLine": 807,
+                                    "startChar": 13,
+                                    "endLine": 856,
+                                    "endChar": 6,
+                                    "children": []
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/web/src/i18n.ts",
+            "timeMs": 32,
+            "path": "<root>/packages/web/src/i18n.ts",
+            "children": [
+              {
+                "description": "Check variable declaration",
+                "timeMs": 16,
+                "path": "<root>/packages/web/src/i18n.ts",
+                "startLine": 4,
+                "startChar": 14,
+                "endLine": 4,
+                "endChar": 56,
+                "children": [
+                  {
+                    "description": "Check expression",
+                    "timeMs": 16,
+                    "path": "<root>/packages/web/src/i18n.ts",
+                    "startLine": 4,
+                    "startChar": 18,
+                    "endLine": 4,
+                    "endChar": 56,
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "description": "Check expression",
+                "timeMs": 3,
+                "path": "<root>/packages/web/src/locales/en.json",
+                "startLine": 2,
+                "startChar": 9,
+                "endLine": 303,
+                "endChar": 4,
+                "children": []
+              },
+              {
+                "description": "Check expression",
+                "timeMs": 3,
+                "path": "<root>/packages/web/src/locales/en.json",
+                "startLine": 908,
+                "startChar": 9,
+                "endLine": 1209,
+                "endChar": 4,
+                "children": []
+              }
+            ]
+          },
+          {
+            "description": "Check file <root>/packages/web/src/paths.ts",
+            "timeMs": 4,
+            "path": "<root>/packages/web/src/paths.ts",
+            "children": []
+          }
+        ]
+      }
+    }
+  ]
+}

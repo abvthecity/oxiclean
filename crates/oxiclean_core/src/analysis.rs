@@ -204,6 +204,7 @@ impl Analysis {
             resolution: self.resolution,
             threshold: policy.base().threshold,
             severity: policy.base().enabled.then_some(policy.base().severity),
+            notes: Vec::new(),
         }
     }
 }
@@ -356,6 +357,7 @@ impl Workspace {
             resolution: ResolutionStats::default(),
             threshold: policy.base().threshold,
             severity: policy.base().enabled.then_some(policy.base().severity),
+            notes: Vec::new(),
         }
     }
 }

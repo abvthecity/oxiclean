@@ -1,0 +1,7 @@
+{
+  "name": "tsgo-trace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ]
+}
