@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use oxiclean_core::{
-    CommandResult, fix,
+    CommandResult, RuleResult, fix,
     report::{self, OutputFormat, ReportContext, ReportMeta},
 };
 use tracing::debug;
@@ -84,6 +84,118 @@ enum Commands {
     /// Check for modules that export the same thing under several names
     #[command(name = "duplicates")]
     Duplicates(oxiclean_duplicates::Config),
+    /// Score the project's health and rank findings by the time fixing them saves
+    ///
+    /// Runs every command's rules (trace only when `trace.dir` is set in
+    /// `.oxicleanrc.json`) and prints a health score from 0 to 100, what the
+    /// findings cost developers and CI a week, and the findings that cost
+    /// the most. `savings` in `.oxicleanrc.json` describes the team.
+    #[command(name = "health")]
+    Health(HealthConfig),
+}
+
+/// Options for `oxiclean health`.
+#[derive(Debug, Clone, clap::Args)]
+struct HealthConfig {
+    #[command(flatten)]
+    common: oxiclean_core::CommonArgs,
+}
+
+/// A rule named `rule` that couldn't run because of `e`.
+fn failed(
+    result: &CommandResult,
+    rule: &'static str,
+    style: oxiclean_core::report::ReportStyle,
+    e: &oxiclean_core::Error,
+) -> RuleResult {
+    RuleResult::failed(rule, style, result.root.clone(), oxiclean_core::command::describe(e))
+}
+
+impl HealthConfig {
+    /// Runs every command, each on the same root and config file, and joins
+    /// what their rules found.
+    fn run(&self) -> oxiclean_core::Result<CommandResult> {
+        let workspace = self.common.workspace()?;
+        let mut result = CommandResult::of_workspace(&workspace);
+        let common = || self.common.clone();
+        let groups = [
+            (
+                "unused",
+                oxiclean_unused_exports::UNUSED_EXPORTS_STYLE,
+                oxiclean_unused_exports::run_unused_command(&oxiclean_unused_exports::Config {
+                    common: common(),
+                }),
+            ),
+            (
+                "dependencies",
+                oxiclean_dependencies::DEPENDENCIES_STYLE,
+                oxiclean_dependencies::run_dependencies_command(&oxiclean_dependencies::Config {
+                    common: common(),
+                }),
+            ),
+            (
+                "typecheck",
+                oxiclean_typecheck::TSCONFIG_STYLE,
+                oxiclean_typecheck::run_typecheck_command(&oxiclean_typecheck::Config {
+                    common: common(),
+                }),
+            ),
+            (
+                "lint",
+                oxiclean_lint::LINT_CONFIG_STYLE,
+                oxiclean_lint::run_lint_command(&oxiclean_lint::Config { common: common() }),
+            ),
+            (
+                "bloat",
+                oxiclean_bloat::REPORT_STYLE,
+                oxiclean_bloat::run_bloat_command(&oxiclean_bloat::Config { common: common() }),
+            ),
+            (
+                "depth",
+                oxiclean_depth::REPORT_STYLE,
+                oxiclean_depth::run_depth_command(&oxiclean_depth::Config { common: common() }),
+            ),
+            (
+                "cycles",
+                oxiclean_cycles::REPORT_STYLE,
+                oxiclean_cycles::run_cycles_command(&oxiclean_cycles::Config { common: common() }),
+            ),
+            (
+                "duplicates",
+                oxiclean_duplicates::REPORT_STYLE,
+                oxiclean_duplicates::run_duplicates_command(&oxiclean_duplicates::Config {
+                    common: common(),
+                }),
+            ),
+        ];
+        for (command, style, run) in groups {
+            match run {
+                Ok(found) => result.extend(found),
+                // A command whose rules all need a module graph can't run
+                // without entry files; the other commands still can.
+                Err(e @ oxiclean_core::Error::NoEntries(_)) => {
+                    result.rules.push(failed(&result, command, style, &e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // A trace is something a person records, so only a configured one
+        // is read, and one that isn't there yet fails only its rules.
+        if workspace.config.trace.dir.is_some() {
+            let trace = oxiclean_trace::Config { dir: None, common: common() };
+            match oxiclean_trace::run_trace_command(&trace) {
+                Ok(found) => result.extend(found),
+                Err(
+                    e @ (oxiclean_core::Error::Trace { .. } | oxiclean_core::Error::NoTraceDir),
+                ) => {
+                    let style = oxiclean_trace::HOT_SPOTS_STYLE;
+                    result.rules.push(failed(&result, "trace", style, &e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(result)
+    }
 }
 
 impl Commands {
@@ -99,6 +211,7 @@ impl Commands {
             Self::Depth(_) => "depth",
             Self::Cycles(_) => "cycles",
             Self::Duplicates(_) => "duplicates",
+            Self::Health(_) => "health",
         }
     }
 
@@ -114,6 +227,7 @@ impl Commands {
             Self::Depth(cfg) => oxiclean_depth::run_depth_command(cfg),
             Self::Cycles(cfg) => oxiclean_cycles::run_cycles_command(cfg),
             Self::Duplicates(cfg) => oxiclean_duplicates::run_duplicates_command(cfg),
+            Self::Health(cfg) => cfg.run(),
         }
     }
 }
@@ -143,6 +257,10 @@ fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     debug!("Parsed CLI arguments: {:?}", cli.command);
 
+    // A score shouldn't rewrite the project; each command fixes its own.
+    if cli.fix && matches!(cli.command, Commands::Health(_)) {
+        anyhow::bail!("`health` only reports; run --fix with the command whose findings to fix");
+    }
     let start = Instant::now();
     let command = cli.command.name();
     let mut result = cli.command.run()?;
@@ -166,7 +284,11 @@ fn run() -> Result<ExitCode> {
     match cli.format {
         OutputFormat::Text => {
             let threads = rayon::current_num_threads();
-            report::print_command(&mut stdout, command, &result, elapsed_ms, threads, ctx)?;
+            if matches!(cli.command, Commands::Health(_)) {
+                report::print_health(&mut stdout, &result, elapsed_ms, threads, ctx)?;
+            } else {
+                report::print_command(&mut stdout, command, &result, elapsed_ms, threads, ctx)?;
+            }
             if cli.fix {
                 writeln!(
                     stdout,

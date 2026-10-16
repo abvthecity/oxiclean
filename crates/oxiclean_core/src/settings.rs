@@ -28,6 +28,7 @@
 
 use std::{
     fmt, fs,
+    num::NonZeroU32,
     path::{Path, PathBuf},
 };
 
@@ -106,6 +107,77 @@ pub struct ConfigFile {
     /// Settings for the `trace` command, which reads the output of
     /// `tsc --generateTrace`.
     pub trace: TraceSettings,
+    /// How the team works, for estimating the time each finding costs a
+    /// week. See "Time saved and health score" in the README.
+    pub savings: SavingsSettings,
+}
+
+/// How often the team runs its tools, which turns the seconds a finding
+/// costs each run into hours a week. The defaults describe a team of 10.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct SavingsSettings {
+    /// Developers working in the repository.
+    pub developers: NonZeroU32,
+    /// Working days a week.
+    #[schemars(range(min = 1, max = 7))]
+    pub work_days_per_week: NonZeroU32,
+    /// CI pipeline runs a working day, across the team. Each run type-checks,
+    /// lints, tests, builds and installs once.
+    pub ci_runs_per_day: u32,
+    /// How many hours of CI time weigh as much as one hour a developer
+    /// spends waiting, when findings are ranked and the health score is
+    /// computed.
+    pub ci_hours_per_developer_hour: NonZeroU32,
+    /// Full runs of each tool one developer starts a working day.
+    pub local_runs_per_day: LocalRuns,
+}
+
+impl Default for SavingsSettings {
+    fn default() -> Self {
+        Self {
+            developers: NonZeroU32::new(10).unwrap_or(NonZeroU32::MIN),
+            work_days_per_week: NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
+            ci_runs_per_day: 30,
+            ci_hours_per_developer_hour: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
+            local_runs_per_day: LocalRuns::default(),
+        }
+    }
+}
+
+/// Full runs of each tool one developer starts a working day. A run of the
+/// whole tool: `tsc` or the editor reloading its project, a lint of the
+/// package, a test run, a dev server start or build, an install.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct LocalRuns {
+    /// `tsc` runs and editor project loads.
+    pub typecheck: u32,
+    /// ESLint or oxlint runs.
+    pub lint: u32,
+    /// Test runs.
+    pub test: u32,
+    /// Dev server starts and builds.
+    pub build: u32,
+    /// Package installs.
+    pub install: u32,
+}
+
+impl LocalRuns {
+    /// The runs of each tool, in the order of
+    /// [`crate::savings::ToolSeconds::TOOLS`].
+    #[must_use]
+    pub fn by_tool(&self) -> [u32; 5] {
+        [self.typecheck, self.lint, self.test, self.build, self.install]
+    }
+}
+
+impl Default for LocalRuns {
+    fn default() -> Self {
+        Self { typecheck: 10, lint: 5, test: 10, build: 5, install: 1 }
+    }
 }
 
 /// Settings for the `trace` command.

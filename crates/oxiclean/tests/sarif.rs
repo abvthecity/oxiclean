@@ -280,3 +280,20 @@ fn fingerprints_ignore_line_moves() {
     assert_eq!(line(&after), line(&before) + 1);
     assert_eq!(result(&after)["partialFingerprints"], result(&before)["partialFingerprints"]);
 }
+
+/// Every rule has a model of the time its findings cost, and SARIF
+/// results carry their estimates.
+#[test]
+fn every_rule_has_a_time_model() {
+    for (_, rule) in RULES {
+        assert!(oxiclean_core::savings::MODELED_RULES.contains(rule), "{rule} has no time model");
+    }
+    let doc = sarif("typecheck", &fixture("overlap"));
+    let run = &doc["runs"][0];
+    assert!(run["properties"]["savings"]["health"]["score"].is_u64(), "{run}");
+    let results = run["results"].as_array().unwrap();
+    assert!(
+        results.iter().any(|r| r["properties"]["savings"]["seconds_per_run"]["typecheck"].is_f64()),
+        "{run}"
+    );
+}

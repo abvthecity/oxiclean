@@ -28,6 +28,7 @@ mod plugins;
 mod project;
 pub mod report;
 mod resolver;
+pub mod savings;
 pub mod sequencer;
 pub mod settings;
 mod types;
@@ -57,8 +58,8 @@ pub use report::{
 pub use resolver::{ResolutionStats, is_builtin, resolve};
 pub use sequencer::{Sequence, sequence};
 pub use settings::{
-    ConfigFile, DependencyField, DependencyFields, PluginSettings, ResolvedRule, RuleOptions,
-    RulePolicy, Severity, TraceSettings,
+    ConfigFile, DependencyField, DependencyFields, LocalRuns, PluginSettings, ResolvedRule,
+    RuleOptions, RulePolicy, SavingsSettings, Severity, TraceSettings,
 };
 pub use types::{SpecKind, Specifier};
 pub use uses::{ModuleUses, Usage, Used};

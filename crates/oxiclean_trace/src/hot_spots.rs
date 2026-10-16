@@ -213,10 +213,7 @@ impl<'f> Walker<'_, 'f> {
         let confirmed = self.confirmations(frame, inherited);
         self.cite(&confirmed, &mut message, &mut related);
         if let Some(p) = parent {
-            related.insert(
-                0,
-                Related::new(p.file.clone(), p.line, format!("inside {}", p.description)),
-            );
+            related.insert(0, Related::inside(p.file.clone(), p.line, &p.description));
         }
 
         let anchor = self.anchor(project, frame, parent);
