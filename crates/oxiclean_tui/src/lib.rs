@@ -38,7 +38,15 @@ pub fn run_map(common: CommonArgs) -> Result<()> {
             "`oxiclean map` is interactive and needs a terminal; use --format json for the map as data"
         );
     }
-    let mut terminal = ratatui::try_init().context("could not set up the terminal")?;
+    let mut terminal = match ratatui::try_init() {
+        Ok(t) => t,
+        Err(e) => {
+            // Raw mode may be on even though the rest failed.
+            let _ = ratatui::try_restore();
+            return Err(e).context("could not set up the terminal");
+        }
+    };
+    only_ui_panics_restore();
     let theme = Theme::from_env();
     let mut app = App::new(common, Instant::now());
     let result = (|| -> Result<()> {
@@ -58,17 +66,29 @@ pub fn run_map(common: CommonArgs) -> Result<()> {
         }
         Ok(())
     })();
-    ratatui::try_restore().context("could not restore the terminal")?;
-    result
+    let restored = ratatui::try_restore().context("could not restore the terminal");
+    // The loop's error says more than a failed restore after it.
+    result.and(restored)
+}
+
+/// ratatui's panic hook restores the terminal for a panic on any thread.
+/// A panic in the scan, or in the threads it fans out to, is caught and
+/// shown in the view, which keeps running, so only a panic on this thread,
+/// which ends the view, restores the terminal and reports.
+fn only_ui_panics_restore() {
+    let ui = std::thread::current().id();
+    let restore_and_report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().id() == ui {
+            restore_and_report(info);
+        }
+    }));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxiclean_typecheck::{
-        TsConfigs,
-        program_map::{self, Progress},
-    };
+    use oxiclean_typecheck::program_map::{self, Progress};
     use ratatui::{
         Terminal,
         backend::TestBackend,
@@ -234,6 +254,10 @@ mod tests {
             press(&mut app, KeyCode::Char(c));
         }
         assert_eq!(names(&app), ["@acme/quiet"]);
+        // Clearing the search keeps the package selected.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.package().unwrap().name, "@acme/quiet");
+        press(&mut app, KeyCode::Char('/'));
         press(&mut app, KeyCode::Esc);
         assert!(app.search.is_empty() && !app.searching);
         press(&mut app, KeyCode::Char('q'));
@@ -276,7 +300,5 @@ mod tests {
         }
         let s = screen(&mut app, 100, 30);
         assert!(s.contains("The scan failed"), "{s}");
-        // Keep the unused-import lint quiet for TsConfigs on this path.
-        let _ = TsConfigs::default();
     }
 }

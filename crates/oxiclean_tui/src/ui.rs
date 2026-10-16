@@ -11,6 +11,7 @@ use oxiclean_typecheck::program_map::{Cause, PackageChecks, Phase, ProgramMap};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
+    style::Modifier,
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -150,24 +151,28 @@ fn scan_lines(scan: &Scan, theme: Theme, width: usize, now: Instant) -> Vec<Line
     let current = scan.progress.phase();
     let shown = [Phase::Workspace, Phase::Programs, Phase::Imports, Phase::Packages];
     let mut lines = Vec::new();
+    let current_at = shown.iter().position(|p| *p == current).unwrap_or(shown.len());
     for (i, phase) in shown.iter().enumerate() {
         let started = scan.phases.iter().find(|(p, _)| p == phase).map(|(_, at)| *at);
+        // A phase can finish between two frames; it is done all the same.
         let ended =
             scan.phases.iter().find(|(p, _)| shown[i + 1..].contains(p) || *p == Phase::Done);
-        let (mark, label, detail) = match (started, ended) {
-            (Some(s), Some((_, e))) => {
-                (Span::styled("✓", theme.accent()), theme.muted(), seconds(*e - s))
-            }
-            (Some(s), None) => {
-                let detail = if *phase == Phase::Imports {
-                    let (done, total) = scan.progress.files();
-                    format!("{} / {} files", grouped(done), grouped(total))
-                } else {
-                    seconds(now - s)
-                };
-                (Span::styled(spinner(scan.started, now), theme.accent()), theme.strong(), detail)
-            }
-            _ => (Span::styled("·", theme.muted()), theme.muted(), String::new()),
+        let (mark, label, detail) = if i < current_at {
+            let took = match (started, ended) {
+                (Some(s), Some((_, e))) => seconds(*e - s),
+                _ => String::new(),
+            };
+            (Span::styled("✓", theme.accent()), theme.muted(), took)
+        } else if i == current_at {
+            let detail = if *phase == Phase::Imports {
+                let (done, total) = scan.progress.files();
+                format!("{} / {} files", grouped(done), grouped(total))
+            } else {
+                started.map(|s| seconds(now - s)).unwrap_or_default()
+            };
+            (Span::styled(spinner(scan.started, now), theme.accent()), theme.strong(), detail)
+        } else {
+            (Span::styled("·", theme.muted()), theme.muted(), String::new())
         };
         lines.push(spread(
             vec![mark, Span::raw("  "), Span::styled(phase.label(), label)],
@@ -202,7 +207,7 @@ fn loading(f: &mut Frame<'_>, area: Rect, scan: &Scan, theme: Theme, now: Instan
     let w = usize::from(width);
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("oxiclean", theme.accent().add_modifier(ratatui::style::Modifier::BOLD)),
+            Span::styled("oxiclean", theme.accent().add_modifier(Modifier::BOLD)),
             Span::styled(" map", theme.strong()),
         ]),
         Line::from(Span::styled("Which tsconfig programs check each package", theme.muted())),
@@ -227,10 +232,7 @@ fn failed(f: &mut Frame<'_>, area: Rect, error: &str, theme: Theme) {
         height: area.height / 2,
     };
     let lines = vec![
-        Line::from(Span::styled(
-            "The scan failed",
-            theme.fg(ERROR).add_modifier(ratatui::style::Modifier::BOLD),
-        )),
+        Line::from(Span::styled("The scan failed", theme.fg(ERROR).add_modifier(Modifier::BOLD))),
         Line::from(Span::styled(error.to_string(), theme.text())),
         Line::default(),
         Line::from(vec![
@@ -298,10 +300,7 @@ fn map_view(f: &mut Frame<'_>, area: Rect, app: &mut App, theme: Theme, now: Ins
     f.render_widget(
         spread(
             vec![
-                Span::styled(
-                    "oxiclean",
-                    theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
-                ),
+                Span::styled("oxiclean", theme.accent().add_modifier(Modifier::BOLD)),
                 Span::styled(" map", theme.strong()),
             ],
             facts,
@@ -319,7 +318,7 @@ fn map_view(f: &mut Frame<'_>, area: Rect, app: &mut App, theme: Theme, now: Ins
         vec![
             Line::from(Span::styled(
                 "No repeated checks",
-                theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
+                theme.accent().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 format!(
@@ -343,10 +342,7 @@ fn map_view(f: &mut Frame<'_>, area: Rect, app: &mut App, theme: Theme, now: Ins
         let indent = " ".repeat(big.chars().count() + 2);
         vec![
             Line::from(vec![
-                Span::styled(
-                    big,
-                    theme.fg(share_color(share)).add_modifier(ratatui::style::Modifier::BOLD),
-                ),
+                Span::styled(big, theme.fg(share_color(share)).add_modifier(Modifier::BOLD)),
                 Span::raw("  "),
                 Span::styled(
                     "of type checking repeats work another program already did",
@@ -418,11 +414,8 @@ fn render_causes(
         let color = cause_color(*cause);
         #[allow(clippy::cast_precision_loss)]
         let frac = *n as f32 / map.repeats.max(1) as f32;
-        let tag_style = if dimmed {
-            theme.muted()
-        } else {
-            theme.fg(color).add_modifier(ratatui::style::Modifier::BOLD)
-        };
+        let tag_style =
+            if dimmed { theme.muted() } else { theme.fg(color).add_modifier(Modifier::BOLD) };
         let desc_style = if on {
             theme.strong()
         } else if dimmed {
@@ -594,19 +587,23 @@ fn render_detail(f: &mut Frame<'_>, area: Rect, app: &App, theme: Theme, now: In
         if members.is_empty() || lines.len() + 2 > h {
             continue;
         }
-        let total: usize = members.iter().map(|c| c.files).sum();
+        let total: usize = members.iter().map(|c| c.repeats).sum();
         let color = cause_color(cause);
         let label = plural(members.len(), "program");
         lines.push(spread(
             vec![
                 Span::styled(
                     cause.tag().to_uppercase(),
-                    theme.fg(color).add_modifier(ratatui::style::Modifier::BOLD),
+                    theme.fg(color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("   {label}"), theme.muted()),
             ],
             vec![Span::styled(
-                if cause.repeats() { plural(total, "check") } else { String::new() },
+                if total > 0 {
+                    format!("{} repeated", plural(total, "check"))
+                } else {
+                    String::new()
+                },
                 theme.muted(),
             )],
             w,
@@ -628,7 +625,7 @@ fn render_detail(f: &mut Frame<'_>, area: Rect, app: &App, theme: Theme, now: In
             ];
             spans.extend(bar(theme, bar_w, frac * grow, color.mix(TRACK, 0.5), color, None));
             spans.push(Span::styled(right(&grouped(c.files), files_w), theme.text()));
-            if let Some(via) = c.via.as_ref().filter(|_| c.cause.repeats()) {
+            if let Some(via) = c.via.as_ref().filter(|_| c.repeats > 0) {
                 // An import says where it is; an include, one file it takes.
                 let via = if c.cause == Cause::SourceImport {
                     via.clone()

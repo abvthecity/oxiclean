@@ -1,6 +1,7 @@
 use std::{
     io::{BufWriter, Write},
     process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -112,7 +113,13 @@ struct MapConfig {
 /// Opens the program map, or prints it in `format`.
 fn run_map(cfg: &MapConfig, format: OutputFormat) -> Result<()> {
     match format {
-        OutputFormat::Text => oxiclean_tui::run_map(cfg.common.clone()),
+        OutputFormat::Text => {
+            // Diagnostics on stderr would draw over the view.
+            QUIET.store(true, Ordering::Relaxed);
+            let shown = oxiclean_tui::run_map(cfg.common.clone());
+            QUIET.store(false, Ordering::Relaxed);
+            shown
+        }
         OutputFormat::Json => {
             let progress = oxiclean_typecheck::program_map::Progress::default();
             let map = oxiclean_typecheck::program_map::scan(&cfg.common, &progress)?;
@@ -263,7 +270,8 @@ impl Commands {
             Self::Cycles(cfg) => oxiclean_cycles::run_cycles_command(cfg),
             Self::Duplicates(cfg) => oxiclean_duplicates::run_duplicates_command(cfg),
             Self::Health(cfg) => cfg.run(),
-            Self::Map(_) => unreachable!("`map` is a view, not a command with findings"),
+            // A view, with no findings; `run` opens it instead.
+            Self::Map(cfg) => Ok(CommandResult::of_workspace(&cfg.common.workspace()?)),
         }
     }
 }
@@ -361,6 +369,15 @@ fn init_tracing() {
                 .with_default_directive(tracing::Level::ERROR.into())
                 .from_env_lossy(),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(|| -> Box<dyn Write> {
+            if QUIET.load(Ordering::Relaxed) {
+                Box::new(std::io::sink())
+            } else {
+                Box::new(std::io::stderr())
+            }
+        })
         .init();
 }
+
+/// Set while a view holds the terminal, which diagnostics would draw over.
+static QUIET: AtomicBool = AtomicBool::new(false);

@@ -905,8 +905,10 @@ JavaScript and TypeScript configs only insert text.
 
 `oxiclean map` opens an interactive view of the type checking a workspace
 does. A file should be checked once, by the tsconfig of the package it is
-in. The map counts every other program that checks it as a repeat, and
-shows:
+in (or that tsconfig's variants beside it). Any other program that checks
+the same file again repeats the work; a program over files nothing else
+checks, such as an e2e tsconfig over its own folder, repeats nothing. The
+map shows:
 
 - the share of all file checks that are repeats;
 - the causes of the repeats: imports that reach another package's source
@@ -923,8 +925,10 @@ Keys: `↑`/`↓` or `j`/`k` move, `1`–`5` show only one cause, `0` shows all,
 the view shows its progress. Set `NO_COLOR` for no color and
 `OXICLEAN_NO_MOTION` to turn off animation. `--format json` prints the same
 map as JSON without opening the view. For a source import the map counts
-every file the package's own tsconfig checks, an upper bound, as `tsc` only
-checks the files the imports reach.
+every file the package's programs check, an upper bound, as `tsc` only
+checks the files the imports reach; for a package no tsconfig includes, it
+counts the TypeScript files in its folder, and the first importer's check
+is the one that's needed.
 
 ## Time saved and health score
 

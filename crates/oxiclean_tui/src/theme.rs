@@ -126,11 +126,13 @@ pub(crate) fn bar(
 pub(crate) fn compact(n: usize) -> String {
     #[allow(clippy::cast_precision_loss)]
     let f = n as f64;
+    // Each bound is where rounding would widen the number, as 9,950
+    // would print as `10.0k`.
     match n {
         0..1_000 => n.to_string(),
-        1_000..10_000 => format!("{:.1}k", f / 1e3),
-        10_000..1_000_000 => format!("{:.0}k", f / 1e3),
-        1_000_000..10_000_000 => format!("{:.2}M", f / 1e6),
+        1_000..9_950 => format!("{:.1}k", f / 1e3),
+        9_950..999_500 => format!("{:.0}k", f / 1e3),
+        999_500..9_995_000 => format!("{:.2}M", f / 1e6),
         _ => format!("{:.1}M", f / 1e6),
     }
 }
@@ -161,6 +163,8 @@ mod tests {
         assert_eq!(compact(1_240), "1.2k");
         assert_eq!(compact(29_040), "29k");
         assert_eq!(compact(1_384_220), "1.38M");
+        assert_eq!(compact(9_960), "10k");
+        assert_eq!(compact(999_950), "1.00M");
         assert_eq!(grouped(1_384_220), "1,384,220");
         assert_eq!(grouped(12), "12");
     }

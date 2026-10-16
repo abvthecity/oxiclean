@@ -19,7 +19,7 @@
 //! reach, so [`Progress`] reports how far it has got for a progress bar.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
@@ -87,11 +87,12 @@ impl Progress {
     /// The total grows as imports lead to more files.
     #[must_use]
     pub fn files(&self) -> (usize, usize) {
-        (self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed))
+        let total = self.total.load(Ordering::Relaxed);
+        (self.done.load(Ordering::Relaxed).min(total), total)
     }
 
     /// Moves on to `phase`.
-    pub fn set_phase(&self, phase: Phase) {
+    pub(crate) fn set_phase(&self, phase: Phase) {
         let i = Phase::ALL.iter().position(|p| *p == phase).unwrap_or(Phase::ALL.len() - 1);
         self.phase.store(u8::try_from(i).unwrap_or(u8::MAX), Ordering::Relaxed);
     }
@@ -194,11 +195,13 @@ pub struct Checker {
     /// How it reaches the files.
     pub cause: Cause,
     /// How many of the package's files it checks. For a source import,
-    /// the files the owner checks: an upper bound, as `tsc` only checks
-    /// what the imports reach.
+    /// every file the package's programs check: an upper bound, as `tsc`
+    /// only checks what the imports reach.
     pub files: usize,
-    /// Whether this check repeats one another program already does.
-    pub repeat: bool,
+    /// How many of those files a program listed before it already checks.
+    /// Always 0 for the owner and its variants, and for a program whose
+    /// files nothing else checks.
+    pub repeats: usize,
     /// Where the program reaches the package: the import, as
     /// `file:line`, or one of the files its `include` matches.
     pub via: Option<String>,
@@ -212,9 +215,11 @@ pub struct PackageChecks {
     pub name: String,
     /// Its directory, relative to the root.
     pub dir: String,
-    /// The files its owner checks.
+    /// The files any of its programs check. When only imports reach the
+    /// package, the TypeScript files in its directory.
     pub files: usize,
-    /// Every program that checks it, the owner first, then by files.
+    /// Every program that checks it: the owner, its variants, then the
+    /// rest, most repeated checks first.
     pub checkers: Vec<Checker>,
     /// Checks of its files that repeat work.
     pub repeats: usize,
@@ -230,7 +235,7 @@ impl PackageChecks {
     /// The repeated checks of `cause`.
     #[must_use]
     pub fn repeats_of(&self, cause: Cause) -> usize {
-        self.checkers.iter().filter(|c| c.repeat && c.cause == cause).map(|c| c.files).sum()
+        self.checkers.iter().filter(|c| c.cause == cause).map(|c| c.repeats).sum()
     }
 }
 
@@ -238,7 +243,9 @@ impl PackageChecks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct CauseRepeats {
+    /// The cause.
     pub cause: Cause,
+    /// The checks it repeats, across every package.
     pub repeats: usize,
 }
 
@@ -279,22 +286,19 @@ pub fn scan(common: &CommonArgs, progress: &Progress) -> Result<ProgramMap> {
 
 /// Builds the map for `project`, whose tsconfig files are `configs`.
 #[must_use]
-pub fn build(project: &Project, configs: &TsConfigs, progress: &Progress) -> ProgramMap {
+pub(crate) fn build(project: &Project, configs: &TsConfigs, progress: &Progress) -> ProgramMap {
     progress.set_phase(Phase::Imports);
     let imports = package_imports(project, configs, Some(progress));
     progress.set_phase(Phase::Packages);
     let closure = reference_closure(configs);
     let programs: Vec<&TsConfigFile> = configs.programs().collect();
-    let outputs: Vec<PathBuf> =
+    let outputs: HashSet<PathBuf> =
         configs.configs.iter().flat_map(TsConfigFile::output_dirs).collect();
     let root = &project.root;
     let package_of = |path: &Path| project.package_for(path).unwrap_or(ROOT_PACKAGE);
     // Looking a package up scans every package, and programs share most
     // of their files, so lookups are kept per directory.
     let mut packages_by_dir: HashMap<&Path, &str> = HashMap::new();
-    let dir_of = |name: &str| {
-        project.workspace_package(name).map_or_else(|| root.clone(), Path::to_path_buf)
-    };
 
     // The files each program includes, by package.
     let mut included: BTreeMap<String, Vec<(usize, Vec<&Path>)>> = BTreeMap::new();
@@ -310,85 +314,63 @@ pub fn build(project: &Project, configs: &TsConfigs, progress: &Progress) -> Pro
         }
     }
 
-    let mut packages: Vec<PackageChecks> = Vec::new();
     let mut names: BTreeSet<String> = included.keys().cloned().collect();
     names.extend(imports.values().flat_map(|m| m.keys().cloned()));
+    let mut packages: Vec<PackageChecks> = Vec::new();
     for name in names {
-        let dir = dir_of(&name);
+        let dir = project.workspace_package(&name).map_or_else(|| root.clone(), Path::to_path_buf);
         let reached = included.remove(&name).unwrap_or_default();
-        // The owner: a program of the package itself that includes its
-        // files, preferring its `tsconfig.json`, then the most files.
-        let owner = reached
+        let ctx =
+            Package { project, programs: &programs, outputs: &outputs, name: &name, dir: &dir };
+        let mut checkers = ctx.includers(&reached);
+        let checked: HashSet<&Path> = reached.iter().flat_map(|(_, f)| f.iter().copied()).collect();
+        let mut files = checked.len();
+        // Programs that reach the package through imports instead, in
+        // program order. Without any program that includes its files, the
+        // first of them is the one check that's needed.
+        let importers: Vec<(usize, String)> = programs
             .iter()
-            .filter(|(i, _)| package_of(&programs[*i].path) == name)
-            .max_by_key(|(i, files)| {
-                (programs[*i].dir == dir && programs[*i].name() == "tsconfig.json", files.len())
-            })
-            .map(|(i, _)| *i);
-        let files = owner
-            .and_then(|o| reached.iter().find(|(i, _)| *i == o))
-            .or_else(|| reached.iter().max_by_key(|(_, f)| f.len()))
-            .map_or(0, |(_, f)| f.len());
-        // Without an owner, the program with the most files is the one
-        // check that counts.
-        let baseline =
-            owner.or_else(|| reached.iter().max_by_key(|(_, f)| f.len()).map(|(i, _)| *i));
-
-        let mut checkers: Vec<Checker> = reached
-            .iter()
-            .map(|(i, f)| {
-                let p = programs[*i];
-                let cause = match owner {
-                    Some(o) if o == *i => Cause::Owner,
-                    // Only the package's own configs count as variants: a
-                    // root config the owner extends still checks it again.
-                    Some(o) if package_of(&p.path) == name && related(programs[o], p) => {
-                        Cause::Variant
-                    }
-                    _ => include_cause(p, f, &outputs),
-                };
-                Checker {
-                    program: relative(root, &p.path),
-                    cause,
-                    files: f.len(),
-                    repeat: cause.repeats() && baseline != Some(*i),
-                    via: f.first().map(|f| relative(root, f)),
-                }
+            .enumerate()
+            .filter(|(i, _)| !reached.iter().any(|(r, _)| r == i))
+            .filter_map(|(i, p)| {
+                let site = imports.get(&p.path)?.get(&name)?;
+                let referenced =
+                    || closure.get(p.path.as_path()).is_some_and(|c| covers(project, c, &name));
+                (site.source && !referenced())
+                    .then(|| (i, format!("{}:{}", relative(root, &site.file), site.line)))
             })
             .collect();
-        for (i, p) in programs.iter().enumerate() {
-            let Some(site) = imports.get(&p.path).and_then(|m| m.get(&name)) else { continue };
-            let referenced =
-                closure.get(p.path.as_path()).is_some_and(|c| covers(project, c, &name));
-            if !site.source || referenced || reached.iter().any(|(r, _)| *r == i) {
-                continue;
-            }
+        if files == 0 && !importers.is_empty() {
+            files = typescript_files(project, &dir, &name);
+        }
+        for (n, (i, via)) in importers.into_iter().enumerate() {
+            let first = checked.is_empty() && n == 0;
             checkers.push(Checker {
-                program: relative(root, &p.path),
+                program: relative(root, &programs[i].path),
                 cause: Cause::SourceImport,
                 files,
-                repeat: true,
-                via: Some(format!("{}:{}", relative(root, &site.file), site.line)),
+                repeats: if first { 0 } else { files },
+                via: Some(via),
             });
         }
         if checkers.is_empty() {
             continue;
         }
         checkers.sort_by(|a, b| {
-            (a.repeat, std::cmp::Reverse(a.files), &a.program).cmp(&(
-                b.repeat,
-                std::cmp::Reverse(b.files),
-                &b.program,
-            ))
+            rank(a.cause)
+                .cmp(&rank(b.cause))
+                .then_with(|| b.repeats.cmp(&a.repeats))
+                .then_with(|| b.files.cmp(&a.files))
+                .then_with(|| a.program.cmp(&b.program))
         });
-        let repeats = checkers.iter().filter(|c| c.repeat).map(|c| c.files).sum();
+        let repeats = checkers.iter().map(|c| c.repeats).sum();
         packages.push(PackageChecks { dir: relative(root, &dir), name, files, checkers, repeats });
     }
     packages.sort_by(|a, b| {
         b.repeats
             .cmp(&a.repeats)
-            .then(b.checked_by().cmp(&a.checked_by()))
-            .then(a.name.cmp(&b.name))
+            .then_with(|| b.checked_by().cmp(&a.checked_by()))
+            .then_with(|| a.name.cmp(&b.name))
     });
 
     let checks = packages.iter().flat_map(|p| &p.checkers).map(|c| c.files).sum();
@@ -405,30 +387,153 @@ pub fn build(project: &Project, configs: &TsConfigs, progress: &Progress) -> Pro
     ProgramMap { root: root.clone(), programs: programs.len(), checks, repeats, causes, packages }
 }
 
+/// Where a cause sorts among a package's checkers: the owner, then its
+/// variants, then the rest.
+fn rank(cause: Cause) -> u8 {
+    match cause {
+        Cause::Owner => 0,
+        Cause::Variant => 1,
+        _ => 2,
+    }
+}
+
+/// One package, for working out who checks it.
+struct Package<'a> {
+    project: &'a Project,
+    programs: &'a [&'a TsConfigFile],
+    outputs: &'a HashSet<PathBuf>,
+    name: &'a str,
+    dir: &'a Path,
+}
+
+impl Package<'_> {
+    fn owns(&self, program: &TsConfigFile) -> bool {
+        self.project.package_for(&program.path).unwrap_or(ROOT_PACKAGE) == self.name
+    }
+
+    /// The programs whose `include` reaches the package's files, as
+    /// checkers. A program's files count as repeats when the owner, a
+    /// variant or a program with more files already checks them, so a
+    /// program over files nothing else checks (an e2e tsconfig over its
+    /// own folder, say) repeats nothing.
+    fn includers(&self, reached: &[(usize, Vec<&Path>)]) -> Vec<Checker> {
+        let programs = self.programs;
+        // The owner: a program of the package itself, preferring its
+        // `tsconfig.json`, then the most files.
+        let owner = reached
+            .iter()
+            .filter(|(i, _)| self.owns(programs[*i]))
+            .max_by_key(|(i, files)| {
+                let p = programs[*i];
+                (p.dir == self.dir && p.name() == "tsconfig.json", files.len())
+            })
+            .map(|(i, _)| *i);
+        let mut ordered: Vec<(usize, Cause, &[&Path])> = reached
+            .iter()
+            .map(|(i, f)| {
+                let p = programs[*i];
+                let cause = match owner {
+                    Some(o) if o == *i => Cause::Owner,
+                    // Only the package's own configs count as variants: a
+                    // root config the owner extends still checks it again.
+                    Some(o) if self.owns(p) && related(programs[o], p) => Cause::Variant,
+                    _ => self.include_cause(p, f),
+                };
+                (*i, cause, f.as_slice())
+            })
+            .collect();
+        ordered.sort_by(|a, b| {
+            rank(a.1)
+                .cmp(&rank(b.1))
+                .then_with(|| b.2.len().cmp(&a.2.len()))
+                .then_with(|| programs[a.0].path.cmp(&programs[b.0].path))
+        });
+        let mut seen: HashSet<&Path> = HashSet::new();
+        ordered
+            .into_iter()
+            .map(|(i, cause, files)| {
+                let repeats = if cause.repeats() {
+                    files.iter().filter(|f| seen.contains(*f)).count()
+                } else {
+                    0
+                };
+                seen.extend(files.iter().copied());
+                Checker {
+                    program: relative(&self.project.root, &programs[i].path),
+                    cause,
+                    files: files.len(),
+                    repeats,
+                    via: files.first().map(|f| relative(&self.project.root, f)),
+                }
+            })
+            .collect()
+    }
+
+    /// Why `program` includes `files` of a package it doesn't own.
+    fn include_cause(&self, program: &TsConfigFile, files: &[&Path]) -> Cause {
+        let in_output = files
+            .iter()
+            .filter(|f| f.ancestors().skip(1).any(|a| self.outputs.contains(a)))
+            .count();
+        // Words of the file name and folders below the root, so where the
+        // repo is checked out doesn't matter.
+        let name = program.name().to_ascii_lowercase();
+        let words: Vec<&str> = name.split(['.', '-', '_']).collect();
+        let rel = program.dir.strip_prefix(&self.project.root).unwrap_or(Path::new(""));
+        let folders: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect();
+        let is_test = |w: &str| TEST_WORDS.contains(&w);
+        if in_output * 2 > files.len() {
+            Cause::BuildOutput
+        } else if words.iter().any(|w| *w == "lint" || w.contains("eslint")) {
+            Cause::CatchAll
+        } else if words.iter().any(|w| is_test(w)) || folders.iter().any(|f| is_test(f)) {
+            Cause::Tests
+        } else {
+            Cause::Include
+        }
+    }
+}
+
+/// Words in a tsconfig's name or folders that mark it as one for tests.
+const TEST_WORDS: &[&str] = &[
+    "test",
+    "tests",
+    "__tests__",
+    "spec",
+    "specs",
+    "e2e",
+    "vitest",
+    "jest",
+    "cypress",
+    "playwright",
+];
+
 /// Whether `a` and `b` are variants of one project: in one directory, or
 /// one extending the other.
 fn related(a: &TsConfigFile, b: &TsConfigFile) -> bool {
     a.dir == b.dir || a.ancestors.contains(&b.path) || b.ancestors.contains(&a.path)
 }
 
-/// Why `program` includes `files` of a package it doesn't own.
-fn include_cause(program: &TsConfigFile, files: &[&Path], outputs: &[PathBuf]) -> Cause {
-    let in_output = files.iter().filter(|f| outputs.iter().any(|o| f.starts_with(o))).count();
-    let name = program.name().to_ascii_lowercase();
-    let dir = program.dir.to_string_lossy().to_ascii_lowercase();
-    let tests = ["test", "spec", "vitest", "jest", "e2e"];
-    if in_output * 2 > files.len() {
-        Cause::BuildOutput
-    } else if name.contains("lint") {
-        Cause::CatchAll
-    } else if tests
-        .iter()
-        .any(|t| name.contains(t) || dir.ends_with(t) || dir.ends_with(&format!("{t}s")))
-    {
-        Cause::Tests
-    } else {
-        Cause::Include
-    }
+/// The TypeScript files of package `name` in `dir`, other than
+/// declarations and files of packages inside it, for a package no program
+/// includes.
+fn typescript_files(project: &Project, dir: &Path, name: &str) -> usize {
+    ignore::WalkBuilder::new(dir)
+        .hidden(false)
+        .filter_entry(|e| e.file_name() != "node_modules")
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy();
+            [".ts", ".tsx", ".mts", ".cts"].iter().any(|x| n.ends_with(x))
+                && ![".d.ts", ".d.mts", ".d.cts"].iter().any(|x| n.ends_with(x))
+        })
+        .filter(|e| project.package_for(e.path()) == Some(name))
+        .count()
 }
 
 #[cfg(test)]
@@ -492,14 +597,12 @@ mod tests {
         assert_eq!(progress.files().0, progress.files().1);
 
         let ui = map.packages.iter().find(|p| p.name == "@acme/ui").unwrap();
-        let summary: Vec<(&str, Cause, usize, bool)> =
-            ui.checkers.iter().map(|c| (c.program.as_str(), c.cause, c.files, c.repeat)).collect();
         assert_eq!(
-            summary,
+            summary(ui),
             [
-                ("packages/ui/tsconfig.json", Cause::Owner, 2, false),
-                ("packages/web/tsconfig.json", Cause::SourceImport, 2, true),
-                ("tsconfig.eslint.json", Cause::CatchAll, 2, true),
+                ("packages/ui/tsconfig.json", Cause::Owner, 2, 0),
+                ("packages/web/tsconfig.json", Cause::SourceImport, 2, 2),
+                ("tsconfig.eslint.json", Cause::CatchAll, 2, 2),
             ]
         );
         assert_eq!(ui.checkers[1].via.as_deref(), Some("packages/web/src/app.ts:1"));
@@ -529,7 +632,101 @@ mod tests {
         let map = build(&project, &TsConfigs::load(&project), &Progress::default());
         let ui = map.packages.iter().find(|p| p.name == "@acme/ui").unwrap();
         let root_config = ui.checkers.iter().find(|c| c.program == "tsconfig.json").unwrap();
-        assert_eq!((root_config.cause, root_config.repeat), (Cause::Include, true));
+        assert_eq!((root_config.cause, root_config.repeats), (Cause::Include, 2));
+    }
+
+    fn summary(p: &PackageChecks) -> Vec<(&str, Cause, usize, usize)> {
+        p.checkers.iter().map(|c| (c.program.as_str(), c.cause, c.files, c.repeats)).collect()
+    }
+
+    fn map_of(root: &Path) -> ProgramMap {
+        let project = Project::load(root);
+        build(&project, &TsConfigs::load(&project), &Progress::default())
+    }
+
+    fn package<'a>(map: &'a ProgramMap, name: &str) -> &'a PackageChecks {
+        map.packages.iter().find(|p| p.name == name).unwrap()
+    }
+
+    #[test]
+    fn programs_over_their_own_files_repeat_nothing() {
+        let (_t, root) = fixture();
+        // An e2e project over its own folder, a test config over source
+        // and tests, and a variant beside the owner.
+        write(&root, "packages/web/e2e/tsconfig.json", r#"{ "include": ["."] }"#);
+        write(&root, "packages/web/e2e/app.spec.ts", "export {};\n");
+        write(&root, "packages/web/tests/tsconfig.json", r#"{ "include": ["..", "."] }"#);
+        write(&root, "packages/web/tsconfig.build.json", r#"{ "extends": "./tsconfig.json" }"#);
+        let map = map_of(&root);
+        let web = summary(package(&map, "@acme/web"));
+        let find = |program: &str| *web.iter().find(|c| c.0 == program).unwrap();
+        assert_eq!(find("packages/web/tsconfig.build.json").1, Cause::Variant);
+        assert_eq!(find("packages/web/tsconfig.build.json").3, 0);
+        // The e2e spec is checked by the e2e project, and again by the
+        // test config that includes the whole package.
+        let e2e = find("packages/web/e2e/tsconfig.json");
+        let tests = find("packages/web/tests/tsconfig.json");
+        assert_eq!(tests.1, Cause::Tests);
+        assert_eq!(e2e.1, Cause::Tests);
+        assert_eq!(e2e.3 + tests.3, 2, "{web:?}");
+    }
+
+    #[test]
+    fn where_the_repo_is_checked_out_does_not_matter() {
+        let t = TempDir::new().unwrap();
+        let base = t.path().canonicalize().unwrap().join("latest");
+        let (_f, fixture_root) = fixture();
+        for e in ignore::WalkBuilder::new(&fixture_root).hidden(false).build().flatten() {
+            let rel = e.path().strip_prefix(&fixture_root).unwrap();
+            if e.file_type().is_some_and(|t| t.is_file()) {
+                write(&base, &rel.to_string_lossy(), &fs::read_to_string(e.path()).unwrap());
+            }
+        }
+        write(&base, "tsconfig.json", r#"{ "include": ["packages"] }"#);
+        let map = map_of(&base);
+        let ui = summary(package(&map, "@acme/ui"));
+        assert!(ui.iter().any(|c| c.0 == "tsconfig.json" && c.1 == Cause::Include), "{ui:?}");
+    }
+
+    #[test]
+    fn build_output_is_its_own_cause() {
+        let (_t, root) = fixture();
+        write(
+            &root,
+            "packages/ui/tsconfig.build.json",
+            r#"{ "include": ["src"], "compilerOptions": { "outDir": "dist" } }"#,
+        );
+        write(&root, "packages/ui/dist/index.d.ts", "export {};\n");
+        write(&root, "packages/ui/dist/button.d.ts", "export {};\n");
+        write(&root, "tsconfig.json", r#"{ "include": ["packages/ui/dist"] }"#);
+        let map = map_of(&root);
+        let ui = summary(package(&map, "@acme/ui"));
+        assert!(ui.iter().any(|c| c.0 == "tsconfig.json" && c.1 == Cause::BuildOutput), "{ui:?}");
+    }
+
+    #[test]
+    fn a_package_only_imports_reach_is_checked_once_per_extra_importer() {
+        let (_t, root) = fixture();
+        fs::remove_file(root.join("packages/ui/tsconfig.json")).unwrap();
+        fs::remove_file(root.join("tsconfig.eslint.json")).unwrap();
+        write(&root, "packages/admin/package.json", r#"{ "name": "@acme/admin" }"#);
+        write(
+            &root,
+            "packages/admin/tsconfig.json",
+            r#"{ "extends": "../../tsconfig.base.json", "include": ["src"] }"#,
+        );
+        write(
+            &root,
+            "packages/admin/src/main.ts",
+            "import { Button } from '@acme/ui';\nexport const m = Button;\n",
+        );
+        let map = map_of(&root);
+        let ui = package(&map, "@acme/ui");
+        assert_eq!(ui.files, 2);
+        let repeats: Vec<(Cause, usize)> =
+            ui.checkers.iter().map(|c| (c.cause, c.repeats)).collect();
+        assert_eq!(repeats, [(Cause::SourceImport, 2), (Cause::SourceImport, 0)], "{ui:?}");
+        assert_eq!(ui.repeats, 2);
     }
 
     #[test]

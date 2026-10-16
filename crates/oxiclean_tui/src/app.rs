@@ -2,6 +2,8 @@
 //! the clock its animations run on. Drawing is in [`crate::ui`].
 
 use std::{
+    any::Any,
+    panic::{self, AssertUnwindSafe},
     sync::{
         Arc,
         mpsc::{self, Receiver, TryRecvError},
@@ -24,6 +26,15 @@ pub(crate) const REVEAL: Duration = Duration::from_millis(520);
 /// How long the detail's bars take to grow in for a new selection.
 pub(crate) const SELECT: Duration = Duration::from_millis(220);
 
+/// The text of a panic, when it has one.
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
+}
+
 /// A scan in progress.
 #[derive(Debug)]
 pub(crate) struct Scan {
@@ -44,8 +55,14 @@ impl Scan {
             .name("oxiclean-scan".into())
             .stack_size(SCAN_STACK)
             .spawn(move || {
-                let found = program_map::scan(&common, &p)
-                    .map_err(|e| oxiclean_core::command::describe(&e));
+                // A panic in the scan becomes an error the view shows; the
+                // view's panic hook leaves the terminal alone for it.
+                let scanned =
+                    panic::catch_unwind(AssertUnwindSafe(|| program_map::scan(&common, &p)));
+                let found = match scanned {
+                    Ok(found) => found.map_err(|e| oxiclean_core::command::describe(&e)),
+                    Err(payload) => Err(format!("the scan crashed: {}", panic_message(&*payload))),
+                };
                 // The view may have quit already; then nobody wants it.
                 let _ = tx.send(found);
             });
@@ -108,7 +125,20 @@ pub(crate) struct App {
 impl App {
     /// A view of the workspace `common` names, scanning it from `now`.
     pub(crate) fn new(common: CommonArgs, now: Instant) -> Self {
-        let scan = Some(Scan::start(&common, now));
+        let scan = Scan::start(&common, now);
+        let motion = std::env::var_os("OXICLEAN_NO_MOTION").is_none();
+        Self::blank(common, Some(scan), motion, now)
+    }
+
+    /// A view of a map that is already built, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_map(map: ProgramMap, now: Instant) -> Self {
+        let mut app = Self::blank(CommonArgs::default(), None, false, now);
+        app.finish(Ok(map), now);
+        app
+    }
+
+    fn blank(common: CommonArgs, scan: Option<Scan>, motion: bool, now: Instant) -> Self {
         Self {
             common,
             scan,
@@ -121,31 +151,9 @@ impl App {
             selected: 0,
             offset: 0,
             selected_at: now,
-            motion: std::env::var_os("OXICLEAN_NO_MOTION").is_none(),
+            motion,
             quit: false,
         }
-    }
-
-    /// A view of a map that is already built, for tests.
-    #[cfg(test)]
-    pub(crate) fn with_map(map: ProgramMap, now: Instant) -> Self {
-        let mut app = Self {
-            common: CommonArgs::default(),
-            scan: None,
-            loaded: None,
-            error: None,
-            cause: None,
-            search: String::new(),
-            searching: false,
-            visible: Vec::new(),
-            selected: 0,
-            offset: 0,
-            selected_at: now,
-            motion: false,
-            quit: false,
-        };
-        app.finish(Ok(map), now);
-        app
     }
 
     /// Takes in the scan's result, if it has finished.
@@ -159,14 +167,18 @@ impl App {
         let took = self.scan.take().map_or(Duration::ZERO, |s| now - s.started);
         match found {
             Ok(map) => {
-                // Keep the selected package across a rescan.
+                // Keep the selected package across a rescan. The old
+                // indexes don't fit the new map, so they go first.
                 let keep = self.package().map(|p| p.name.clone());
+                self.visible.clear();
                 self.loaded = Some(Loaded { map, at: now, took });
                 self.error = None;
                 self.refilter();
                 if let Some(name) = keep
-                    && let Some(i) =
-                        self.visible.iter().position(|&i| self.map_package(i).name == name)
+                    && let Some(i) = self
+                        .visible
+                        .iter()
+                        .position(|&i| self.map().is_some_and(|m| m.packages[i].name == name))
                 {
                     self.selected = i;
                 }
@@ -187,14 +199,10 @@ impl App {
         self.loaded.as_ref().map(|l| &l.map)
     }
 
-    fn map_package(&self, i: usize) -> &PackageChecks {
-        &self.loaded.as_ref().expect("visible packages come from a loaded map").map.packages[i]
-    }
-
     /// The selected package.
     pub(crate) fn package(&self) -> Option<&PackageChecks> {
         let i = *self.visible.get(self.selected)?;
-        self.map().map(|m| &m.packages[i])
+        self.map()?.packages.get(i)
     }
 
     /// How much of a package counts under the current filter.
@@ -210,7 +218,10 @@ impl App {
         (map.packages.len() - once - self.visible.len(), once)
     }
 
+    /// Applies the filters, keeping the selected package selected when it
+    /// still shows.
     fn refilter(&mut self) {
+        let keep = self.package().map(|p| p.name.clone());
         let needle = self.search.to_lowercase();
         self.visible = match self.map() {
             Some(map) => map
@@ -223,15 +234,16 @@ impl App {
                 .collect(),
             None => Vec::new(),
         };
-        if self.cause.is_some() {
+        if let (Some(cause), Some(loaded)) = (self.cause, &self.loaded) {
             // Rank by the cause's own repeats.
-            let map = &self.loaded.as_ref().expect("filtered a loaded map").map;
-            let cause = self.cause;
-            self.visible.sort_by_key(|&i| {
-                std::cmp::Reverse(cause.map_or(0, |c| map.packages[i].repeats_of(c)))
-            });
+            let packages = &loaded.map.packages;
+            self.visible.sort_by_key(|&i| std::cmp::Reverse(packages[i].repeats_of(cause)));
         }
-        self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+        let kept = keep.and_then(|name| {
+            let packages = &self.loaded.as_ref()?.map.packages;
+            self.visible.iter().position(|&i| packages[i].name == name)
+        });
+        self.selected = kept.unwrap_or(self.selected).min(self.visible.len().saturating_sub(1));
     }
 
     fn select(&mut self, to: usize, now: Instant) {
@@ -258,7 +270,11 @@ impl App {
                 KeyCode::Backspace => {
                     self.search.pop();
                 }
-                KeyCode::Char(c) => self.search.push(c),
+                KeyCode::Char(c)
+                    if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.search.push(c);
+                }
                 KeyCode::Down => self.select(self.selected + 1, now),
                 KeyCode::Up => self.select(self.selected.saturating_sub(1), now),
                 _ => return,
@@ -288,17 +304,16 @@ impl App {
                 self.refilter();
             }
             KeyCode::Char(c @ '1'..='9') => {
-                let causes: Vec<Cause> = self
-                    .map()
-                    .map(|m| m.causes.iter().map(|c| c.cause).collect())
-                    .unwrap_or_default();
-                let n = c.to_digit(10).map_or(0, |d| d as usize);
-                if let Some(&picked) = causes.get(n - 1) {
+                let n = c.to_digit(10).and_then(|d| usize::try_from(d).ok()).unwrap_or(0);
+                let picked =
+                    self.map().and_then(|m| m.causes.get(n.checked_sub(1)?)).map(|c| c.cause);
+                if let Some(picked) = picked {
                     self.cause = if self.cause == Some(picked) { None } else { Some(picked) };
+                    self.refilter();
+                    // A new filter starts from its biggest package.
                     self.selected = 0;
                     self.offset = 0;
                     self.selected_at = now;
-                    self.refilter();
                 }
             }
             KeyCode::Char('r') if self.scan.is_none() => {

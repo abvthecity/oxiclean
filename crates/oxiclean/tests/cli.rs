@@ -1229,19 +1229,19 @@ fn map_prints_who_checks_each_package() {
         assert_eq!(code, 0, "{manager}: {json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["packages"][0]["name"], "@acme/ui", "{manager}: {v}");
-        let checkers: Vec<(String, String, bool)> = v["packages"][0]["checkers"]
+        let checkers: Vec<(String, String, u64)> = v["packages"][0]["checkers"]
             .as_array()
             .unwrap()
             .iter()
             .map(|c| {
                 let s = |k: &str| c[k].as_str().unwrap().to_string();
-                (s("program"), s("cause"), c["repeat"].as_bool().unwrap())
+                (s("program"), s("cause"), c["repeats"].as_u64().unwrap())
             })
             .collect();
         let mut expected = vec![
-            ("packages/ui/tsconfig.json", "owner", false),
-            ("packages/app/tsconfig.json", "source-import", true),
-            ("tsconfig.json", "include", true),
+            ("packages/ui/tsconfig.json", "owner", 0),
+            ("packages/app/tsconfig.json", "source-import", 9),
+            ("tsconfig.json", "include", 9),
         ];
         // Deno resolves workspace members from deno.json, which `tsc` and
         // so the map don't follow: the import isn't counted.
@@ -1249,7 +1249,7 @@ fn map_prints_who_checks_each_package() {
             expected.remove(1);
         }
         let repeats = 9 * (expected.len() - 1);
-        let expected: Vec<(String, String, bool)> =
+        let expected: Vec<(String, String, u64)> =
             expected.iter().map(|(p, c, r)| (p.to_string(), c.to_string(), *r)).collect();
         assert_eq!(checkers, expected, "{manager}: {v}");
         assert_eq!(v["packages"][0]["repeats"], repeats, "{manager}: {v}");
