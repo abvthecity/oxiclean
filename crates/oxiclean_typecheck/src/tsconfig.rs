@@ -767,6 +767,19 @@ pub fn relative(from: &Path, to: &Path) -> String {
     if parts.is_empty() { ".".to_string() } else { parts.join("/") }
 }
 
+/// The resolved glob `pattern` (as [`slashes`] writes it) relative to
+/// directory `from`. Compared as text: a pattern isn't a path, and on
+/// Windows its `//?/C:/` no longer parses as the verbatim prefix it was.
+pub(crate) fn relative_pattern(from: &Path, pattern: &str) -> String {
+    let from = slashes(from);
+    let from: Vec<&str> = from.split('/').filter(|p| !p.is_empty()).collect();
+    let to: Vec<&str> = pattern.split('/').filter(|p| !p.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts = vec![".."; from.len() - common];
+    parts.extend(&to[common..]);
+    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +928,8 @@ mod tests {
     #[test]
     fn relative_paths() {
         assert_eq!(relative(Path::new("/a/b"), Path::new("/a/b/dist")), "dist");
+        assert_eq!(relative_pattern(Path::new("/a/b"), "/a/b/**/*.test.ts"), "**/*.test.ts");
+        assert_eq!(relative_pattern(Path::new("/a/b"), "/a/c/dist"), "../c/dist");
         assert_eq!(relative(Path::new("/a/b"), Path::new("/a/c")), "../c");
         assert_eq!(relative(Path::new("/a/b"), Path::new("/a/b")), ".");
     }

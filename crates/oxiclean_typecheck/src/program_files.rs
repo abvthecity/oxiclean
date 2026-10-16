@@ -24,7 +24,7 @@ use tracing::info;
 
 use crate::{
     config::{Config, DEFAULT_THRESHOLD, PROGRAM_FILES_RULE},
-    tsconfig::{TsConfigFile, TsConfigs, relative},
+    tsconfig::{TsConfigFile, TsConfigs, relative, relative_pattern},
 };
 
 /// JavaScript files at least this big are reported when `allowJs` pulls
@@ -177,10 +177,9 @@ pub(crate) fn exclude_fix(program: &TsConfigFile, patterns: &[String]) -> Fix {
         Vec::new()
     } else {
         match &program.exclude {
-            Some(inherited) => inherited
-                .iter()
-                .map(|p| Value::String(relative(&program.dir, Path::new(p))))
-                .collect(),
+            Some(inherited) => {
+                inherited.iter().map(|p| Value::String(relative_pattern(&program.dir, p))).collect()
+            }
             // `tsc`'s own default; the package folders it lists need no
             // entry, as wildcards never enter them.
             None => ["outDir", "declarationDir"]
