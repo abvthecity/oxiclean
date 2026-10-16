@@ -16,7 +16,7 @@
 //! ids, type ids or positions, so it stays put from one trace to the next.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fmt::Write as _,
     path::{Path, PathBuf},
     ptr,
@@ -44,51 +44,118 @@ pub(crate) fn run_on(workspace: &Workspace, trace: &Trace) -> Result<CheckResult
     let policy = workspace.policy(HOT_SPOTS_RULE, HOT_SPOTS_DEFAULT_THRESHOLD, Severity::Warn)?;
     let flagged = flagged_types(workspace, trace);
     let joiner = Joiner::new(&flagged);
-    let mut walker = Walker { trace, joiner: &joiner, out: Vec::new() };
+    let mut walker = Walker { trace, joiner: &joiner, out: Vec::new(), left_out: 0 };
     for project in &trace.projects {
         walker.walk(project, &project.frames, None);
     }
+    let left_out = walker.left_out;
     let (findings, meta): (Vec<Finding>, Vec<Meta>) = walker.out.into_iter().unzip();
     let mut meta = meta.into_iter();
     // Whether each finding so far is reported, by its index: the findings
     // come parents first.
     let mut kept: Vec<bool> = Vec::with_capacity(findings.len());
+    let mut dropped = Dropped::default();
     let result = workspace.finish_with(&policy, findings, trace.checked_files(), |f, rule| {
         let m = meta.next().unwrap_or_default();
         let parent_kept = m.parent.is_none_or(|p| kept.get(p).copied().unwrap_or(false));
-        let keep = rule.enabled
-            && !rule.ignored
-            && (f.value >= rule.threshold || (m.by_share && parent_kept));
+        let long_enough = f.value >= rule.threshold || (m.by_share && parent_kept);
+        let keep = rule.enabled && !rule.ignored && long_enough;
+        if !rule.enabled {
+            dropped.off += 1;
+        } else if rule.ignored {
+            dropped.ignored += 1;
+        } else if !long_enough {
+            dropped.short += 1;
+        }
         kept.push(keep);
         keep.then(|| m.confirmed.map_or(rule.severity, |s| s.max(rule.severity)))
     });
+    let mut result = result;
+    result.notes.extend(trace.notes.iter().cloned());
+    if result.findings.is_empty()
+        && let Some(note) = dropped.explain(trace, left_out)
+    {
+        debug!("{HOT_SPOTS_RULE}: {note}");
+        result.notes.push(note);
+    }
     info!(findings = result.findings.len(), "{HOT_SPOTS_RULE} check complete");
     Ok(result)
 }
 
-/// What `complex-types` flags, when it's on and some frame is in a file
-/// under the root; nothing, with a warning, when it can't run.
+/// How many frames the config file kept out of the report, and why.
+#[derive(Debug, Default)]
+struct Dropped {
+    /// In files the rule is off for.
+    off: usize,
+    /// In files the config file's `ignore` matches.
+    ignored: usize,
+    /// Below their file's threshold.
+    short: usize,
+}
+
+impl Dropped {
+    /// Why a trace with hot spots reports none, so an empty report isn't
+    /// mistaken for a fast build; `None` when it has none.
+    fn explain(&self, trace: &Trace, left_out: usize) -> Option<String> {
+        let mut frames = 0;
+        for project in &trace.projects {
+            visit(&project.frames, &mut |_| frames += 1);
+        }
+        if frames == 0 {
+            debug!("The trace has no span over the threshold");
+            return None;
+        }
+        let mut why = Vec::new();
+        if left_out > 0 {
+            why.push(format!(
+                "{left_out} are in files that aren't under the root ({}), and neither is the trace nor a package.json",
+                trace.root.display()
+            ));
+        }
+        if self.off > 0 {
+            why.push(format!(
+                "{} are in files `overrides` turn {HOT_SPOTS_RULE} off for",
+                self.off
+            ));
+        }
+        if self.ignored > 0 {
+            why.push(format!("{} are in files `ignorePatterns` match", self.ignored));
+        }
+        if self.short > 0 {
+            why.push(format!("{} are below their files' threshold", self.short));
+        }
+        Some(format!("The trace has {frames} hot spots, but none is reported: {}.", why.join("; ")))
+    }
+}
+
+/// What `complex-types` flags in the files under the root that frames are
+/// in or compare types declared in, when it's on; nothing, with a
+/// warning, when it can't run. Only those files and what they import are
+/// read, so the join costs as much as the hot spots, not the project.
 fn flagged_types(workspace: &Workspace, trace: &Trace) -> Vec<FlaggedType> {
     if !workspace.enabled(COMPLEX_TYPES_RULE) {
         return Vec::new();
     }
-    let here = |raw: &str| trace.paths.here_for_sure(raw).is_some();
-    let mut any_here = false;
+    let mut files = BTreeSet::new();
+    let mut add = |raw: &str| files.extend(trace.paths.here_for_sure(raw));
     for project in &trace.projects {
         visit(&project.frames, &mut |f| {
-            any_here = any_here
-                || f.file.as_deref().is_some_and(here)
-                || f.types
-                    .iter()
-                    .flatten()
-                    .any(|t| t.ty.location.as_ref().is_some_and(|l| here(&l.path)));
+            if let Some(file) = f.file.as_deref() {
+                add(file);
+            }
+            for t in f.types.iter().flatten() {
+                if let Some(l) = &t.ty.location {
+                    add(&l.path);
+                }
+            }
         });
     }
-    if !any_here {
+    if files.is_empty() {
         debug!("No hot spot is in a file under the root; not running {COMPLEX_TYPES_RULE}");
         return Vec::new();
     }
-    match oxiclean_typecheck::flagged_types(workspace) {
+    info!("Joining hot spots to {COMPLEX_TYPES_RULE} in {} files", files.len());
+    match oxiclean_typecheck::flagged_types_in(workspace, &files) {
         Ok(flagged) => flagged.unwrap_or_default(),
         Err(e) => {
             warn!(
@@ -146,6 +213,8 @@ struct Walker<'a, 'f> {
     trace: &'a Trace,
     joiner: &'a Joiner<'f>,
     out: Vec<(Finding, Meta)>,
+    /// Frames with nowhere under the root to be reported.
+    left_out: usize,
 }
 
 /// The frame a frame is in, for its related location.
@@ -185,6 +254,7 @@ impl<'f> Walker<'_, 'f> {
         let here = frame.file.as_deref().and_then(|f| trace.paths.here(f));
         let Some((file, line)) = self.location(project, frame, here.as_deref(), parent) else {
             debug!("Leaving out a {} frame: nothing it's in is under the root", frame.event);
+            self.left_out += 1;
             return None;
         };
         // A check reported on another file than its own says which.

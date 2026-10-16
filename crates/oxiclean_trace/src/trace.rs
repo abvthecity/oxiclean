@@ -20,6 +20,8 @@ pub(crate) struct Trace {
     pub paths: PathMap,
     /// The root, to show paths relative to.
     pub root: PathBuf,
+    /// The programs whose traces couldn't be read, and why, for the report.
+    pub notes: Vec<String>,
 }
 
 impl Trace {
@@ -66,6 +68,10 @@ impl Trace {
         if read.is_empty() {
             return Err(err(failures.join("; "), first_error));
         }
+        let notes = failures
+            .into_iter()
+            .map(|f| format!("Skipped a trace that can't be read: {f}."))
+            .collect();
         // Where the trace was recorded, from every program's paths, before
         // any is looked up.
         let mut paths = PathMap::new(&workspace.root);
@@ -79,7 +85,7 @@ impl Trace {
             .into_par_iter()
             .map(|(project, parsed)| analyze::analyze(project, parsed, thresholds, &paths))
             .collect();
-        Ok(Self { projects, paths, root: workspace.root.clone() })
+        Ok(Self { projects, paths, root: workspace.root.clone(), notes })
     }
 
     /// Files the traces checked.

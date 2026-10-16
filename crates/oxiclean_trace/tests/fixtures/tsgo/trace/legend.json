@@ -1,0 +1,26 @@
+[
+  {
+    "configFilePath": "/Users/Dev/tsgo-repo/packages/web/tsconfig.json",
+    "tracePath": "/Users/Dev/tsgo-repo/trace/trace.json",
+    "typesPath": "/Users/Dev/tsgo-repo/trace/types_0.json",
+    "checkerId": 0
+  },
+  {
+    "configFilePath": "/Users/Dev/tsgo-repo/packages/web/tsconfig.json",
+    "tracePath": "/Users/Dev/tsgo-repo/trace/trace.json",
+    "typesPath": "/Users/Dev/tsgo-repo/trace/types_1.json",
+    "checkerId": 1
+  },
+  {
+    "configFilePath": "/Users/Dev/tsgo-repo/packages/web/tsconfig.json",
+    "tracePath": "/Users/Dev/tsgo-repo/trace/trace.json",
+    "typesPath": "/Users/Dev/tsgo-repo/trace/types_2.json",
+    "checkerId": 2
+  },
+  {
+    "configFilePath": "/Users/Dev/tsgo-repo/packages/web/tsconfig.json",
+    "tracePath": "/Users/Dev/tsgo-repo/trace/trace.json",
+    "typesPath": "/Users/Dev/tsgo-repo/trace/types_3.json",
+    "checkerId": 3
+  }
+]

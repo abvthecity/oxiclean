@@ -50,7 +50,7 @@ mod typescript;
 
 pub use ambient_types::run_ambient_types_check;
 pub use command::{rules, run_typecheck_command};
-pub use complex_types::{FlaggedType, flagged_types, run_complex_types_check};
+pub use complex_types::{FlaggedType, flagged_types, flagged_types_in, run_complex_types_check};
 pub use config::{
     AMBIENT_TYPES_RULE, AMBIENT_TYPES_STYLE, COMPLEX_TYPES_DEFAULT_THRESHOLD, COMPLEX_TYPES_RULE,
     COMPLEX_TYPES_STYLE, Config, DEFAULT_THRESHOLD, ISOLATED_DECLARATIONS_RULE,

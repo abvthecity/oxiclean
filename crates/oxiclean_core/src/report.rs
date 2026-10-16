@@ -402,6 +402,9 @@ pub struct CheckResult {
     /// is off there and runs only for the files an override turns it on
     /// for.
     pub severity: Option<Severity>,
+    /// What the reader should know about the result that the findings
+    /// don't say, such as why a rule that found something reports none.
+    pub notes: Vec<String>,
 }
 
 impl CheckResult {
@@ -865,6 +868,9 @@ pub fn print_command<W: Write>(
     }
     for r in &clean {
         print_ok(writer, &r.style, r.result.threshold)?;
+        for note in &r.result.notes {
+            writeln!(writer, "  {} {note}", "⚠".yellow())?;
+        }
     }
     if !failed.is_empty() && !(found.is_empty() && clean.is_empty()) {
         writeln!(writer)?;

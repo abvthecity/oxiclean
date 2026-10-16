@@ -15,6 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+use rayon::prelude::*;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
@@ -380,8 +381,9 @@ fn add_types(frames: &mut [Frame], sources: &[TypeSource]) {
     if wanted.is_empty() {
         return;
     }
+    // tsc 7 writes a types file per checker, each read on its own thread.
     let loaded: HashMap<usize, TypesFile> = wanted
-        .into_iter()
+        .into_par_iter()
         .map(|(source, ids)| {
             info!("Reading {} for {} types", sources[source].path.display(), ids.len());
             (source, TypesFile::read(&sources[source].path, &ids))
