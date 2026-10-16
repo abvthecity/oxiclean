@@ -157,7 +157,7 @@ impl PathMap {
         let as_written = Path::new(raw);
         if as_written.is_absolute() && as_written.exists() {
             if as_written.starts_with(&self.root) {
-                return Some((as_written.to_path_buf(), true));
+                return Some((true_case(as_written.to_path_buf()), true));
             }
             if let Ok(real) = as_written.canonicalize()
                 && real.starts_with(&self.root)
@@ -266,7 +266,7 @@ fn under(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
     }
     let exact = parts.iter().fold(dir.to_path_buf(), |p, part| p.join(part));
     if exact.exists() {
-        return Some(exact);
+        return Some(true_case(exact));
     }
     let mut current = dir.to_path_buf();
     for part in parts {
@@ -282,7 +282,23 @@ fn under(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
                 .path()
         };
     }
-    Some(current)
+    Some(true_case(current))
+}
+
+/// `path` as spelled on disk, when it exists in another case: on a
+/// case-insensitive file system (macOS, Windows) a lowercased path exists
+/// as written. Symlinks are left as they are.
+fn true_case(path: PathBuf) -> PathBuf {
+    match path.canonicalize() {
+        Ok(real)
+            if real != path
+                && real.to_string_lossy().to_lowercase()
+                    == path.to_string_lossy().to_lowercase() =>
+        {
+            real
+        }
+        _ => path,
+    }
 }
 
 /// `raw` with `/` separators, as analyze-trace's patterns expect.
