@@ -38,6 +38,7 @@ use tracing::{info, warn};
 use crate::{
     config::{Config, DEFAULT_THRESHOLD, REFERENCES_RULE},
     declarations::{Format, Mode, is_typescript, package_file, paths_target},
+    program_map::Progress,
     tsconfig::{TsConfigFile, TsConfigs, relative, slashes},
 };
 
@@ -62,16 +63,16 @@ pub(crate) fn run_on(workspace: &Workspace, configs: &TsConfigs) -> Result<Check
 /// Where a program imports a workspace package first, and whether the
 /// import reaches the package's source.
 #[derive(Debug)]
-struct ImportSite {
-    file: PathBuf,
-    line: u32,
-    source: bool,
+pub(crate) struct ImportSite {
+    pub(crate) file: PathBuf,
+    pub(crate) line: u32,
+    pub(crate) source: bool,
 }
 
 /// The findings for `configs` in `project`.
 #[must_use]
 pub(crate) fn check(project: &Project, configs: &TsConfigs) -> Vec<Finding> {
-    let imports = package_imports(project, configs);
+    let imports = package_imports(project, configs, None);
     let closure = reference_closure(configs);
     let uses_references = configs
         .configs
@@ -132,19 +133,28 @@ fn read_imports(
 /// imports from the root files, so a program limited by `files` and the
 /// `.vue` or `.svelte` files its code imports count, and so do the
 /// packages `compilerOptions.types` loads.
-fn package_imports(
+///
+/// `progress`, when given, counts the files read and to read.
+pub(crate) fn package_imports(
     project: &Project,
     configs: &TsConfigs,
+    progress: Option<&Progress>,
 ) -> HashMap<PathBuf, BTreeMap<String, ImportSite>> {
     let cache = DashMap::new();
     let mut parsed: HashMap<PathBuf, FileImports> = HashMap::new();
     let mut frontier: BTreeSet<PathBuf> =
         configs.programs().flat_map(|p| p.root_files.iter().cloned()).collect();
     while !frontier.is_empty() {
+        if let Some(p) = progress {
+            p.add_total(frontier.len());
+        }
         let read: Vec<(PathBuf, FileImports)> = frontier
             .into_par_iter()
             .map(|f| {
                 let imports = read_imports(project, &cache, &f);
+                if let Some(p) = progress {
+                    p.tick();
+                }
                 (f, imports)
             })
             .collect();
@@ -199,7 +209,7 @@ fn package_imports(
 /// The configs each config references, directly or through the configs
 /// it references: `tsc -b` builds them all first, and imports of any of
 /// them read its `.d.ts`.
-fn reference_closure(configs: &TsConfigs) -> HashMap<&Path, BTreeSet<&Path>> {
+pub(crate) fn reference_closure(configs: &TsConfigs) -> HashMap<&Path, BTreeSet<&Path>> {
     let direct: HashMap<&Path, Vec<&Path>> = configs
         .configs
         .iter()
@@ -221,7 +231,7 @@ fn reference_closure(configs: &TsConfigs) -> HashMap<&Path, BTreeSet<&Path>> {
 }
 
 /// Whether one of `targets` is a config of the workspace package `name`.
-fn covers(project: &Project, targets: &BTreeSet<&Path>, name: &str) -> bool {
+pub(crate) fn covers(project: &Project, targets: &BTreeSet<&Path>, name: &str) -> bool {
     targets.iter().any(|t| project.package_for(t) == Some(name))
 }
 

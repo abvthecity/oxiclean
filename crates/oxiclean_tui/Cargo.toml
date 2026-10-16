@@ -1,0 +1,22 @@
+[package]
+name = "oxiclean_tui"
+description = "Interactive terminal views for oxiclean"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+oxiclean_core = { version = "0.1.0", path = "../oxiclean_core" }
+oxiclean_typecheck = { version = "0.1.0", path = "../oxiclean_typecheck" }
+ratatui = "0.30"
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[lints]
+workspace = true

@@ -24,7 +24,9 @@ oxiclean_unused_exports = { version = "0.1.0", path = "../oxiclean_unused_export
 oxiclean_depth = { version = "0.1.0", path = "../oxiclean_depth" }
 oxiclean_trace = { version = "0.1.0", path = "../oxiclean_trace" }
 oxiclean_typecheck = { version = "0.1.0", path = "../oxiclean_typecheck" }
+oxiclean_tui = { version = "0.1.0", path = "../oxiclean_tui" }
 rayon.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

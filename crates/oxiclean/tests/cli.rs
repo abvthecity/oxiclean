@@ -1216,3 +1216,58 @@ fn health_reports_without_fixing_and_survives_a_missing_trace() {
     assert!(out.contains("Biggest wins:"), "{out}");
     assert!(out.contains("✗ trace couldn't run"), "{out}");
 }
+
+/// `oxiclean map --format json` prints which programs check each package,
+/// in monorepos of each package manager: the ui package is checked by its
+/// own tsconfig, again by the root tsconfig's `include`, and again by the
+/// app, whose import reaches its source.
+#[test]
+fn map_prints_who_checks_each_package() {
+    for manager in ["pnpm", "npm", "bun", "deno"] {
+        let t = monorepo(manager);
+        let (code, json) = run_stdout(t.path(), &["map", "--format", "json"]);
+        assert_eq!(code, 0, "{manager}: {json}");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["packages"][0]["name"], "@acme/ui", "{manager}: {v}");
+        let checkers: Vec<(String, String, u64)> = v["packages"][0]["checkers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let s = |k: &str| c[k].as_str().unwrap().to_string();
+                (s("program"), s("cause"), c["repeats"].as_u64().unwrap())
+            })
+            .collect();
+        let mut expected = vec![
+            ("packages/ui/tsconfig.json", "owner", 0),
+            ("packages/app/tsconfig.json", "source-import", 9),
+            ("tsconfig.json", "include", 9),
+        ];
+        // Deno resolves workspace members from deno.json, which `tsc` and
+        // so the map don't follow: the import isn't counted.
+        if manager == "deno" {
+            expected.remove(1);
+        }
+        let repeats = 9 * (expected.len() - 1);
+        let expected: Vec<(String, String, u64)> =
+            expected.iter().map(|(p, c, r)| (p.to_string(), c.to_string(), *r)).collect();
+        assert_eq!(checkers, expected, "{manager}: {v}");
+        assert_eq!(v["packages"][0]["repeats"], repeats, "{manager}: {v}");
+    }
+}
+
+/// The map is a view: it needs a terminal unless it prints JSON, has no
+/// SARIF and fixes nothing.
+#[test]
+fn map_needs_a_terminal_or_json() {
+    let t = monorepo("pnpm");
+    let (code, out) = run(t.path(), &["map"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("needs a terminal; use --format json"), "{out}");
+    let (code, out) = run(t.path(), &["map", "--format", "sarif"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("use --format json"), "{out}");
+    let (code, out) = run(t.path(), &["map", "--fix"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("`map` only shows"), "{out}");
+}
