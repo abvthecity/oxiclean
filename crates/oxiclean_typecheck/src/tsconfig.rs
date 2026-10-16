@@ -393,7 +393,11 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
                     .filter_map(Value::as_str)
                     .map(|t| {
                         let t = t.replace("${configDir}", &config_dir);
-                        Value::String(slashes(&path_clean::clean(base.join(t))))
+                        // A path, not a glob: `slashes` would break a Windows
+                        // verbatim path (`\\?\C:\`).
+                        Value::String(
+                            path_clean::clean(base.join(t)).to_string_lossy().into_owned(),
+                        )
                     })
                     .collect();
                 (k.clone(), Value::Array(targets))
@@ -401,16 +405,16 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
             .collect();
         options.insert("paths".into(), Value::Object(resolved));
     }
-    let patterns = |d: &Option<Declared<Vec<String>>>| {
+    let paths = |d: &Option<Declared<Vec<String>>>| {
         d.as_ref().map(|d| {
             d.value
                 .iter()
-                .map(|p| {
-                    let p = p.replace("${configDir}", &config_dir);
-                    slashes(&path_clean::clean(d.dir.join(p)))
-                })
+                .map(|p| path_clean::clean(d.dir.join(p.replace("${configDir}", &config_dir))))
                 .collect::<Vec<_>>()
         })
+    };
+    let patterns = |d: &Option<Declared<Vec<String>>>| {
+        paths(d).map(|p| p.iter().map(|p| slashes(p)).collect::<Vec<_>>())
     };
     let references = own
         .doc
@@ -427,7 +431,7 @@ fn finish(path: &Path, raw: &HashMap<PathBuf, Option<Raw>>) -> Option<TsConfigFi
         options,
         include: patterns(&merged.include),
         exclude: patterns(&merged.exclude),
-        files: patterns(&merged.files).map(|f| f.into_iter().map(PathBuf::from).collect()),
+        files: paths(&merged.files),
         references,
         is_program: false,
         root_files: Vec::new(),

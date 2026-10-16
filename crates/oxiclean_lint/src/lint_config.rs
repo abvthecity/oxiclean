@@ -1220,7 +1220,8 @@ mod tests {
             .iter()
             .map(|f| {
                 let FindingKind::Issue(i) = &f.kind else { panic!("{f:?}") };
-                let file = f.file.strip_prefix(t.path()).unwrap().to_string_lossy().into_owned();
+                let file =
+                    f.file.strip_prefix(t.path()).unwrap().to_string_lossy().replace('\\', "/");
                 format!("{file}:{} {} {}", i.line, i.code, i.key)
             })
             .collect()

@@ -79,7 +79,10 @@ fn walk(base: &Path, include: &GlobSet, exclude: &GlobSet, file: &Path) -> Vec<P
 fn literal_base(pattern: &Path) -> PathBuf {
     let mut base = PathBuf::new();
     for c in pattern.components() {
-        if c.as_os_str().to_string_lossy().contains(['*', '?', '[', '{']) {
+        // Only names: a Windows verbatim prefix (`\\?\C:`) has a `?`.
+        if let Component::Normal(name) = c
+            && name.to_string_lossy().contains(['*', '?', '[', '{'])
+        {
             break;
         }
         base.push(c);

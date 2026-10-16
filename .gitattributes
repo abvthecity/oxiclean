@@ -1,0 +1,3 @@
+# Fixtures hold source offsets and expected file text, so they must check out
+# with LF line endings on Windows too.
+* text=auto eol=lf
