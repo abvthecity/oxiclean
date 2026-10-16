@@ -84,6 +84,14 @@ enum Commands {
     /// Check for modules that export the same thing under several names
     #[command(name = "duplicates")]
     Duplicates(oxiclean_duplicates::Config),
+    /// Explore which tsconfig programs type-check each package, and why
+    ///
+    /// Opens an interactive view: how much type checking repeats work
+    /// another program already did, the causes of the repeats, the packages
+    /// they cost most, and for each package the programs that check it and
+    /// how they reach it. With --format json, prints the map instead.
+    #[command(name = "map")]
+    Map(MapConfig),
     /// Score the project's health and rank findings by the time fixing them saves
     ///
     /// Runs every command's rules (trace only when `trace.dir` is set in
@@ -92,6 +100,32 @@ enum Commands {
     /// the most. `savings` in `.oxicleanrc.json` describes the team.
     #[command(name = "health")]
     Health(HealthConfig),
+}
+
+/// Options for `oxiclean map`.
+#[derive(Debug, Clone, clap::Args)]
+struct MapConfig {
+    #[command(flatten)]
+    common: oxiclean_core::CommonArgs,
+}
+
+/// Opens the program map, or prints it in `format`.
+fn run_map(cfg: &MapConfig, format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Text => oxiclean_tui::run_map(cfg.common.clone()),
+        OutputFormat::Json => {
+            let progress = oxiclean_typecheck::program_map::Progress::default();
+            let map = oxiclean_typecheck::program_map::scan(&cfg.common, &progress)?;
+            let mut stdout = BufWriter::new(std::io::stdout().lock());
+            serde_json::to_writer_pretty(&mut stdout, &map)?;
+            writeln!(stdout)?;
+            stdout.flush()?;
+            Ok(())
+        }
+        OutputFormat::Sarif => {
+            anyhow::bail!("`map` has no findings to write as SARIF; use --format json")
+        }
+    }
 }
 
 /// Options for `oxiclean health`.
@@ -212,6 +246,7 @@ impl Commands {
             Self::Cycles(_) => "cycles",
             Self::Duplicates(_) => "duplicates",
             Self::Health(_) => "health",
+            Self::Map(_) => "map",
         }
     }
 
@@ -228,6 +263,7 @@ impl Commands {
             Self::Cycles(cfg) => oxiclean_cycles::run_cycles_command(cfg),
             Self::Duplicates(cfg) => oxiclean_duplicates::run_duplicates_command(cfg),
             Self::Health(cfg) => cfg.run(),
+            Self::Map(_) => unreachable!("`map` is a view, not a command with findings"),
         }
     }
 }
@@ -260,6 +296,13 @@ fn run() -> Result<ExitCode> {
     // A score shouldn't rewrite the project; each command fixes its own.
     if cli.fix && matches!(cli.command, Commands::Health(_)) {
         anyhow::bail!("`health` only reports; run --fix with the command whose findings to fix");
+    }
+    if let Commands::Map(cfg) = &cli.command {
+        if cli.fix {
+            anyhow::bail!("`map` only shows; run --fix with the command whose findings to fix");
+        }
+        run_map(cfg, cli.format)?;
+        return Ok(ExitCode::SUCCESS);
     }
     let start = Instant::now();
     let command = cli.command.name();

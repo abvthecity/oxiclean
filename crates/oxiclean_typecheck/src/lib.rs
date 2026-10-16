@@ -40,6 +40,7 @@ mod large_literals;
 mod lines;
 mod overlap;
 mod program_files;
+pub mod program_map;
 mod references;
 mod scripts;
 pub mod tsconfig;

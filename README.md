@@ -43,6 +43,10 @@ oxiclean typecheck --fix --root ./my-project
 # the time fixing it saves developers and CI each week
 oxiclean health --root ./my-project
 
+# Explore which tsconfig programs type-check each package, and why, in an
+# interactive view (or print the map with --format json)
+oxiclean map --root ./my-project
+
 # Get help
 oxiclean --help
 oxiclean unused --help
@@ -71,6 +75,7 @@ oxiclean/
 │   ├── oxiclean_lint/               # ESLint and oxlint config checks
 │   ├── oxiclean_typecheck/          # tsconfig and lint setup checks
 │   ├── oxiclean_trace/              # tsc --generateTrace analysis
+│   ├── oxiclean_tui/                # Interactive terminal views (oxiclean map)
 │   ├── oxiclean_unused_exports/     # Unused export and type detection library
 │   └── oxiclean_depth/              # Import depth analysis library
 └── Cargo.toml                       # Workspace configuration
@@ -95,6 +100,7 @@ on or off. A rule that is `"off"` doesn't run at all, so turning off
 | `trace [DIR]` | `hot-spots`, `duplicate-packages` |
 | `lint` | `lint-config` |
 | `health` | every rule above (the `trace` rules only when `trace.dir` is set) |
+| `map` | none: an interactive view (see [Program map](#program-map)) |
 
 Every rule is on by default with `error` severity, except
 `heavy-dependencies`, `hot-spots`, `duplicate-packages` and `lint-config`,
@@ -894,6 +900,31 @@ as adding build output to a tsconfig's `exclude`; findings that have one
 say `fixable with --fix` in the text report and carry a `fix` in JSON.
 Fixes to JSON files keep their comments and formatting, and fixes to
 JavaScript and TypeScript configs only insert text.
+
+## Program map
+
+`oxiclean map` opens an interactive view of the type checking a workspace
+does. A file should be checked once, by the tsconfig of the package it is
+in. The map counts every other program that checks it as a repeat, and
+shows:
+
+- the share of all file checks that are repeats;
+- the causes of the repeats: imports that reach another package's source
+  without a project reference, lint tsconfigs that include everything,
+  test tsconfigs that include source too, build output checked as source,
+  and other `include` patterns that reach into other packages;
+- the packages with the most repeats, ranked (packages checked once are
+  counted, not listed, so the list stays short in large monorepos);
+- for the selected package, each program that checks it, grouped by cause,
+  with the import or file that brings it in, and the usual fix.
+
+Keys: `↑`/`↓` or `j`/`k` move, `1`–`5` show only one cause, `0` shows all,
+`/` searches package names, `r` scans again, `q` quits. The scan runs while
+the view shows its progress. Set `NO_COLOR` for no color and
+`OXICLEAN_NO_MOTION` to turn off animation. `--format json` prints the same
+map as JSON without opening the view. For a source import the map counts
+every file the package's own tsconfig checks, an upper bound, as `tsc` only
+checks the files the imports reach.
 
 ## Time saved and health score
 
